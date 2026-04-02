@@ -1,0 +1,2 @@
+module DS
+singleton DeepSpacePalette 1.0 DeepSpacePalette.qml
