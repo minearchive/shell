@@ -1,5 +1,5 @@
-WorkspaceIndicator 1.0 WorkspaceIndicator.qml
-Clock 1.0 Clock.qml
-SystemStatus 1.0 SystemStatus.qml
-CalendarWidget 1.0 CalendarWidget.qml
-SysInfoPanel 1.0 SysInfoPanel.qml
+module bar
+
+singleton WorkspaceIndicator 1.0 WorkspaceIndicator.qml
+singleton Clock 1.0 Clock.qml
+singleton SystemStatus 1.0 SystemStatus.qml

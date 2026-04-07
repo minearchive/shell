@@ -1,9 +1,10 @@
 import Quickshell
 import QtQuick
-import QtQuick.Layouts
 
 import "assets"
 import "bar"
+
+// import "widgets"
 
 ShellRoot {
 
@@ -74,58 +75,11 @@ ShellRoot {
                                 rightMargin: 10
                             }
                         }
+
+                        // Notification {}
                     }
 
                     implicitHeight: 40
-
-                    PopupWindow {
-                        anchor.window: shell
-                        anchor.rect.x: shell.width / 2 - width / 2
-                        anchor.rect.y: shell.height + 20
-                        implicitWidth: 700
-                        implicitHeight: 420
-                        // visible: true
-
-                        color: "transparent"
-
-                        onVisibleChanged: {
-                            inner.visible = visible;
-                        }
-
-                        Rectangle {
-                            id: inner
-
-                            color: DeepSpacePalette.bg
-                            anchors.fill: parent
-
-                            border {
-                                color: DeepSpacePalette.borderMid
-                            }
-
-                            RowLayout {
-                                anchors.fill: parent
-                                anchors.margins: 16
-                                spacing: 16
-
-                                SysInfoPanel {
-                                    Layout.preferredWidth: (parent.width - 1) / 3
-                                    Layout.fillHeight: true
-                                }
-
-                                Rectangle {
-                                    Layout.preferredWidth: 1
-                                    Layout.fillHeight: true
-                                    color: DeepSpacePalette.borderMid
-                                    opacity: 0.5
-                                }
-
-                                CalendarWidget {
-                                    Layout.fillWidth: true
-                                    Layout.fillHeight: true
-                                }
-                            }
-                        }
-                    }
                 }
                 // qmllint enable uncreatable-type
             }
