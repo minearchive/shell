@@ -94,6 +94,13 @@ Scope {
 
                         implicitWidth: parent.width * (Pipewire.defaultAudioSink?.audio.volume ?? 0)
                         radius: parent.radius
+
+                        Behavior on implicitWidth {
+                            NumberAnimation {
+                                duration: 180
+                                easing.type: Easing.OutCubic
+                            }
+                        }
                     }
                 }
             }
