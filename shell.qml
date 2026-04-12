@@ -3,11 +3,11 @@ import QtQuick
 
 import "assets"
 import "bar"
+import "window"
 
 // import "widgets"
 
 ShellRoot {
-
     Scope {
         Variants {
             id: root
@@ -85,4 +85,6 @@ ShellRoot {
             }
         }
     }
+
+    AudioPopup {}
 }
