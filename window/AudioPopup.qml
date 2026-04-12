@@ -40,8 +40,8 @@ Scope {
         margins.top: 20
         exclusiveZone: 0
 
-        implicitWidth: 400
-        implicitHeight: 50
+        implicitWidth: 200
+        implicitHeight: 40
         color: "transparent"
 
         mask: Region {}
@@ -81,7 +81,7 @@ Scope {
                     // Stretches to fill all left-over space
                     Layout.fillWidth: true
 
-                    implicitHeight: 10
+                    implicitHeight: 12
                     radius: 20
                     color: "#50ffffff"
 
