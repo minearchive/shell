@@ -90,6 +90,7 @@ ShellRoot {
                     // qmllint enable uncreatable-type
 
                     LazyLoader {
+                        //qmllint disable unqualified
                         active: shellRoot.showWatermark
 
                         // qmllint disable uncreatable-type
