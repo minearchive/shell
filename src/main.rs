@@ -1,5 +1,7 @@
 use gtk4::gdk;
 use gtk4::prelude::*;
+use gtk4::CssProvider;
+use gtk4::DrawingArea;
 use gtk4_layer_shell::LayerShell;
 
 fn main() {
@@ -28,29 +30,41 @@ fn build_ui(app: &gtk4::Application) {
 }
 
 fn create_bar_for_monitor(app: &gtk4::Application, monitor: &gdk::Monitor) {
+    let css_provider = CssProvider::new();
+    css_provider.load_from_data("window { background: transparent; }");
+
     let window = gtk4::ApplicationWindow::new(app);
 
+    gtk4::style_context_add_provider_for_display(
+        &WidgetExt::display(&window),
+        &css_provider,
+        gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+
     window.init_layer_shell();
-    window.set_height_request(40);
+    window.set_height_request(60);
     window.set_exclusive_zone(40);
     window.set_layer(gtk4_layer_shell::Layer::Top);
-    window.set_anchor(gtk4_layer_shell::Edge::Top, true);
+    window.set_anchor(gtk4_layer_shell::Edge::Bottom, true);
     window.set_anchor(gtk4_layer_shell::Edge::Left, true);
     window.set_anchor(gtk4_layer_shell::Edge::Right, true);
 
     window.set_monitor(monitor);
 
     let container = gtk4::Box::new(gtk4::Orientation::Horizontal, 10);
-    container.set_margin_start(10);
-    container.set_margin_end(10);
 
-    let monitor_info = format!(
-        "My Bar - Monitor: {}",
-        monitor.model().unwrap_or_else(|| "Unknown".into())
-    );
+    let draw_area = DrawingArea::new();
+    draw_area.set_vexpand(true);
+    draw_area.set_hexpand(true);
+    draw_area.set_height_request(60);
 
-    let label = gtk4::Label::new(Some(&monitor_info));
-    container.append(&label);
+    draw_area.set_draw_func(|_area, context, width, height| {
+        context.set_source_rgba(1.0, 1.0, 1.0, 1.0);
+        context.rectangle(0.0, height as f64 - 40., width as f64, 40.);
+        context.fill().unwrap();
+    });
+
+    container.append(&draw_area);
 
     window.set_child(Some(&container));
     window.present();
