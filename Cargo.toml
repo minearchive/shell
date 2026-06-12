@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+epoxy = "0.1.0"
 gl = "0.14.0"
 gtk4 = "0.9"
 gtk4-layer-shell = "0.4"
