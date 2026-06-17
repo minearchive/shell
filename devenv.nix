@@ -23,6 +23,7 @@
     mesa
     libGL
     wayland
+    libxkbcommon
   ];
 
   env.LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
