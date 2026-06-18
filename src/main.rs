@@ -1,10 +1,9 @@
-use std::{
-    num::NonZeroU32,
-    sync::mpsc::{self, Receiver, Sender},
-};
+use std::num::NonZeroU32;
 
+use calloop::{channel, EventLoop, LoopHandle};
+use calloop_wayland_source::WaylandSource;
 use log::{debug, info};
-use skia_safe::{scalar, surfaces, ImageInfo};
+use skia_safe::{surfaces, ImageInfo};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
@@ -51,7 +50,6 @@ pub struct Screen {
     first_configure: bool,
     keyboard_focus: bool,
     ui: UserInterface,
-    receiver: Receiver<UiEvent>,
     output: WlOutput,
 }
 
@@ -61,6 +59,7 @@ pub struct Shell {
     seat_state: SeatState,
     compositor_state: CompositorState,
     layer_shell: LayerShell,
+    loop_handle: LoopHandle<'static, Shell>,
     keyboard: Option<WlKeyboard>,
     pointer: Option<WlPointer>,
     screen: Vec<Screen>,
@@ -68,6 +67,7 @@ pub struct Shell {
     shm: Shm,
     registry_state: RegistryState,
     exit: bool,
+    counter: usize,
 }
 
 fn main() {
@@ -75,8 +75,15 @@ fn main() {
 
     let connection = Connection::connect_to_env().expect("Failed to connect to env");
 
-    let (globals, mut event_queue) = registry_queue_init(&connection).unwrap();
-    let qh = event_queue.handle();
+    let (globals, event_queue) = registry_queue_init(&connection).unwrap();
+    let qh: QueueHandle<Shell> = event_queue.handle();
+
+    let mut event_loop: EventLoop<Shell> = EventLoop::try_new().unwrap();
+    let loop_handle = event_loop.handle();
+
+    WaylandSource::new(connection, event_queue)
+        .insert(loop_handle.clone())
+        .unwrap();
 
     let compositor = CompositorState::bind(&globals, &qh).expect("Wayland compositor not found");
 
@@ -92,6 +99,7 @@ fn main() {
         output_state: OutputState::new(&globals, &qh),
         seat_state: SeatState::new(&globals, &qh),
         compositor_state: compositor,
+        loop_handle,
         layer_shell,
         keyboard: None,
         pointer: None,
@@ -100,28 +108,17 @@ fn main() {
         shm,
         registry_state: RegistryState::new(&globals),
         exit: false,
+        counter: 0,
     };
 
-    loop {
-        event_queue.blocking_dispatch(&mut application).unwrap();
-
-        let mut redraw_indices = Vec::new();
-        for (idx, screen) in application.screen.iter_mut().enumerate() {
-            while let Ok(event) = screen.receiver.try_recv() {
-                match event {
-                    UiEvent::RequestRedraw => redraw_indices.push(idx),
-                }
+    let signal = event_loop.get_signal();
+    event_loop
+        .run(None, &mut application, |shell| {
+            if shell.exit {
+                signal.stop();
             }
-        }
-        for idx in redraw_indices {
-            application.draw(idx);
-        }
-
-        if application.exit {
-            info!("exiting app");
-            break;
-        }
-    }
+        })
+        .unwrap();
 }
 
 impl CompositorHandler for Shell {
@@ -193,7 +190,16 @@ impl OutputHandler for Shell {
         layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
         layer.commit();
 
-        let (tx, rx): (Sender<UiEvent>, Receiver<UiEvent>) = mpsc::channel();
+        let (tx, channel) = channel::channel::<UiEvent>();
+        let c = self.counter;
+
+        self.loop_handle
+            .insert_source(channel, |event, _, shell| {
+                if let calloop::channel::Event::Msg(UiEvent::RequestRedraw(idx)) = event {
+                    shell.draw(idx);
+                }
+            })
+            .unwrap();
 
         self.screen.push(Screen {
             layer,
@@ -201,10 +207,11 @@ impl OutputHandler for Shell {
             height: 0,
             first_configure: true,
             keyboard_focus: false,
-            ui: UserInterface::new(tx),
-            receiver: rx,
+            ui: UserInterface::new(tx, c),
             output: output,
         });
+
+        self.counter += 1;
     }
     fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: WlOutput) {}
     fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, output: WlOutput) {
@@ -391,7 +398,10 @@ impl KeyboardHandler for Shell {
         _: smithay_client_toolkit::seat::keyboard::RawModifiers,
         _: u32,
     ) {
-        info!("Update modifiers: {modifiers:?}")
+        info!("Update modifiers: {modifiers:?}");
+        for screen in &mut self.screen {
+            screen.ui.on_modifier(modifiers);
+        }
     }
 }
 
@@ -437,7 +447,13 @@ impl PointerHandler for Shell {
                     Release { button, .. } => {
                         info!("Release {:x} @ {:?}", button, event.position);
                     }
-                    Axis { .. } => {}
+                    Axis {
+                        horizontal,
+                        vertical,
+                        ..
+                    } => {
+                        info!("h: {horizontal:?}, v: {vertical:?}");
+                    }
                 }
             }
         }
@@ -492,13 +508,13 @@ impl Shell {
         layer.commit();
     }
 
-    pub fn on_key(&mut self, qh: &QueueHandle<Self>, event: KeyEvent, timing: KeyTiming) {
+    pub fn on_key(&mut self, _qh: &QueueHandle<Self>, event: KeyEvent, timing: KeyTiming) {
         for screen in &mut self.screen {
             screen.ui.on_key(&event, &timing);
         }
     }
 
-    pub fn on_cursor(&mut self, qh: &QueueHandle<Self>, event: &PointerEvent, idx: usize) {
+    pub fn on_cursor(&mut self, _qh: &QueueHandle<Self>, event: &PointerEvent, idx: usize) {
         self.screen[idx].ui.on_cursor(event);
     }
 }
