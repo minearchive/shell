@@ -15,7 +15,7 @@ pub enum WindowManagerIPC {
     Niri(niri::NiriIpc),
     Hyprland(hyprland::HyprlandIpc),
     Unknown,
-    ConnectionFailed(String),
+    ConnectionFailed(),
     None,
 }
 
@@ -33,7 +33,7 @@ impl WindowManagerIPC {
                     Ok(ipc) => return Self::Niri(ipc),
                     Err(e) => {
                         warn!("Failed to connect to niri ipc: {e}");
-                        return Self::ConnectionFailed(e);
+                        return Self::ConnectionFailed();
                     }
                 }
             }
