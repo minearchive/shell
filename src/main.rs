@@ -1,7 +1,10 @@
-use std::num::NonZeroU32;
+use std::{
+    num::NonZeroU32,
+    sync::mpsc::{self, Receiver, Sender},
+};
 
-use log::info;
-use skia_safe::{surfaces, Color, Color4f, ImageInfo, Paint, Rect};
+use log::{debug, info};
+use skia_safe::{scalar, surfaces, ImageInfo};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
@@ -11,12 +14,12 @@ use smithay_client_toolkit::{
     registry_handlers,
     seat::{
         keyboard::{KeyEvent, KeyboardHandler, Keysym},
-        pointer::{PointerEventKind, PointerHandler},
+        pointer::{PointerEvent, PointerEventKind, PointerHandler},
         Capability, SeatHandler, SeatState,
     },
     shell::{
         wlr_layer::{
-            Anchor, KeyboardInteractivity, LayerShell, LayerShellHandler, LayerSurface,
+            Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
             LayerSurfaceConfigure,
         },
         WaylandSurface,
@@ -36,22 +39,34 @@ use wayland_client::{
     Connection, QueueHandle,
 };
 
-mod ipc;
+use crate::ui::{UiEvent, UserInterface};
 
-pub struct Application {
+mod ipc;
+mod ui;
+
+pub struct Screen {
+    layer: LayerSurface,
     width: u32,
     height: u32,
     first_configure: bool,
+    keyboard_focus: bool,
+    ui: UserInterface,
+    receiver: Receiver<UiEvent>,
+    output: WlOutput,
+}
+
+pub struct Shell {
     pool: SlotPool,
     output_state: OutputState,
     seat_state: SeatState,
+    compositor_state: CompositorState,
+    layer_shell: LayerShell,
     keyboard: Option<WlKeyboard>,
     pointer: Option<WlPointer>,
-    layer: LayerSurface,
+    screen: Vec<Screen>,
     shift: Option<u32>,
     shm: Shm,
     registry_state: RegistryState,
-    keyboard_focus: bool,
     exit: bool,
 }
 
@@ -70,45 +85,37 @@ fn main() {
 
     let shm = Shm::bind(&globals, &qh).expect("Wayland shared memory is not available");
 
-    let surface = compositor.create_surface(&qh);
-
-    let layer = layer_shell.create_layer_surface(
-        &qh,
-        surface,
-        smithay_client_toolkit::shell::wlr_layer::Layer::Top,
-        Some("Application Shell"),
-        None,
-    );
-
-    layer.set_anchor(Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
-
-    layer.set_size(10, 60);
-    layer.set_exclusive_zone(60);
-    layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
-
-    layer.commit();
-
     let pool = SlotPool::new(256 * 256 * 4, &shm).expect("failed to create pool");
 
-    let mut application = Application {
-        width: 256,
-        height: 256,
-        first_configure: true,
+    let mut application = Shell {
         pool,
         output_state: OutputState::new(&globals, &qh),
         seat_state: SeatState::new(&globals, &qh),
+        compositor_state: compositor,
+        layer_shell,
         keyboard: None,
         pointer: None,
-        layer,
+        screen: Vec::new(),
         shift: None,
         shm,
         registry_state: RegistryState::new(&globals),
-        keyboard_focus: false,
         exit: false,
     };
 
     loop {
         event_queue.blocking_dispatch(&mut application).unwrap();
+
+        let mut redraw_indices = Vec::new();
+        for (idx, screen) in application.screen.iter_mut().enumerate() {
+            while let Ok(event) = screen.receiver.try_recv() {
+                match event {
+                    UiEvent::RequestRedraw => redraw_indices.push(idx),
+                }
+            }
+        }
+        for idx in redraw_indices {
+            application.draw(idx);
+        }
 
         if application.exit {
             info!("exiting app");
@@ -117,7 +124,7 @@ fn main() {
     }
 }
 
-impl CompositorHandler for Application {
+impl CompositorHandler for Shell {
     fn scale_factor_changed(
         &mut self,
         _: &Connection,
@@ -136,7 +143,15 @@ impl CompositorHandler for Application {
     ) {
     }
 
-    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlSurface, _: u32) {}
+    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, surfaces: &WlSurface, _: u32) {
+        if let Some(idx) = self
+            .screen
+            .iter()
+            .position(|p| p.layer.wl_surface() == surfaces)
+        {
+            self.draw(idx);
+        }
+    }
 
     fn surface_enter(
         &mut self,
@@ -157,31 +172,66 @@ impl CompositorHandler for Application {
     }
 }
 
-impl OutputHandler for Application {
+impl OutputHandler for Shell {
     fn output_state(&mut self) -> &mut OutputState {
         &mut self.output_state
     }
 
-    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: WlOutput) {}
+    fn new_output(&mut self, _: &Connection, qh: &QueueHandle<Self>, output: WlOutput) {
+        let surface = self.compositor_state.create_surface(qh);
+        let layer = self.layer_shell.create_layer_surface(
+            qh,
+            surface,
+            Layer::Top,
+            Some("ApplicationShell"),
+            Some(&output),
+        );
+
+        layer.set_anchor(Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
+        layer.set_size(0, 60);
+        layer.set_exclusive_zone(60);
+        layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+        layer.commit();
+
+        let (tx, rx): (Sender<UiEvent>, Receiver<UiEvent>) = mpsc::channel();
+
+        self.screen.push(Screen {
+            layer,
+            width: 0,
+            height: 0,
+            first_configure: true,
+            keyboard_focus: false,
+            ui: UserInterface::new(tx),
+            receiver: rx,
+            output: output,
+        });
+    }
     fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: WlOutput) {}
-    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: WlOutput) {}
+    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, output: WlOutput) {
+        self.screen.retain(|s| s.output != output);
+    }
 }
 
-impl LayerShellHandler for Application {
+impl LayerShellHandler for Shell {
     fn configure(
         &mut self,
         _: &Connection,
-        qh: &QueueHandle<Self>,
-        _: &LayerSurface,
+        _: &QueueHandle<Self>,
+        surfaces: &LayerSurface,
         configure: LayerSurfaceConfigure,
         _serial: u32,
     ) {
-        self.width = NonZeroU32::new(configure.new_size.0).map_or(256, NonZeroU32::get);
-        self.height = NonZeroU32::new(configure.new_size.1).map_or(256, NonZeroU32::get);
+        let Some(idx) = self.screen.iter().position(|s| &s.layer == surfaces) else {
+            return;
+        };
 
-        if self.first_configure {
-            self.first_configure = false;
-            self.draw(qh);
+        self.screen[idx].width = NonZeroU32::new(configure.new_size.0).map_or(256, NonZeroU32::get);
+        self.screen[idx].height =
+            NonZeroU32::new(configure.new_size.1).map_or(256, NonZeroU32::get);
+
+        if self.screen[idx].first_configure {
+            self.screen[idx].first_configure = false;
+            self.draw(idx);
         }
     }
 
@@ -190,7 +240,7 @@ impl LayerShellHandler for Application {
     }
 }
 
-impl SeatHandler for Application {
+impl SeatHandler for Shell {
     fn seat_state(&mut self) -> &mut smithay_client_toolkit::seat::SeatState {
         &mut self.seat_state
     }
@@ -259,7 +309,7 @@ impl SeatHandler for Application {
     }
 }
 
-impl KeyboardHandler for Application {
+impl KeyboardHandler for Shell {
     fn enter(
         &mut self,
         _: &Connection,
@@ -270,10 +320,14 @@ impl KeyboardHandler for Application {
         _: &[u32],
         keysyms: &[Keysym],
     ) {
-        if self.layer.wl_surface() == surface {
+        if let Some(find) = self
+            .screen
+            .iter_mut()
+            .find(|s| s.layer.wl_surface() == surface)
+        {
             info!("Keyboard focus on window with pressed symbol: {keysyms:?}");
-            self.keyboard_focus = true;
-        }
+            find.keyboard_focus = true;
+        };
     }
 
     fn leave(
@@ -284,10 +338,14 @@ impl KeyboardHandler for Application {
         surface: &WlSurface,
         _: u32,
     ) {
-        if self.layer.wl_surface() == surface {
+        if let Some(find) = self
+            .screen
+            .iter_mut()
+            .find(|s| s.layer.wl_surface() == surface)
+        {
             info!("Release keyboard focus on window");
-            self.keyboard_focus = false;
-        }
+            find.keyboard_focus = false;
+        };
     }
 
     fn press_key(
@@ -337,48 +395,56 @@ impl KeyboardHandler for Application {
     }
 }
 
-impl PointerHandler for Application {
+impl PointerHandler for Shell {
     fn pointer_frame(
         &mut self,
         _conn: &Connection,
-        _qh: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
         _pointer: &wayland_client::protocol::wl_pointer::WlPointer,
         events: &[smithay_client_toolkit::seat::pointer::PointerEvent],
     ) {
         use PointerEventKind::*;
         for event in events {
-            // Ignore events for other surfaces
-            if &event.surface != self.layer.wl_surface() {
+            if let Some(idx) = self
+                .screen
+                .iter()
+                .position(|s| s.layer.wl_surface() == &event.surface)
+            {
+                self.on_cursor(qh, event, idx);
+            }
+
+            if !self
+                .screen
+                .iter()
+                .any(|s| s.layer.wl_surface() == &event.surface)
+            {
                 continue;
             }
-            match event.kind {
-                Enter { .. } => {
-                    info!("Pointer entered @{:?}", event.position);
-                }
-                Leave { .. } => {
-                    info!("Pointer left");
-                }
-                Motion { .. } => {}
-                Press { button, .. } => {
-                    info!("Press {:x} @ {:?}", button, event.position);
-                    self.shift = self.shift.xor(Some(0));
-                }
-                Release { button, .. } => {
-                    info!("Release {:x} @ {:?}", button, event.position);
-                }
-                Axis {
-                    horizontal,
-                    vertical,
-                    ..
-                } => {
-                    info!("Scroll H:{horizontal:?}, V:{vertical:?}");
+
+            {
+                match event.kind {
+                    Enter { .. } => {
+                        info!("Pointer entered @{:?}", event.position);
+                    }
+                    Leave { .. } => {
+                        info!("Pointer left");
+                    }
+                    Motion { .. } => {}
+                    Press { button, .. } => {
+                        info!("Press {:x} @ {:?}", button, event.position);
+                        self.shift = self.shift.xor(Some(0));
+                    }
+                    Release { button, .. } => {
+                        info!("Release {:x} @ {:?}", button, event.position);
+                    }
+                    Axis { .. } => {}
                 }
             }
         }
     }
 }
 
-impl ShmHandler for Application {
+impl ShmHandler for Shell {
     fn shm_state(&mut self) -> &mut Shm {
         &mut self.shm
     }
@@ -390,11 +456,11 @@ pub enum KeyTiming {
     Repeat,
 }
 
-impl Application {
-    pub fn draw(&mut self, qh: &QueueHandle<Self>) {
-        let width = self.width;
-        let height = self.height;
-        let stride = self.width as i32 * 4;
+impl Shell {
+    pub fn draw(&mut self, idx: usize) {
+        let width = self.screen[idx].width;
+        let height = self.screen[idx].height;
+        let stride = width as i32 * 4;
 
         let (buffer, canvas) = self
             .pool
@@ -406,52 +472,50 @@ impl Application {
             )
             .expect("Failed to create framebuffer");
 
-        {
-            let info = ImageInfo::new_n32_premul((width as i32, height as i32), None);
-            let mut skia_surface =
-                surfaces::wrap_pixels(&info, canvas, stride as usize, None).unwrap();
-
-            let canvas = skia_surface.canvas();
-            let mut paint = Paint::default();
-
-            paint.set_anti_alias(true);
-            paint.set_color(Color::from_argb(255, 255, 255, 255));
-
-            canvas.clear(Color4f::new(0., 0., 0., 0.));
-            canvas.draw_rect(Rect::from_xywh(0., 0., width as f32, height as f32), &paint);
+        if !self.screen[idx].ui.should_redraw() {
+            return;
         }
 
-        self.layer
+        debug!("Redrawing...");
+        let info = ImageInfo::new_n32_premul((width as i32, height as i32), None);
+        let mut skia_surface = surfaces::wrap_pixels(&info, canvas, stride as usize, None).unwrap();
+
+        self.screen[idx].ui.draw(&skia_surface.canvas());
+
+        let layer = &self.screen[idx].layer;
+        layer
             .wl_surface()
             .damage_buffer(0, 0, width as i32, height as i32);
-
-        self.layer
-            .wl_surface()
-            .frame(qh, self.layer.wl_surface().clone());
-
         buffer
-            .attach_to(self.layer.wl_surface())
+            .attach_to(layer.wl_surface())
             .expect("Failed to attach buffer");
-
-        self.layer.commit();
+        layer.commit();
     }
 
-    pub fn on_key(&mut self, _qh: &QueueHandle<Self>, _event: KeyEvent, _timing: KeyTiming) {}
+    pub fn on_key(&mut self, qh: &QueueHandle<Self>, event: KeyEvent, timing: KeyTiming) {
+        for screen in &mut self.screen {
+            screen.ui.on_key(&event, &timing);
+        }
+    }
+
+    pub fn on_cursor(&mut self, qh: &QueueHandle<Self>, event: &PointerEvent, idx: usize) {
+        self.screen[idx].ui.on_cursor(event);
+    }
 }
 
-delegate_compositor!(Application);
-delegate_output!(Application);
-delegate_shm!(Application);
+delegate_compositor!(Shell);
+delegate_output!(Shell);
+delegate_shm!(Shell);
 
-delegate_seat!(Application);
-delegate_keyboard!(Application);
-delegate_pointer!(Application);
+delegate_seat!(Shell);
+delegate_keyboard!(Shell);
+delegate_pointer!(Shell);
 
-delegate_layer!(Application);
+delegate_layer!(Shell);
 
-delegate_registry!(Application);
+delegate_registry!(Shell);
 
-impl ProvidesRegistryState for Application {
+impl ProvidesRegistryState for Shell {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry_state
     }
