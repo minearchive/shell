@@ -1,8 +1,8 @@
-use std::{thread, u32};
+use std::{collections::HashMap, thread, u32};
 
 use calloop::channel::Sender;
 use log::warn;
-use niri_ipc::{socket::Socket, Request, Response};
+use niri_ipc::{socket::Socket, Request, Response, Window};
 
 use crate::ipc::{events::IPCEvent, IpcTrait};
 
@@ -54,6 +54,7 @@ impl NiriIpc {
         }
 
         let mut focused_ws_id = 0;
+        let mut window_map: HashMap<u64, Window> = HashMap::new();
 
         thread::spawn(move || {
             let mut read_events = socket.read_events();
@@ -81,10 +82,21 @@ impl NiriIpc {
                         workspace_id,
                         active_window_id,
                     } => {}
-                    niri_ipc::Event::WindowsChanged { windows } => {}
-                    niri_ipc::Event::WindowOpenedOrChanged { window } => {}
-                    niri_ipc::Event::WindowClosed { id } => {}
-                    niri_ipc::Event::WindowFocusChanged { id } => {}
+                    niri_ipc::Event::WindowsChanged { windows } => {
+                        window_map = windows.into_iter().map(|w| (w.id, w)).collect();
+                    }
+                    niri_ipc::Event::WindowOpenedOrChanged { window } => {
+                        window_map.insert(window.id, window);
+                    }
+                    niri_ipc::Event::WindowClosed { id } => {
+                        window_map.remove(&id);
+                    }
+                    niri_ipc::Event::WindowFocusChanged { id } => {
+                        let title = id
+                            .and_then(|id| window_map.get(&id))
+                            .and_then(|w| w.title.clone());
+                        let _ = sender.send(IPCEvent::FocusedWindowChanged(title));
+                    }
                     niri_ipc::Event::WindowFocusTimestampChanged {
                         id,
                         focus_timestamp,

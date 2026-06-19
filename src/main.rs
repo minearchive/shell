@@ -43,6 +43,7 @@ use crate::{
     ui::{UiEvent, UserInterface},
 };
 
+mod font;
 mod ipc;
 mod ui;
 

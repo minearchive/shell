@@ -1,11 +1,12 @@
 use calloop::channel::Sender;
-use skia_safe::{utils::text_utils::Align, Canvas, Color4f, Font, FontMgr, FontStyle, Paint};
+use skia_safe::{utils::text_utils::Align, Canvas, Color4f, Paint};
 use smithay_client_toolkit::seat::{
     keyboard::{KeyEvent, Keysym, Modifiers},
     pointer::{PointerEvent, PointerEventKind},
 };
 
 use crate::{
+    font::Fonts,
     ipc::{events::IPCEvent, IpcTrait, WindowManagerIPC},
     KeyTiming,
 };
@@ -20,7 +21,8 @@ pub enum UiEvent {
 
 pub struct UIState {
     pub ipc: WindowManagerIPC,
-    pub current_window_name: String,
+    pub workspace_id: String,
+    pub window_title: String,
     pub padding: f32,
     pub shoud_redraw: bool,
 }
@@ -31,18 +33,21 @@ pub struct UserInterface {
     modifier: Modifiers,
     state: UIState,
     sender: Sender<UiEvent>,
+    font: Fonts,
 }
 
 impl UIState {
     pub fn new(sender: Sender<IPCEvent>) -> Self {
         let mut s = Self {
             ipc: WindowManagerIPC::new(sender),
-            current_window_name: "THIS IS EXAMPLE TEXT".to_string(),
+            workspace_id: "".into(),
+            window_title: "".into(),
             padding: 0.,
             shoud_redraw: true,
         };
 
-        s.current_window_name = s.ipc.get_current_workspace().to_string();
+        s.workspace_id = s.ipc.get_current_workspace().to_string();
+        s.window_title = s.ipc.get_current_window_name().unwrap_or_default();
 
         s
     }
@@ -56,6 +61,7 @@ impl UserInterface {
             modifier: Modifiers::default(),
             state: UIState::new(ipc_sender),
             sender: rx,
+            font: Fonts::noto_sans(),
         }
     }
 
@@ -63,7 +69,12 @@ impl UserInterface {
         match event {
             IPCEvent::ForcusedWorkspaceChanged(_old, new) => {
                 self.state.shoud_redraw = true;
-                self.state.current_window_name = new.to_string();
+                self.state.workspace_id = new.to_string();
+                let _ = self.sender.send(UiEvent::RequestRedraw(self.idx));
+            }
+            IPCEvent::FocusedWindowChanged(title) => {
+                self.state.shoud_redraw = true;
+                self.state.window_title = title.unwrap_or_default();
                 let _ = self.sender.send(UiEvent::RequestRedraw(self.idx));
             }
         }
@@ -74,13 +85,7 @@ impl UserInterface {
             .iter()
             .for_each(|c| c.draw(&canvas, &self.state));
 
-        let font_mgr = FontMgr::new();
-
-        let typeface = font_mgr
-            .legacy_make_typeface("Unifont", FontStyle::normal())
-            .expect("Failed to create typeface");
-
-        let font = Font::new(typeface, 32.);
+        let font = self.font.sized(32.);
         let mut paint = Paint::default();
 
         canvas.clear(Color4f::new(1., 1., 1., 1.));
@@ -92,8 +97,16 @@ impl UserInterface {
         let y = -font_metrics.1.ascent;
 
         canvas.draw_str_align(
-            self.state.current_window_name.to_string(),
+            self.state.workspace_id.to_string(),
             (self.state.padding, y),
+            &font,
+            &paint,
+            Align::Left,
+        );
+
+        canvas.draw_str_align(
+            &self.state.window_title,
+            (self.state.padding + 64., y),
             &font,
             &paint,
             Align::Left,
