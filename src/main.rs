@@ -38,7 +38,10 @@ use wayland_client::{
     Connection, QueueHandle,
 };
 
-use crate::ui::{UiEvent, UserInterface};
+use crate::{
+    ipc::events::IPCEvent,
+    ui::{UiEvent, UserInterface},
+};
 
 mod ipc;
 mod ui;
@@ -201,13 +204,25 @@ impl OutputHandler for Shell {
             })
             .unwrap();
 
+        let (ipc_tx, ipc_channel) = channel::channel::<IPCEvent>();
+
+        self.loop_handle
+            .insert_source(ipc_channel, move |event, _, shell| {
+                if let calloop::channel::Event::Msg(ipc_event) = event {
+                    if let Some(screen) = shell.screen.get_mut(c) {
+                        screen.ui.on_ipc(ipc_event);
+                    }
+                }
+            })
+            .unwrap();
+
         self.screen.push(Screen {
             layer,
             width: 0,
             height: 0,
             first_configure: true,
             keyboard_focus: false,
-            ui: UserInterface::new(tx, c),
+            ui: UserInterface::new(tx, ipc_tx, c),
             output: output,
         });
 

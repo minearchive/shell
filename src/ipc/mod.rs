@@ -1,14 +1,18 @@
+use std::u32;
+
+use calloop::channel::Sender;
 use log::warn;
 
-use crate::ipc::{hyprland::HyprlandIpc, niri::NiriIpc};
+use crate::ipc::{events::IPCEvent, hyprland::HyprlandIpc, niri::NiriIpc};
 
+pub mod events;
 mod hyprland;
 mod niri;
 
 #[allow(unused)]
 pub(crate) trait IpcTrait {
     fn get_current_window_name(&mut self) -> Option<String>;
-    fn get_current_workspace(&mut self) -> Option<u32>;
+    fn get_current_workspace(&mut self) -> u32;
 }
 
 pub enum WindowManagerIPC {
@@ -19,17 +23,11 @@ pub enum WindowManagerIPC {
     None,
 }
 
-impl Default for WindowManagerIPC {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl WindowManagerIPC {
-    pub fn new() -> Self {
+    pub fn new(sender: Sender<IPCEvent>) -> Self {
         if let Ok(wm) = std::env::var("XDG_CURRENT_DESKTOP") {
             if wm == "niri" {
-                match NiriIpc::new() {
+                match NiriIpc::new(sender) {
                     Ok(ipc) => return Self::Niri(ipc),
                     Err(e) => {
                         warn!("Failed to connect to niri ipc: {e}");
@@ -58,11 +56,11 @@ impl IpcTrait for WindowManagerIPC {
         }
     }
 
-    fn get_current_workspace(&mut self) -> Option<u32> {
+    fn get_current_workspace(&mut self) -> u32 {
         match self {
             WindowManagerIPC::Niri(ipc) => ipc.get_current_workspace(),
             WindowManagerIPC::Hyprland(ipc) => ipc.get_current_workspace(),
-            _ => None,
+            _ => u32::MAX,
         }
     }
 }

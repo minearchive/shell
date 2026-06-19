@@ -7,7 +7,7 @@ impl IpcTrait for HyprlandIpc {
         todo!()
     }
 
-    fn get_current_workspace(&mut self) -> Option<u32> {
+    fn get_current_workspace(&mut self) -> u32 {
         todo!()
     }
 }

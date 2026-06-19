@@ -6,7 +6,7 @@ use smithay_client_toolkit::seat::{
 };
 
 use crate::{
-    ipc::{IpcTrait, WindowManagerIPC},
+    ipc::{events::IPCEvent, IpcTrait, WindowManagerIPC},
     KeyTiming,
 };
 
@@ -34,24 +34,38 @@ pub struct UserInterface {
 }
 
 impl UIState {
-    pub fn new() -> Self {
-        Self {
-            ipc: WindowManagerIPC::default(),
+    pub fn new(sender: Sender<IPCEvent>) -> Self {
+        let mut s = Self {
+            ipc: WindowManagerIPC::new(sender),
             current_window_name: "THIS IS EXAMPLE TEXT".to_string(),
             padding: 0.,
             shoud_redraw: true,
-        }
+        };
+
+        s.current_window_name = s.ipc.get_current_workspace().to_string();
+
+        s
     }
 }
 
 impl UserInterface {
-    pub fn new(rx: Sender<UiEvent>, idx: usize) -> Self {
+    pub fn new(rx: Sender<UiEvent>, ipc_sender: Sender<IPCEvent>, idx: usize) -> Self {
         Self {
             components: Vec::new(),
             idx,
             modifier: Modifiers::default(),
-            state: UIState::new(),
+            state: UIState::new(ipc_sender),
             sender: rx,
+        }
+    }
+
+    pub fn on_ipc(&mut self, event: IPCEvent) {
+        match event {
+            IPCEvent::ForcusedWorkspaceChanged(_old, new) => {
+                self.state.shoud_redraw = true;
+                self.state.current_window_name = new.to_string();
+                let _ = self.sender.send(UiEvent::RequestRedraw(self.idx));
+            }
         }
     }
 
@@ -59,12 +73,6 @@ impl UserInterface {
         self.components
             .iter()
             .for_each(|c| c.draw(&canvas, &self.state));
-
-        self.state.current_window_name = self
-            .state
-            .ipc
-            .get_current_window_name()
-            .unwrap_or("Unkonow".to_string());
 
         let font_mgr = FontMgr::new();
 
