@@ -45,6 +45,8 @@ use crate::{
 
 mod font;
 mod ipc;
+mod mpris;
+
 mod ui;
 
 pub struct Screen {

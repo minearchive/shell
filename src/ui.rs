@@ -15,6 +15,9 @@ use crate::{
 
 pub trait Component {
     fn draw(&self, canvas: &Canvas, state: &UIState);
+    fn on_cursor(&self, events: &PointerEvent);
+    fn on_key(&mut self, event: &KeyEvent, timing: &KeyTiming);
+    fn on_ipc(&mut self, events: &IPCEvent);
 }
 
 pub enum UiEvent {
@@ -68,6 +71,8 @@ impl UserInterface {
     }
 
     pub fn on_ipc(&mut self, event: IPCEvent) {
+        self.components.iter_mut().for_each(|c| c.on_ipc(&event));
+
         match event {
             IPCEvent::ForcusedWorkspaceChanged(_old, new) => {
                 self.state.shoud_redraw = true;
@@ -123,9 +128,14 @@ impl UserInterface {
                 KeyTiming::Release => println!("Space Released"),
             }
         }
+
+        self.components
+            .iter_mut()
+            .for_each(|c| c.on_key(event, timing));
     }
 
     pub fn on_cursor(&mut self, event: &PointerEvent) {
+        #[allow(unused)]
         match event.kind {
             PointerEventKind::Axis {
                 horizontal,
@@ -144,20 +154,22 @@ impl UserInterface {
                     let _ = self.sender.send(UiEvent::RequestRedraw(self.idx));
                 }
             }
-            PointerEventKind::Enter { serial } => todo!(),
-            PointerEventKind::Leave { serial } => todo!(),
-            PointerEventKind::Motion { time } => todo!(),
+            PointerEventKind::Enter { serial } => {}
+            PointerEventKind::Leave { serial } => {}
+            PointerEventKind::Motion { time } => {}
             PointerEventKind::Press {
                 time,
                 button,
                 serial,
-            } => todo!(),
+            } => {}
             PointerEventKind::Release {
                 time,
                 button,
                 serial,
-            } => todo!(),
+            } => {}
         }
+
+        self.components.iter_mut().for_each(|c| c.on_cursor(event));
     }
 
     pub fn should_redraw(&mut self) -> bool {
