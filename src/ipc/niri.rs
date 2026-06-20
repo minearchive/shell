@@ -1,4 +1,4 @@
-use std::{collections::HashMap, thread, u32};
+use std::{collections::HashMap, thread};
 
 use calloop::channel::Sender;
 use log::warn;

@@ -1,5 +1,3 @@
-use std::u32;
-
 use calloop::channel::Sender;
 use log::warn;
 

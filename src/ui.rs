@@ -5,6 +5,8 @@ use smithay_client_toolkit::seat::{
     pointer::{PointerEvent, PointerEventKind},
 };
 
+use skia_safe::FontStyle;
+
 use crate::{
     font::Fonts,
     ipc::{events::IPCEvent, IpcTrait, WindowManagerIPC},
@@ -61,7 +63,7 @@ impl UserInterface {
             modifier: Modifiers::default(),
             state: UIState::new(ipc_sender),
             sender: rx,
-            font: Fonts::noto_sans(),
+            font: Fonts::roboto(FontStyle::normal()),
         }
     }
 
@@ -83,7 +85,7 @@ impl UserInterface {
     pub fn draw(&mut self, canvas: &Canvas) {
         self.components
             .iter()
-            .for_each(|c| c.draw(&canvas, &self.state));
+            .for_each(|c| c.draw(canvas, &self.state));
 
         let font = self.font.sized(32.);
         let mut paint = Paint::default();
@@ -97,7 +99,7 @@ impl UserInterface {
         let y = -font_metrics.1.ascent;
 
         canvas.draw_str_align(
-            self.state.workspace_id.to_string(),
+            &self.state.workspace_id,
             (self.state.padding, y),
             &font,
             &paint,
@@ -142,7 +144,19 @@ impl UserInterface {
                     let _ = self.sender.send(UiEvent::RequestRedraw(self.idx));
                 }
             }
-            _ => {}
+            PointerEventKind::Enter { serial } => todo!(),
+            PointerEventKind::Leave { serial } => todo!(),
+            PointerEventKind::Motion { time } => todo!(),
+            PointerEventKind::Press {
+                time,
+                button,
+                serial,
+            } => todo!(),
+            PointerEventKind::Release {
+                time,
+                button,
+                serial,
+            } => todo!(),
         }
     }
 

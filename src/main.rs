@@ -224,7 +224,7 @@ impl OutputHandler for Shell {
             first_configure: true,
             keyboard_focus: false,
             ui: UserInterface::new(tx, ipc_tx, c),
-            output: output,
+            output,
         });
 
         self.counter += 1;
@@ -512,7 +512,7 @@ impl Shell {
         let info = ImageInfo::new_n32_premul((width as i32, height as i32), None);
         let mut skia_surface = surfaces::wrap_pixels(&info, canvas, stride as usize, None).unwrap();
 
-        self.screen[idx].ui.draw(&skia_surface.canvas());
+        self.screen[idx].ui.draw(skia_surface.canvas());
 
         let layer = &self.screen[idx].layer;
         layer
