@@ -1,7 +1,7 @@
 use std::{collections::HashMap, thread};
 
 use calloop::channel::Sender;
-use log::{debug, warn};
+use log::warn;
 use niri_ipc::{socket::Socket, Request, Response, Window};
 
 use crate::ipc::{events::IPCEvent, IpcTrait};
