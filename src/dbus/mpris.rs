@@ -1,20 +1,69 @@
 use std::thread;
 
 use calloop::channel::Sender;
-use mpris::{Event, PlayerFinder};
+use mpris::{Event, LoopStatus, PlaybackStatus, PlayerFinder};
+
+#[derive(Debug, Clone)]
+pub struct PlayerState {
+    pub identity: String,
+    pub active: bool,
+    pub status: PlaybackStatus,
+    pub title: Option<String>,
+    pub artists: Option<Vec<String>>,
+    pub volume: Option<f64>,
+    pub shuffle: bool,
+    pub loop_status: LoopStatus,
+}
+
+impl PlayerState {
+    pub fn new(identity: String) -> Self {
+        Self {
+            identity,
+            active: true,
+            status: PlaybackStatus::Stopped,
+            title: None,
+            artists: None,
+            volume: None,
+            shuffle: false,
+            loop_status: LoopStatus::None,
+        }
+    }
+
+    pub fn apply(&mut self, event: &Event) {
+        match event {
+            Event::PlayerShutDown => {
+                self.active = false;
+                self.status = PlaybackStatus::Stopped;
+            }
+            Event::Playing => self.status = PlaybackStatus::Playing,
+            Event::Paused => self.status = PlaybackStatus::Paused,
+            Event::Stopped => self.status = PlaybackStatus::Stopped,
+            Event::VolumeChanged(v) => self.volume = Some(*v),
+            Event::ShuffleToggled(s) => self.shuffle = *s,
+            Event::LoopingChanged(l) => self.loop_status = *l,
+            Event::TrackChanged(meta) => {
+                self.title = meta.title().map(str::to_owned);
+                self.artists = meta
+                    .artists()
+                    .map(|v| v.into_iter().map(str::to_owned).collect());
+            }
+            _ => {}
+        }
+    }
+}
 
 #[allow(unused)]
 pub struct MprisClient {
-    sender: Sender<Event>,
+    sender: Sender<PlayerState>,
 }
 
 impl MprisClient {
-    pub fn new(sender: Sender<Event>) -> Self {
+    pub fn new(sender: Sender<PlayerState>) -> Self {
         Self::start_listener(sender.clone());
         Self { sender }
     }
 
-    pub fn start_listener(sender: Sender<Event>) {
+    pub fn start_listener(sender: Sender<PlayerState>) {
         thread::spawn(move || {
             let finder = match PlayerFinder::new() {
                 Ok(finder) => finder,
@@ -43,7 +92,7 @@ impl MprisClient {
         });
     }
 
-    fn listen_player(identity: String, sender: Sender<Event>) {
+    fn listen_player(identity: String, sender: Sender<PlayerState>) {
         let finder = match PlayerFinder::new() {
             Ok(finder) => finder,
             Err(err) => {
@@ -68,10 +117,16 @@ impl MprisClient {
             }
         };
 
+        let mut state = PlayerState::new(identity.clone());
+
         for event in events {
             match event {
                 Ok(event) => {
-                    let _ = sender.send(event);
+                    state.apply(&event);
+                    let _ = sender.send(state.clone());
+                    if !state.active {
+                        break;
+                    }
                 }
                 Err(err) => {
                     println!("[{identity}] D-Bus error: {err}. Aborting.");

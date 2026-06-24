@@ -1,13 +1,7 @@
 use std::fmt;
 
 use calloop::channel::Sender;
-use hyprland::{
-    data::{Client, Clients},
-    default_instance,
-    event_listener::EventListener,
-    instance::Instance,
-    shared::HyprData,
-};
+use hyprland::{default_instance, event_listener::EventListener, instance::Instance};
 
 use crate::ipc::{events::IPCEvent, IpcTrait};
 
@@ -27,7 +21,7 @@ impl fmt::Display for HyprlandIPCError {
 
 pub struct HyprlandIpc {
     _event_listener: EventListener,
-    instance: &'static Instance,
+    _instance: &'static Instance,
 }
 
 impl IpcTrait for HyprlandIpc {
@@ -82,11 +76,11 @@ impl HyprlandIpc {
             .start_listener()
             .map_err(|e| HyprlandIPCError::EventListenerError(e))?;
 
-        let instance = default_instance().map_err(|e| HyprlandIPCError::NoInstance)?;
+        let instance = default_instance().map_err(|_| HyprlandIPCError::NoInstance)?;
 
         Ok(Self {
             _event_listener: event_listener,
-            instance: instance,
+            _instance: instance,
         })
     }
 }

@@ -1,5 +1,7 @@
+use std::collections::HashMap;
+
 use calloop::channel::Sender;
-use mpris::Event;
+use log::info;
 use skia_safe::{utils::text_utils::Align, Canvas, Color4f, Paint};
 use smithay_client_toolkit::seat::{
     keyboard::{KeyEvent, Keysym, Modifiers},
@@ -9,7 +11,7 @@ use smithay_client_toolkit::seat::{
 use skia_safe::FontStyle;
 
 use crate::{
-    dbus::mpris::MprisClient,
+    dbus::mpris::{MprisClient, PlayerState},
     font::Fonts,
     ipc::{events::IPCEvent, IpcTrait, WindowManagerIPC},
     KeyTiming,
@@ -20,7 +22,7 @@ pub trait Component {
     fn on_cursor(&self, events: &PointerEvent);
     fn on_key(&mut self, event: &KeyEvent, timing: &KeyTiming);
     fn on_ipc(&mut self, events: &IPCEvent);
-    fn on_mpris(&mut self, event: &Event);
+    fn on_mpris(&mut self, state: &PlayerState);
 }
 
 pub enum UiEvent {
@@ -29,7 +31,8 @@ pub enum UiEvent {
 
 pub struct UIState {
     pub ipc: WindowManagerIPC,
-    pub mpris: MprisClient,
+    pub _mpris: MprisClient,
+    pub players: HashMap<String, PlayerState>,
     pub workspace_id: String,
     pub window_title: String,
     pub padding: f32,
@@ -46,10 +49,11 @@ pub struct UserInterface {
 }
 
 impl UIState {
-    pub fn new(ipc_sender: Sender<IPCEvent>, mpris_sender: Sender<Event>) -> Self {
+    pub fn new(ipc_sender: Sender<IPCEvent>, mpris_sender: Sender<PlayerState>) -> Self {
         let mut s = Self {
             ipc: WindowManagerIPC::new(ipc_sender),
-            mpris: MprisClient::new(mpris_sender),
+            _mpris: MprisClient::new(mpris_sender),
+            players: HashMap::new(),
             workspace_id: "".into(),
             window_title: "".into(),
             padding: 0.,
@@ -67,7 +71,7 @@ impl UserInterface {
     pub fn new(
         rx: Sender<UiEvent>,
         ipc_sender: Sender<IPCEvent>,
-        mpris_sender: Sender<Event>,
+        mpris_sender: Sender<PlayerState>,
         idx: usize,
     ) -> Self {
         Self {
@@ -89,7 +93,7 @@ impl UserInterface {
                 self.state.workspace_id = new.to_string();
                 let _ = self.sender.send(UiEvent::RequestRedraw(self.idx));
             }
-            IPCEvent::FocusedWindowChanged(title) => {
+            IPCEvent::FocusedWindowTitleChanged(title) => {
                 self.state.shoud_redraw = true;
                 self.state.window_title = title.unwrap_or_default();
                 let _ = self.sender.send(UiEvent::RequestRedraw(self.idx));
@@ -97,24 +101,15 @@ impl UserInterface {
         }
     }
 
-    pub fn on_mpris(&mut self, event: Event) {
-        self.components.iter_mut().for_each(|c| c.on_mpris(&event));
+    pub fn on_mpris(&mut self, state: PlayerState) {
+        self.components.iter_mut().for_each(|c| c.on_mpris(&state));
 
-        match event {
-            Event::PlayerShutDown => todo!(),
-            Event::Paused => todo!(),
-            Event::Playing => todo!(),
-            Event::Stopped => todo!(),
-            Event::LoopingChanged(loop_status) => todo!(),
-            Event::ShuffleToggled(_) => todo!(),
-            Event::VolumeChanged(_) => todo!(),
-            Event::PlaybackRateChanged(_) => todo!(),
-            Event::TrackChanged(metadata) => todo!(),
-            Event::Seeked { position_in_us } => todo!(),
-            Event::TrackAdded(track_id) => todo!(),
-            Event::TrackRemoved(track_id) => todo!(),
-            Event::TrackMetadataChanged { old_id, new_id } => todo!(),
-            Event::TrackListReplaced => todo!(),
+        info!("[{}] {state:?}", state.identity);
+
+        if state.active {
+            self.state.players.insert(state.identity.clone(), state);
+        } else {
+            self.state.players.remove(&state.identity);
         }
     }
 

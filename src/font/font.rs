@@ -2,8 +2,8 @@ use skia_bindings::SkTypeface;
 use skia_safe::{Font, FontMgr, FontStyle, RCHandle};
 
 pub struct FontInstance {
-    pub(crate) mgr: FontMgr,
-    pub(crate) name: String,
+    pub(crate) _mgr: FontMgr,
+    pub(crate) _name: String,
     pub typeface: RCHandle<SkTypeface>,
 }
 
@@ -16,8 +16,8 @@ impl FontInstance {
             .expect("Failed to create typeface");
 
         Self {
-            mgr,
-            name,
+            _mgr: mgr,
+            _name: name,
             typeface,
         }
     }

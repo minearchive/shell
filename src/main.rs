@@ -2,8 +2,7 @@ use std::num::NonZeroU32;
 
 use calloop::{channel, EventLoop, LoopHandle};
 use calloop_wayland_source::WaylandSource;
-use log::{debug, info};
-use mpris::Event;
+use log::info;
 use skia_safe::{surfaces, ImageInfo};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
@@ -40,6 +39,7 @@ use wayland_client::{
 };
 
 use crate::{
+    dbus::mpris::PlayerState,
     ipc::events::IPCEvent,
     ui::{UiEvent, UserInterface},
 };
@@ -221,7 +221,7 @@ impl OutputHandler for Shell {
             })
             .unwrap();
 
-        let (mpris_tx, mpris_channel) = channel::channel::<Event>();
+        let (mpris_tx, mpris_channel) = channel::channel::<PlayerState>();
 
         self.loop_handle
             .insert_source(mpris_channel, move |event, _, shell| {
@@ -245,6 +245,7 @@ impl OutputHandler for Shell {
 
         self.counter += 1;
     }
+
     fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: WlOutput) {}
     fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, output: WlOutput) {
         self.screen.retain(|s| s.output != output);
@@ -467,6 +468,16 @@ impl PointerHandler for Shell {
                 match event.kind {
                     Enter { .. } => {
                         info!("Pointer entered @{:?}", event.position);
+                        if let Some(screen) = self
+                            .screen
+                            .iter()
+                            .find(|s| s.layer.wl_surface() == &event.surface)
+                        {
+                            screen
+                                .layer
+                                .set_keyboard_interactivity(KeyboardInteractivity::None);
+                            screen.layer.commit();
+                        }
                     }
                     Leave { .. } => {
                         info!("Pointer left");
@@ -524,7 +535,6 @@ impl Shell {
             return;
         }
 
-        debug!("Redrawing...");
         let info = ImageInfo::new_n32_premul((width as i32, height as i32), None);
         let mut skia_surface = surfaces::wrap_pixels(&info, canvas, stride as usize, None).unwrap();
 

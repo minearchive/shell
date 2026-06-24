@@ -29,9 +29,9 @@ impl IpcTrait for NiriIpc {
                 .iter()
                 .find(|w| w.is_focused)
                 .map(|w| w.id as u32)
-                .unwrap_or(u32::MAX)
+                .unwrap_or(0)
         } else {
-            u32::MAX
+            0
         }
     }
 }
@@ -54,6 +54,7 @@ impl NiriIpc {
         }
 
         let mut focused_ws_id = 0;
+        let mut focused_window_id = 0;
         let mut window_map: HashMap<u64, Window> = HashMap::new();
 
         thread::spawn(move || {
@@ -67,6 +68,9 @@ impl NiriIpc {
                         break;
                     }
                 };
+
+                println!("{events:?}");
+                println!("{focused_window_id}");
 
                 match events {
                     niri_ipc::Event::WorkspacesChanged { workspaces } => {}
@@ -86,6 +90,15 @@ impl NiriIpc {
                         window_map = windows.into_iter().map(|w| (w.id, w)).collect();
                     }
                     niri_ipc::Event::WindowOpenedOrChanged { window } => {
+                        if window.is_focused {
+                            focused_window_id = window.id;
+                        }
+
+                        if window.clone().id == focused_window_id {
+                            let _ = sender
+                                .send(IPCEvent::FocusedWindowTitleChanged(window.clone().title));
+                        }
+
                         window_map.insert(window.id, window);
                     }
                     niri_ipc::Event::WindowClosed { id } => {
@@ -95,7 +108,8 @@ impl NiriIpc {
                         let title = id
                             .and_then(|id| window_map.get(&id))
                             .and_then(|w| w.title.clone());
-                        let _ = sender.send(IPCEvent::FocusedWindowChanged(title));
+
+                        let _ = sender.send(IPCEvent::FocusedWindowTitleChanged(title));
                     }
                     niri_ipc::Event::WindowFocusTimestampChanged {
                         id,
