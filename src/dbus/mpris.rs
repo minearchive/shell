@@ -1,7 +1,10 @@
+use std::sync::OnceLock;
 use std::thread;
 
 use calloop::channel::Sender;
 use mpris::{Event, LoopStatus, PlaybackStatus, PlayerFinder};
+
+static MPRIS: OnceLock<MprisClient> = OnceLock::new();
 
 #[derive(Debug, Clone)]
 pub struct PlayerState {
@@ -52,18 +55,19 @@ impl PlayerState {
     }
 }
 
-#[allow(unused)]
 pub struct MprisClient {
-    sender: Sender<PlayerState>,
+    _sender: Sender<(PlayerState, Event)>,
 }
 
 impl MprisClient {
-    pub fn new(sender: Sender<PlayerState>) -> Self {
-        Self::start_listener(sender.clone());
-        Self { sender }
+    pub fn init(sender: Sender<(PlayerState, Event)>) {
+        MPRIS.get_or_init(|| {
+            Self::start_listener(sender.clone());
+            Self { _sender: sender }
+        });
     }
 
-    pub fn start_listener(sender: Sender<PlayerState>) {
+    fn start_listener(sender: Sender<(PlayerState, Event)>) {
         thread::spawn(move || {
             let finder = match PlayerFinder::new() {
                 Ok(finder) => finder,
@@ -92,7 +96,7 @@ impl MprisClient {
         });
     }
 
-    fn listen_player(identity: String, sender: Sender<PlayerState>) {
+    fn listen_player(identity: String, sender: Sender<(PlayerState, Event)>) {
         let finder = match PlayerFinder::new() {
             Ok(finder) => finder,
             Err(err) => {
@@ -123,7 +127,7 @@ impl MprisClient {
             match event {
                 Ok(event) => {
                     state.apply(&event);
-                    let _ = sender.send(state.clone());
+                    let _ = sender.send((state.clone(), event));
                     if !state.active {
                         break;
                     }

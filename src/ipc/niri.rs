@@ -1,7 +1,7 @@
 use std::{collections::HashMap, thread};
 
 use calloop::channel::Sender;
-use log::warn;
+use log::{debug, warn};
 use niri_ipc::{socket::Socket, Request, Response, Window};
 
 use crate::ipc::{events::IPCEvent, IpcTrait};
@@ -69,12 +69,9 @@ impl NiriIpc {
                     }
                 };
 
-                println!("{events:?}");
-                println!("{focused_window_id}");
-
-                match events {
-                    niri_ipc::Event::WorkspacesChanged { workspaces } => {}
-                    niri_ipc::Event::WorkspaceUrgencyChanged { id, urgent } => {}
+                match events.clone() {
+                    niri_ipc::Event::WorkspacesChanged { .. } => {}
+                    niri_ipc::Event::WorkspaceUrgencyChanged { .. } => {}
                     niri_ipc::Event::WorkspaceActivated { id, .. } => {
                         if id != focused_ws_id {
                             let _ =
@@ -83,9 +80,12 @@ impl NiriIpc {
                         }
                     }
                     niri_ipc::Event::WorkspaceActiveWindowChanged {
-                        workspace_id,
-                        active_window_id,
-                    } => {}
+                        active_window_id, ..
+                    } => {
+                        if let Some(window) = active_window_id {
+                            focused_window_id = window;
+                        }
+                    }
                     niri_ipc::Event::WindowsChanged { windows } => {
                         window_map = windows.into_iter().map(|w| (w.id, w)).collect();
                     }
@@ -102,6 +102,7 @@ impl NiriIpc {
                         window_map.insert(window.id, window);
                     }
                     niri_ipc::Event::WindowClosed { id } => {
+                        focused_window_id = 0;
                         window_map.remove(&id);
                     }
                     niri_ipc::Event::WindowFocusChanged { id } => {
@@ -109,12 +110,13 @@ impl NiriIpc {
                             .and_then(|id| window_map.get(&id))
                             .and_then(|w| w.title.clone());
 
+                        focused_window_id = id.unwrap_or(0);
+
                         let _ = sender.send(IPCEvent::FocusedWindowTitleChanged(title));
                     }
-                    niri_ipc::Event::WindowFocusTimestampChanged {
-                        id,
-                        focus_timestamp,
-                    } => {}
+                    niri_ipc::Event::WindowFocusTimestampChanged { id, .. } => {
+                        focused_window_id = id;
+                    }
                     niri_ipc::Event::WindowUrgencyChanged { id, urgent } => {}
                     niri_ipc::Event::WindowLayoutsChanged { changes } => {}
                     niri_ipc::Event::KeyboardLayoutsChanged { keyboard_layouts } => {}
@@ -126,6 +128,9 @@ impl NiriIpc {
                     niri_ipc::Event::CastStartedOrChanged { cast } => {}
                     niri_ipc::Event::CastStopped { stream_id } => {}
                 }
+
+                // debug!("{events:?}");
+                // debug!("{focused_window_id}");
             }
         });
     }

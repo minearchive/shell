@@ -38,9 +38,11 @@ use wayland_client::{
     Connection, QueueHandle,
 };
 
+use mpris::Event as MprisEvent;
+
 use crate::{
-    dbus::mpris::PlayerState,
-    ipc::events::IPCEvent,
+    dbus::mpris::{MprisClient, PlayerState},
+    ipc::{events::IPCEvent, WindowManagerIPC},
     ui::{UiEvent, UserInterface},
 };
 
@@ -74,6 +76,7 @@ pub struct Shell {
     shift: Option<u32>,
     shm: Shm,
     registry_state: RegistryState,
+    ipc: WindowManagerIPC,
     exit: bool,
     counter: usize,
 }
@@ -91,6 +94,30 @@ fn main() {
 
     WaylandSource::new(connection, event_queue)
         .insert(loop_handle.clone())
+        .unwrap();
+
+    let (mpris_tx, mpris_channel) = channel::channel::<(PlayerState, MprisEvent)>();
+    MprisClient::init(mpris_tx);
+    loop_handle
+        .insert_source(mpris_channel, |event, _, shell| {
+            if let calloop::channel::Event::Msg((ref state, ref ev)) = event {
+                for screen in &mut shell.screen {
+                    screen.ui.on_mpris(state, ev);
+                }
+            }
+        })
+        .unwrap();
+
+    let (ipc_tx, ipc_channel) = channel::channel::<IPCEvent>();
+    let ipc = WindowManagerIPC::new(ipc_tx);
+    loop_handle
+        .insert_source(ipc_channel, |event, _, shell| {
+            if let calloop::channel::Event::Msg(ipc_event) = event {
+                for screen in &mut shell.screen {
+                    screen.ui.on_ipc(ipc_event.clone());
+                }
+            }
+        })
         .unwrap();
 
     let compositor = CompositorState::bind(&globals, &qh).expect("Wayland compositor not found");
@@ -115,6 +142,7 @@ fn main() {
         shift: None,
         shm,
         registry_state: RegistryState::new(&globals),
+        ipc,
         exit: false,
         counter: 0,
     };
@@ -209,37 +237,13 @@ impl OutputHandler for Shell {
             })
             .unwrap();
 
-        let (ipc_tx, ipc_channel) = channel::channel::<IPCEvent>();
-
-        self.loop_handle
-            .insert_source(ipc_channel, move |event, _, shell| {
-                if let calloop::channel::Event::Msg(ipc_event) = event {
-                    if let Some(screen) = shell.screen.get_mut(c) {
-                        screen.ui.on_ipc(ipc_event);
-                    }
-                }
-            })
-            .unwrap();
-
-        let (mpris_tx, mpris_channel) = channel::channel::<PlayerState>();
-
-        self.loop_handle
-            .insert_source(mpris_channel, move |event, _, shell| {
-                if let calloop::channel::Event::Msg(mpris_event) = event {
-                    if let Some(screen) = shell.screen.get_mut(c) {
-                        screen.ui.on_mpris(mpris_event);
-                    }
-                }
-            })
-            .unwrap();
-
         self.screen.push(Screen {
             layer,
             width: 0,
             height: 0,
             first_configure: true,
             keyboard_focus: false,
-            ui: UserInterface::new(tx, ipc_tx, mpris_tx, c),
+            ui: UserInterface::new(tx, c, &mut self.ipc),
             output,
         });
 

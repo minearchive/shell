@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use calloop::channel::Sender;
-use log::info;
 use skia_safe::{utils::text_utils::Align, Canvas, Color4f, Paint};
 use smithay_client_toolkit::seat::{
     keyboard::{KeyEvent, Keysym, Modifiers},
@@ -10,8 +9,10 @@ use smithay_client_toolkit::seat::{
 
 use skia_safe::FontStyle;
 
+use mpris::Event as MprisEvent;
+
 use crate::{
-    dbus::mpris::{MprisClient, PlayerState},
+    dbus::mpris::PlayerState,
     font::Fonts,
     ipc::{events::IPCEvent, IpcTrait, WindowManagerIPC},
     KeyTiming,
@@ -22,7 +23,7 @@ pub trait Component {
     fn on_cursor(&self, events: &PointerEvent);
     fn on_key(&mut self, event: &KeyEvent, timing: &KeyTiming);
     fn on_ipc(&mut self, events: &IPCEvent);
-    fn on_mpris(&mut self, state: &PlayerState);
+    fn on_mpris(&mut self, state: &PlayerState, event: &MprisEvent);
 }
 
 pub enum UiEvent {
@@ -30,8 +31,6 @@ pub enum UiEvent {
 }
 
 pub struct UIState {
-    pub ipc: WindowManagerIPC,
-    pub _mpris: MprisClient,
     pub players: HashMap<String, PlayerState>,
     pub workspace_id: String,
     pub window_title: String,
@@ -49,38 +48,26 @@ pub struct UserInterface {
 }
 
 impl UIState {
-    pub fn new(ipc_sender: Sender<IPCEvent>, mpris_sender: Sender<PlayerState>) -> Self {
-        let mut s = Self {
-            ipc: WindowManagerIPC::new(ipc_sender),
-            _mpris: MprisClient::new(mpris_sender),
+    pub fn new(ipc: &mut WindowManagerIPC) -> Self {
+        Self {
             players: HashMap::new(),
-            workspace_id: "".into(),
-            window_title: "".into(),
+            workspace_id: ipc.get_current_workspace().to_string(),
+            window_title: ipc.get_current_window_name().unwrap_or_default(),
             padding: 0.,
             shoud_redraw: true,
-        };
-
-        s.workspace_id = s.ipc.get_current_workspace().to_string();
-        s.window_title = s.ipc.get_current_window_name().unwrap_or_default();
-
-        s
+        }
     }
 }
 
 impl UserInterface {
-    pub fn new(
-        rx: Sender<UiEvent>,
-        ipc_sender: Sender<IPCEvent>,
-        mpris_sender: Sender<PlayerState>,
-        idx: usize,
-    ) -> Self {
+    pub fn new(rx: Sender<UiEvent>, idx: usize, ipc: &mut WindowManagerIPC) -> Self {
         Self {
             components: Vec::new(),
             idx,
             modifier: Modifiers::default(),
-            state: UIState::new(ipc_sender, mpris_sender),
+            state: UIState::new(ipc),
             sender: rx,
-            font: Fonts::roboto(FontStyle::normal()),
+            font: Fonts::noto_sans(FontStyle::normal()),
         }
     }
 
@@ -101,13 +88,15 @@ impl UserInterface {
         }
     }
 
-    pub fn on_mpris(&mut self, state: PlayerState) {
-        self.components.iter_mut().for_each(|c| c.on_mpris(&state));
-
-        info!("[{}] {state:?}", state.identity);
+    pub fn on_mpris(&mut self, state: &PlayerState, event: &MprisEvent) {
+        self.components
+            .iter_mut()
+            .for_each(|c| c.on_mpris(state, event));
 
         if state.active {
-            self.state.players.insert(state.identity.clone(), state);
+            self.state
+                .players
+                .insert(state.identity.clone(), state.clone());
         } else {
             self.state.players.remove(&state.identity);
         }
