@@ -46,6 +46,7 @@ use crate::{
     ui::{UiEvent, UserInterface},
 };
 
+mod components;
 mod dbus;
 mod font;
 mod ipc;
@@ -534,10 +535,6 @@ impl Shell {
                 wayland_client::protocol::wl_shm::Format::Argb8888,
             )
             .expect("Failed to create framebuffer");
-
-        if !self.screen[idx].ui.should_redraw() {
-            return;
-        }
 
         let info = ImageInfo::new_n32_premul((width as i32, height as i32), None);
         let mut skia_surface = surfaces::wrap_pixels(&info, canvas, stride as usize, None).unwrap();

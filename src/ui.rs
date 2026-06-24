@@ -35,7 +35,6 @@ pub struct UIState {
     pub workspace_id: String,
     pub window_title: String,
     pub padding: f32,
-    pub shoud_redraw: bool,
 }
 
 pub struct UserInterface {
@@ -54,7 +53,6 @@ impl UIState {
             workspace_id: ipc.get_current_workspace().to_string(),
             window_title: ipc.get_current_window_name().unwrap_or_default(),
             padding: 0.,
-            shoud_redraw: true,
         }
     }
 }
@@ -76,12 +74,10 @@ impl UserInterface {
 
         match event {
             IPCEvent::ForcusedWorkspaceChanged(_old, new) => {
-                self.state.shoud_redraw = true;
                 self.state.workspace_id = new.to_string();
                 let _ = self.sender.send(UiEvent::RequestRedraw(self.idx));
             }
             IPCEvent::FocusedWindowTitleChanged(title) => {
-                self.state.shoud_redraw = true;
                 self.state.window_title = title.unwrap_or_default();
                 let _ = self.sender.send(UiEvent::RequestRedraw(self.idx));
             }
@@ -159,13 +155,11 @@ impl UserInterface {
             } => {
                 if horizontal.absolute != 0. {
                     self.state.padding -= horizontal.absolute as f32;
-                    self.state.shoud_redraw = true;
                     let _ = self.sender.send(UiEvent::RequestRedraw(self.idx));
                 }
 
                 if vertical.absolute != 0. && self.modifier.shift {
                     self.state.padding -= vertical.absolute as f32;
-                    self.state.shoud_redraw = true;
                     let _ = self.sender.send(UiEvent::RequestRedraw(self.idx));
                 }
             }
@@ -185,12 +179,6 @@ impl UserInterface {
         }
 
         self.components.iter_mut().for_each(|c| c.on_cursor(event));
-    }
-
-    pub fn should_redraw(&mut self) -> bool {
-        let redraw = self.state.shoud_redraw;
-        self.state.shoud_redraw = false;
-        redraw
     }
 
     pub fn on_modifier(&mut self, modifier: Modifiers) {
