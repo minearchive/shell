@@ -18,7 +18,7 @@ use crate::{
 };
 
 pub trait Component {
-    fn draw(&self, canvas: &Canvas, state: &UIState);
+    fn draw(&self, canvas: &Canvas, state: &UIState, fonts: &FontBook);
     fn on_cursor(&self, events: &PointerEvent);
     fn on_key(&mut self, event: &KeyEvent, timing: &KeyTiming);
     fn on_ipc(&mut self, events: &IPCEvent);
@@ -99,12 +99,12 @@ impl UserInterface {
         }
     }
 
-    pub fn draw(&mut self, canvas: &Canvas) {
+    pub fn draw(&mut self, canvas: &Canvas, fonts: &FontBook) {
         canvas.clear(Color4f::new(1., 1., 1., 1.));
 
         self.components
             .iter()
-            .for_each(|c| c.draw(canvas, &self.state));
+            .for_each(|c| c.draw(canvas, &self.state, fonts));
 
         let font = fonts.sized("noto_sans", 32.);
 

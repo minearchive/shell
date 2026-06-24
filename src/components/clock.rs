@@ -7,20 +7,19 @@ use std::{
 use calloop::channel::Sender;
 use chrono::Local;
 use mpris::Event;
-use skia_safe::{utils::text_utils::Align, Canvas, Color4f, FontStyle, Paint};
+use skia_safe::{utils::text_utils::Align, Canvas, Color4f, Paint};
 use smithay_client_toolkit::seat::{keyboard::KeyEvent, pointer::PointerEvent};
 
 use crate::{
     dbus::mpris::PlayerState,
-    font::Fonts,
+    font::FontBook,
     ipc::events::IPCEvent,
     ui::{Component, UIState, UiEvent},
 };
 
 pub struct Clock {
-    update_interval: usize,
+    _update_interval: usize,
     time: Arc<Mutex<String>>,
-    font: Fonts,
 }
 
 impl Clock {
@@ -36,21 +35,20 @@ impl Clock {
         });
 
         Self {
-            update_interval,
+            _update_interval: update_interval,
             time,
-            font: Fonts::noto_sans(FontStyle::normal()),
         }
     }
 }
 
 impl Component for Clock {
-    fn draw(&self, canvas: &Canvas, _state: &UIState) {
+    fn draw(&self, canvas: &Canvas, _state: &UIState, fonts: &FontBook) {
         let time = self.time.lock().unwrap().clone();
         let mut paint = Paint::default();
         paint.set_anti_alias(true);
         paint.set_color4f(Color4f::new(0., 0., 0., 1.), None);
 
-        let font = self.font.sized(24.);
+        let font = fonts.sized("noto_sans", 24.);
         let metrics = font.metrics();
 
         canvas.draw_str_align(
