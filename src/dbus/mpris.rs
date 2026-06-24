@@ -1,17 +1,84 @@
-use mpris::Player;
-use mpris::PlayerFinder;
+use std::thread;
 
+use calloop::channel::Sender;
+use mpris::{Event, PlayerFinder};
+
+#[allow(unused)]
 pub struct MprisClient {
-    players: Vec<Player>,
+    sender: Sender<Event>,
 }
 
 impl MprisClient {
-    pub fn new() -> Self {
-        let player_finder = PlayerFinder::new().expect("Failed to connect mpris via dbus");
+    pub fn new(sender: Sender<Event>) -> Self {
+        Self::start_listener(sender.clone());
+        Self { sender }
+    }
 
-        let players = player_finder.find_all().unwrap_or(Vec::new());
+    pub fn start_listener(sender: Sender<Event>) {
+        thread::spawn(move || {
+            let finder = match PlayerFinder::new() {
+                Ok(finder) => finder,
+                Err(err) => {
+                    println!("Could not connect to D-Bus: {err}");
+                    return;
+                }
+            };
 
-        Self { players }
+            let players = match finder.find_all() {
+                Ok(players) => players,
+                Err(err) => {
+                    println!("Could not list players: {err}");
+                    return;
+                }
+            };
+
+            for player in players {
+                let identity = player.identity().to_string();
+                let sender = sender.clone();
+
+                println!("listening {identity:?}");
+
+                thread::spawn(move || Self::listen_player(identity, sender));
+            }
+        });
+    }
+
+    fn listen_player(identity: String, sender: Sender<Event>) {
+        let finder = match PlayerFinder::new() {
+            Ok(finder) => finder,
+            Err(err) => {
+                println!("[{identity}] Could not connect to D-Bus: {err}");
+                return;
+            }
+        };
+
+        let player = match finder.find_by_name(&identity) {
+            Ok(player) => player,
+            Err(err) => {
+                println!("[{identity}] Could not reopen player: {err}");
+                return;
+            }
+        };
+
+        let events = match player.events() {
+            Ok(events) => events,
+            Err(err) => {
+                println!("[{identity}] Could not start event stream: {err}");
+                return;
+            }
+        };
+
+        for event in events {
+            match event {
+                Ok(event) => {
+                    let _ = sender.send(event);
+                }
+                Err(err) => {
+                    println!("[{identity}] D-Bus error: {err}. Aborting.");
+                    break;
+                }
+            }
+        }
     }
 }
 

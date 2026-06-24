@@ -1,4 +1,5 @@
 use calloop::channel::Sender;
+use mpris::Event;
 use skia_safe::{utils::text_utils::Align, Canvas, Color4f, Paint};
 use smithay_client_toolkit::seat::{
     keyboard::{KeyEvent, Keysym, Modifiers},
@@ -8,6 +9,7 @@ use smithay_client_toolkit::seat::{
 use skia_safe::FontStyle;
 
 use crate::{
+    dbus::mpris::MprisClient,
     font::Fonts,
     ipc::{events::IPCEvent, IpcTrait, WindowManagerIPC},
     KeyTiming,
@@ -18,6 +20,7 @@ pub trait Component {
     fn on_cursor(&self, events: &PointerEvent);
     fn on_key(&mut self, event: &KeyEvent, timing: &KeyTiming);
     fn on_ipc(&mut self, events: &IPCEvent);
+    fn on_mpris(&mut self, event: &Event);
 }
 
 pub enum UiEvent {
@@ -26,6 +29,7 @@ pub enum UiEvent {
 
 pub struct UIState {
     pub ipc: WindowManagerIPC,
+    pub mpris: MprisClient,
     pub workspace_id: String,
     pub window_title: String,
     pub padding: f32,
@@ -42,9 +46,10 @@ pub struct UserInterface {
 }
 
 impl UIState {
-    pub fn new(sender: Sender<IPCEvent>) -> Self {
+    pub fn new(ipc_sender: Sender<IPCEvent>, mpris_sender: Sender<Event>) -> Self {
         let mut s = Self {
-            ipc: WindowManagerIPC::new(sender),
+            ipc: WindowManagerIPC::new(ipc_sender),
+            mpris: MprisClient::new(mpris_sender),
             workspace_id: "".into(),
             window_title: "".into(),
             padding: 0.,
@@ -59,12 +64,17 @@ impl UIState {
 }
 
 impl UserInterface {
-    pub fn new(rx: Sender<UiEvent>, ipc_sender: Sender<IPCEvent>, idx: usize) -> Self {
+    pub fn new(
+        rx: Sender<UiEvent>,
+        ipc_sender: Sender<IPCEvent>,
+        mpris_sender: Sender<Event>,
+        idx: usize,
+    ) -> Self {
         Self {
             components: Vec::new(),
             idx,
             modifier: Modifiers::default(),
-            state: UIState::new(ipc_sender),
+            state: UIState::new(ipc_sender, mpris_sender),
             sender: rx,
             font: Fonts::roboto(FontStyle::normal()),
         }
@@ -84,6 +94,27 @@ impl UserInterface {
                 self.state.window_title = title.unwrap_or_default();
                 let _ = self.sender.send(UiEvent::RequestRedraw(self.idx));
             }
+        }
+    }
+
+    pub fn on_mpris(&mut self, event: Event) {
+        self.components.iter_mut().for_each(|c| c.on_mpris(&event));
+
+        match event {
+            Event::PlayerShutDown => todo!(),
+            Event::Paused => todo!(),
+            Event::Playing => todo!(),
+            Event::Stopped => todo!(),
+            Event::LoopingChanged(loop_status) => todo!(),
+            Event::ShuffleToggled(_) => todo!(),
+            Event::VolumeChanged(_) => todo!(),
+            Event::PlaybackRateChanged(_) => todo!(),
+            Event::TrackChanged(metadata) => todo!(),
+            Event::Seeked { position_in_us } => todo!(),
+            Event::TrackAdded(track_id) => todo!(),
+            Event::TrackRemoved(track_id) => todo!(),
+            Event::TrackMetadataChanged { old_id, new_id } => todo!(),
+            Event::TrackListReplaced => todo!(),
         }
     }
 

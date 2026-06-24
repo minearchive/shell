@@ -3,6 +3,7 @@ use std::num::NonZeroU32;
 use calloop::{channel, EventLoop, LoopHandle};
 use calloop_wayland_source::WaylandSource;
 use log::{debug, info};
+use mpris::Event;
 use skia_safe::{surfaces, ImageInfo};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
@@ -43,11 +44,12 @@ use crate::{
     ui::{UiEvent, UserInterface},
 };
 
+mod dbus;
 mod font;
 mod ipc;
-mod mpris;
 
 mod ui;
+mod util;
 
 pub struct Screen {
     layer: LayerSurface,
@@ -219,13 +221,25 @@ impl OutputHandler for Shell {
             })
             .unwrap();
 
+        let (mpris_tx, mpris_channel) = channel::channel::<Event>();
+
+        self.loop_handle
+            .insert_source(mpris_channel, move |event, _, shell| {
+                if let calloop::channel::Event::Msg(mpris_event) = event {
+                    if let Some(screen) = shell.screen.get_mut(c) {
+                        screen.ui.on_mpris(mpris_event);
+                    }
+                }
+            })
+            .unwrap();
+
         self.screen.push(Screen {
             layer,
             width: 0,
             height: 0,
             first_configure: true,
             keyboard_focus: false,
-            ui: UserInterface::new(tx, ipc_tx, c),
+            ui: UserInterface::new(tx, ipc_tx, mpris_tx, c),
             output,
         });
 

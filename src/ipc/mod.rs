@@ -35,7 +35,13 @@ impl WindowManagerIPC {
             }
 
             if wm == "hyprland" {
-                return Self::Hyprland(HyprlandIpc::new());
+                match HyprlandIpc::new(sender) {
+                    Ok(ipc) => return Self::Hyprland(ipc),
+                    Err(e) => {
+                        warn!("Failed to connect to hyprland ipc: {e}");
+                        return Self::ConnectionFailed();
+                    }
+                };
             }
 
             Self::Unknown

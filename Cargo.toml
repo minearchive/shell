@@ -8,7 +8,7 @@ calloop = "0.14"
 calloop-wayland-source = "0.4"
 env_logger = "0.11.10"
 gl = "0.14.0"
-hyprland = "0.3.13"
+hyprland = { git = "https://github.com/hyprland-community/hyprland-rs", branch = "master" }
 log = "0.4.32"
 mpris = "2.1.0"
 niri-ipc = "26.4.0"
