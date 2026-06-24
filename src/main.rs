@@ -42,6 +42,7 @@ use mpris::Event as MprisEvent;
 
 use crate::{
     dbus::mpris::{MprisClient, PlayerState},
+    font::FontBook,
     ipc::{events::IPCEvent, WindowManagerIPC},
     ui::{UiEvent, UserInterface},
 };
@@ -78,6 +79,7 @@ pub struct Shell {
     shm: Shm,
     registry_state: RegistryState,
     ipc: WindowManagerIPC,
+    font: FontBook,
     exit: bool,
     counter: usize,
 }
@@ -144,6 +146,15 @@ fn main() {
         shm,
         registry_state: RegistryState::new(&globals),
         ipc,
+        font: {
+            let mut book = FontBook::new();
+            book.register(
+                "noto_sans",
+                "Noto Sans CJK JP",
+                skia_safe::FontStyle::normal(),
+            );
+            book
+        },
         exit: false,
         counter: 0,
     };
@@ -232,8 +243,13 @@ impl OutputHandler for Shell {
 
         self.loop_handle
             .insert_source(channel, |event, _, shell| {
-                if let calloop::channel::Event::Msg(UiEvent::RequestRedraw(idx)) = event {
-                    shell.draw(idx);
+                if let calloop::channel::Event::Msg(msg) = event {
+                    match msg {
+                        UiEvent::RequestRedraw(idx) => shell.draw(idx),
+                        UiEvent::RegisterFont(key, font_family, font_style) => {
+                            shell.font.register(key, font_family.as_str(), font_style);
+                        }
+                    }
                 }
             })
             .unwrap();
@@ -541,14 +557,11 @@ impl Shell {
             )
             .expect("Failed to create framebuffer");
 
-        if !self.screen[idx].ui.should_redraw() {
-            return;
-        }
-
         let info = ImageInfo::new_n32_premul((width as i32, height as i32), None);
         let mut skia_surface = surfaces::wrap_pixels(&info, canvas, stride as usize, None).unwrap();
 
-        self.screen[idx].ui.draw(skia_surface.canvas());
+        let font = &self.font;
+        self.screen[idx].ui.draw(skia_surface.canvas(), font);
 
         let layer = &self.screen[idx].layer;
         layer

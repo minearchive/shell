@@ -1,28 +1,40 @@
-use skia_safe::{Font, FontStyle};
+use std::collections::HashMap;
 
-use crate::font::font::FontInstance;
+use skia_bindings::SkTypeface;
+use skia_safe::{Font, FontMgr, FontStyle, RCHandle};
 
-mod font;
-
-#[allow(unused)]
-pub enum Fonts {
-    NotoSans(FontInstance),
-    Roboto(FontInstance),
+pub struct FontBook {
+    _mgr: FontMgr,
+    typefaces: HashMap<String, RCHandle<SkTypeface>>,
 }
 
-impl Fonts {
-    pub fn noto_sans(style: FontStyle) -> Self {
-        Self::NotoSans(FontInstance::new("Noto Sans CJK JP".into(), style))
+impl FontBook {
+    pub fn new() -> Self {
+        Self {
+            _mgr: FontMgr::new(),
+            typefaces: HashMap::new(),
+        }
     }
 
-    // pub fn roboto(style: FontStyle) -> Self {
-    //     Self::Roboto(FontInstance::new("Roboto".into(), style))
-    // }
+    pub fn register(
+        &mut self,
+        key: impl Into<String>,
+        family: &str,
+        style: FontStyle,
+    ) -> &mut Self {
+        let typeface = self
+            ._mgr
+            .legacy_make_typeface(family, style)
+            .unwrap_or_else(|| panic!("Failed to load font: {family}"));
+        self.typefaces.insert(key.into(), typeface);
+        self
+    }
 
-    pub fn sized(&self, size: f32) -> Font {
-        match self {
-            Fonts::NotoSans(font_instance) => font_instance.from_size(size),
-            Fonts::Roboto(font_instance) => font_instance.from_size(size),
-        }
+    pub fn sized(&self, key: &str, size: f32) -> Font {
+        let typeface = self
+            .typefaces
+            .get(key)
+            .unwrap_or_else(|| panic!("Font key not registered: {key}"));
+        Font::new(typeface.clone(), size)
     }
 }

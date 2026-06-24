@@ -1,20 +1,18 @@
 use std::collections::HashMap;
 
 use calloop::channel::Sender;
-use skia_safe::{utils::text_utils::Align, Canvas, Color4f, Paint};
+use skia_safe::{utils::text_utils::Align, Canvas, Color4f, FontStyle, Paint};
 use smithay_client_toolkit::seat::{
     keyboard::{KeyEvent, Keysym, Modifiers},
     pointer::{PointerEvent, PointerEventKind},
 };
-
-use skia_safe::FontStyle;
 
 use mpris::Event as MprisEvent;
 
 use crate::{
     components::clock::Clock,
     dbus::mpris::PlayerState,
-    font::Fonts,
+    font::FontBook,
     ipc::{events::IPCEvent, IpcTrait, WindowManagerIPC},
     KeyTiming,
 };
@@ -27,8 +25,10 @@ pub trait Component {
     fn on_mpris(&mut self, state: &PlayerState, event: &MprisEvent);
 }
 
+#[allow(unused)]
 pub enum UiEvent {
     RequestRedraw(usize),
+    RegisterFont(String, String, FontStyle),
 }
 
 pub struct UIState {
@@ -36,7 +36,6 @@ pub struct UIState {
     pub workspace_id: String,
     pub window_title: String,
     pub padding: f32,
-    pub shoud_redraw: bool,
 }
 
 pub struct UserInterface {
@@ -45,7 +44,6 @@ pub struct UserInterface {
     modifier: Modifiers,
     state: UIState,
     sender: Sender<UiEvent>,
-    font: Fonts,
 }
 
 impl UIState {
@@ -55,7 +53,6 @@ impl UIState {
             workspace_id: ipc.get_current_workspace().to_string(),
             window_title: ipc.get_current_window_name().unwrap_or_default(),
             padding: 0.,
-            shoud_redraw: true,
         }
     }
 }
@@ -70,7 +67,6 @@ impl UserInterface {
             modifier: Modifiers::default(),
             state: UIState::new(ipc),
             sender: rx,
-            font: Fonts::noto_sans(FontStyle::normal()),
         }
     }
 
@@ -79,12 +75,10 @@ impl UserInterface {
 
         match event {
             IPCEvent::ForcusedWorkspaceChanged(_old, new) => {
-                self.state.shoud_redraw = true;
                 self.state.workspace_id = new.to_string();
                 let _ = self.sender.send(UiEvent::RequestRedraw(self.idx));
             }
             IPCEvent::FocusedWindowTitleChanged(title) => {
-                self.state.shoud_redraw = true;
                 self.state.window_title = title.unwrap_or_default();
                 let _ = self.sender.send(UiEvent::RequestRedraw(self.idx));
             }
@@ -112,7 +106,8 @@ impl UserInterface {
             .iter()
             .for_each(|c| c.draw(canvas, &self.state));
 
-        let font = self.font.sized(32.);
+        let font = fonts.sized("noto_sans", 32.);
+
         let mut paint = Paint::default();
         paint.set_anti_alias(true);
         paint.set_color4f(Color4f::new(0., 0., 0., 1.), None);
@@ -162,13 +157,11 @@ impl UserInterface {
             } => {
                 if horizontal.absolute != 0. {
                     self.state.padding -= horizontal.absolute as f32;
-                    self.state.shoud_redraw = true;
                     let _ = self.sender.send(UiEvent::RequestRedraw(self.idx));
                 }
 
                 if vertical.absolute != 0. && self.modifier.shift {
                     self.state.padding -= vertical.absolute as f32;
-                    self.state.shoud_redraw = true;
                     let _ = self.sender.send(UiEvent::RequestRedraw(self.idx));
                 }
             }
@@ -188,12 +181,6 @@ impl UserInterface {
         }
 
         self.components.iter_mut().for_each(|c| c.on_cursor(event));
-    }
-
-    pub fn should_redraw(&mut self) -> bool {
-        let redraw = self.state.shoud_redraw;
-        self.state.shoud_redraw = false;
-        redraw
     }
 
     pub fn on_modifier(&mut self, modifier: Modifiers) {
