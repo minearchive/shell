@@ -10,6 +10,7 @@ use smithay_client_toolkit::seat::{
 use mpris::Event as MprisEvent;
 
 use crate::{
+    components::clock::Clock,
     dbus::mpris::PlayerState,
     font::FontBook,
     ipc::{events::IPCEvent, IpcTrait, WindowManagerIPC},
@@ -58,8 +59,10 @@ impl UIState {
 
 impl UserInterface {
     pub fn new(rx: Sender<UiEvent>, idx: usize, ipc: &mut WindowManagerIPC) -> Self {
+        let components: Vec<Box<dyn Component>> = vec![Box::new(Clock::new(rx.clone(), idx, 1000))];
+
         Self {
-            components: Vec::new(),
+            components,
             idx,
             modifier: Modifiers::default(),
             state: UIState::new(ipc),
@@ -96,7 +99,9 @@ impl UserInterface {
         }
     }
 
-    pub fn draw(&mut self, canvas: &Canvas, fonts: &FontBook) {
+    pub fn draw(&mut self, canvas: &Canvas) {
+        canvas.clear(Color4f::new(1., 1., 1., 1.));
+
         self.components
             .iter()
             .for_each(|c| c.draw(canvas, &self.state));
@@ -104,8 +109,6 @@ impl UserInterface {
         let font = fonts.sized("noto_sans", 32.);
 
         let mut paint = Paint::default();
-
-        canvas.clear(Color4f::new(1., 1., 1., 1.));
         paint.set_anti_alias(true);
         paint.set_color4f(Color4f::new(0., 0., 0., 1.), None);
 

@@ -540,6 +540,11 @@ impl Shell {
     pub fn draw(&mut self, idx: usize) {
         let width = self.screen[idx].width;
         let height = self.screen[idx].height;
+
+        if width == 0 || height == 0 {
+            return;
+        }
+
         let stride = width as i32 * 4;
 
         let (buffer, canvas) = self
