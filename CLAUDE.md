@@ -75,15 +75,6 @@ listener thread translating compositor-native events into the small internal
 `legacy_make_typeface` resolves a system font by name ("Roboto",
 "Noto Sans CJK JP"). `sized(px)` produces a `Font` for drawing.
 
-## Commit messages
-
-Follow [Conventional Commits](https://www.conventionalcommits.org/): write each
-message as `<type>(<optional scope>): <description>`, lowercase description, no
-trailing period. Common types here: `feat`, `fix`, `refactor`, `docs`, `test`,
-`chore`. Use scopes that match the module being touched, e.g.
-`feat(ipc): map niri workspace events`, `fix(ui): reset redraw flag`,
-`refactor(font): cache typeface`.
-
 ## Status / where work is happening
 
 `TODO.md` tracks intended providers (audio, battery, network, monitor) and IPC
