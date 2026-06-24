@@ -11,6 +11,7 @@ mod niri;
 pub(crate) trait IpcTrait {
     fn get_current_window_name(&mut self) -> Option<String>;
     fn get_current_workspace(&mut self) -> u32;
+    // fn get_monitors() -> Vec<?>;
 }
 
 pub enum WindowManagerIPC {
