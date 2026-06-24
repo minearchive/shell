@@ -1,19 +1,17 @@
 use std::collections::HashMap;
 
 use calloop::channel::Sender;
-use skia_safe::{utils::text_utils::Align, Canvas, Color4f, Paint};
+use skia_safe::{utils::text_utils::Align, Canvas, Color4f, FontStyle, Paint};
 use smithay_client_toolkit::seat::{
     keyboard::{KeyEvent, Keysym, Modifiers},
     pointer::{PointerEvent, PointerEventKind},
 };
 
-use skia_safe::FontStyle;
-
 use mpris::Event as MprisEvent;
 
 use crate::{
     dbus::mpris::PlayerState,
-    font::Fonts,
+    font::FontBook,
     ipc::{events::IPCEvent, IpcTrait, WindowManagerIPC},
     KeyTiming,
 };
@@ -26,8 +24,10 @@ pub trait Component {
     fn on_mpris(&mut self, state: &PlayerState, event: &MprisEvent);
 }
 
+#[allow(unused)]
 pub enum UiEvent {
     RequestRedraw(usize),
+    RegisterFont(String, String, FontStyle),
 }
 
 pub struct UIState {
@@ -44,7 +44,6 @@ pub struct UserInterface {
     modifier: Modifiers,
     state: UIState,
     sender: Sender<UiEvent>,
-    font: Fonts,
 }
 
 impl UIState {
@@ -67,7 +66,6 @@ impl UserInterface {
             modifier: Modifiers::default(),
             state: UIState::new(ipc),
             sender: rx,
-            font: Fonts::noto_sans(FontStyle::normal()),
         }
     }
 
@@ -102,12 +100,13 @@ impl UserInterface {
         }
     }
 
-    pub fn draw(&mut self, canvas: &Canvas) {
+    pub fn draw(&mut self, canvas: &Canvas, fonts: &FontBook) {
         self.components
             .iter()
             .for_each(|c| c.draw(canvas, &self.state));
 
-        let font = self.font.sized(32.);
+        let font = fonts.sized("noto_sans", 32.);
+
         let mut paint = Paint::default();
 
         canvas.clear(Color4f::new(1., 1., 1., 1.));
