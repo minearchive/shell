@@ -12,7 +12,7 @@ use smithay_client_toolkit::{
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
     seat::{
-        keyboard::{KeyEvent, KeyboardHandler, Keysym},
+        keyboard::{KeyboardHandler, Keysym},
         pointer::{PointerEvent, PointerEventKind, PointerHandler},
         Capability, SeatHandler, SeatState,
     },
@@ -60,7 +60,7 @@ pub struct Screen {
     width: u32,
     height: u32,
     first_configure: bool,
-    keyboard_focus: bool,
+    _keyboard_focus: bool,
     ui: UserInterface,
     output: WlOutput,
 }
@@ -259,7 +259,7 @@ impl OutputHandler for Shell {
             width: 0,
             height: 0,
             first_configure: true,
-            keyboard_focus: false,
+            _keyboard_focus: false,
             ui: UserInterface::new(tx, c, &mut self.ipc),
             output,
         });
@@ -376,19 +376,19 @@ impl KeyboardHandler for Shell {
         _: &Connection,
         _: &QueueHandle<Self>,
         _: &WlKeyboard,
-        surface: &WlSurface,
+        _: &WlSurface,
         _: u32,
         _: &[u32],
-        keysyms: &[Keysym],
+        _: &[Keysym],
     ) {
-        if let Some(find) = self
-            .screen
-            .iter_mut()
-            .find(|s| s.layer.wl_surface() == surface)
-        {
-            info!("Keyboard focus on window with pressed symbol: {keysyms:?}");
-            find.keyboard_focus = true;
-        };
+        // if let Some(find) = self
+        //     .screen
+        //     .iter_mut()
+        //     .find(|s| s.layer.wl_surface() == surface)
+        // {
+        //     info!("Keyboard focus on window with pressed symbol: {keysyms:?}");
+        //     find.keyboard_focus = true;
+        // };
     }
 
     fn leave(
@@ -396,50 +396,50 @@ impl KeyboardHandler for Shell {
         _: &Connection,
         _: &QueueHandle<Self>,
         _: &WlKeyboard,
-        surface: &WlSurface,
+        _: &WlSurface,
         _: u32,
     ) {
-        if let Some(find) = self
-            .screen
-            .iter_mut()
-            .find(|s| s.layer.wl_surface() == surface)
-        {
-            info!("Release keyboard focus on window");
-            find.keyboard_focus = false;
-        };
+        // if let Some(find) = self
+        //     .screen
+        //     .iter_mut()
+        //     .find(|s| s.layer.wl_surface() == surface)
+        // {
+        //     info!("Release keyboard focus on window");
+        //     find.keyboard_focus = false;
+        // };
     }
 
     fn press_key(
         &mut self,
         _: &Connection,
-        qh: &QueueHandle<Self>,
+        _: &QueueHandle<Self>,
         _: &wayland_client::protocol::wl_keyboard::WlKeyboard,
         _: u32,
-        event: smithay_client_toolkit::seat::keyboard::KeyEvent,
+        _: smithay_client_toolkit::seat::keyboard::KeyEvent,
     ) {
-        self.on_key(qh, event, KeyTiming::Press);
+        // self.on_key(qh, event, KeyTiming::Press);
     }
 
     fn repeat_key(
         &mut self,
         _: &Connection,
-        qh: &QueueHandle<Self>,
+        _: &QueueHandle<Self>,
         _: &wayland_client::protocol::wl_keyboard::WlKeyboard,
         _: u32,
-        event: smithay_client_toolkit::seat::keyboard::KeyEvent,
+        _: smithay_client_toolkit::seat::keyboard::KeyEvent,
     ) {
-        self.on_key(qh, event, KeyTiming::Repeat);
+        // self.on_key(qh, event, KeyTiming::Repeat);
     }
 
     fn release_key(
         &mut self,
         _: &Connection,
-        qh: &QueueHandle<Self>,
+        _: &QueueHandle<Self>,
         _: &wayland_client::protocol::wl_keyboard::WlKeyboard,
         _: u32,
-        event: smithay_client_toolkit::seat::keyboard::KeyEvent,
+        _: smithay_client_toolkit::seat::keyboard::KeyEvent,
     ) {
-        self.on_key(qh, event, KeyTiming::Release);
+        // self.on_key(qh, event, KeyTiming::Release);
     }
 
     fn update_modifiers(
@@ -573,11 +573,11 @@ impl Shell {
         layer.commit();
     }
 
-    pub fn on_key(&mut self, _qh: &QueueHandle<Self>, event: KeyEvent, timing: KeyTiming) {
-        for screen in &mut self.screen {
-            screen.ui.on_key(&event, &timing);
-        }
-    }
+    // pub fn on_key(&mut self, _qh: &QueueHandle<Self>, event: KeyEvent, timing: KeyTiming) {
+    //     for screen in &mut self.screen {
+    //         screen.ui.on_key(&event, &timing);
+    //     }
+    // }
 
     pub fn on_cursor(&mut self, _qh: &QueueHandle<Self>, event: &PointerEvent, idx: usize) {
         self.screen[idx].ui.on_cursor(event);

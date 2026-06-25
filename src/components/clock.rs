@@ -8,7 +8,7 @@ use calloop::channel::Sender;
 use chrono::Local;
 use mpris::Event;
 use skia_safe::{utils::text_utils::Align, Canvas, Color4f, Paint};
-use smithay_client_toolkit::seat::{keyboard::KeyEvent, pointer::PointerEvent};
+use smithay_client_toolkit::seat::pointer::PointerEvent;
 
 use crate::{
     dbus::mpris::PlayerState,
@@ -61,7 +61,7 @@ impl Component for Clock {
     }
 
     fn on_cursor(&self, _: &PointerEvent) {}
-    fn on_key(&mut self, _: &KeyEvent, _: &crate::KeyTiming) {}
+    // fn on_key(&mut self, _: &KeyEvent, _: &crate::KeyTiming) {}
     fn on_ipc(&mut self, _: &IPCEvent) {}
     fn on_mpris(&mut self, _: &PlayerState, _: &Event) {}
 }

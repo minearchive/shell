@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use calloop::channel::Sender;
 use skia_safe::{utils::text_utils::Align, Canvas, Color4f, FontStyle, Paint};
 use smithay_client_toolkit::seat::{
-    keyboard::{KeyEvent, Keysym, Modifiers},
+    keyboard::Modifiers,
     pointer::{PointerEvent, PointerEventKind},
 };
 
@@ -14,13 +14,12 @@ use crate::{
     dbus::mpris::PlayerState,
     font::FontBook,
     ipc::{events::IPCEvent, IpcTrait, WindowManagerIPC},
-    KeyTiming,
 };
 
 pub trait Component {
     fn draw(&self, canvas: &Canvas, state: &UIState, fonts: &FontBook);
     fn on_cursor(&self, events: &PointerEvent);
-    fn on_key(&mut self, event: &KeyEvent, timing: &KeyTiming);
+    // fn on_key(&mut self, event: &KeyEvent, timing: &KeyTiming);
     fn on_ipc(&mut self, events: &IPCEvent);
     fn on_mpris(&mut self, state: &PlayerState, event: &MprisEvent);
 }
@@ -133,19 +132,19 @@ impl UserInterface {
         );
     }
 
-    pub fn on_key(&mut self, event: &KeyEvent, timing: &KeyTiming) {
-        if event.keysym == Keysym::KP_Space {
-            match timing {
-                KeyTiming::Press => println!("Space Pressed"),
-                KeyTiming::Repeat => println!("Space Repeating"),
-                KeyTiming::Release => println!("Space Released"),
-            }
-        }
+    // pub fn on_key(&mut self, event: &KeyEvent, timing: &KeyTiming) {
+    //     if event.keysym == Keysym::KP_Space {
+    //         match timing {
+    //             KeyTiming::Press => println!("Space Pressed"),
+    //             KeyTiming::Repeat => println!("Space Repeating"),
+    //             KeyTiming::Release => println!("Space Released"),
+    //         }
+    //     }
 
-        self.components
-            .iter_mut()
-            .for_each(|c| c.on_key(event, timing));
-    }
+    //     self.components
+    //         .iter_mut()
+    //         .for_each(|c| c.on_key(event, timing));
+    // }
 
     pub fn on_cursor(&mut self, event: &PointerEvent) {
         #[allow(unused)]
