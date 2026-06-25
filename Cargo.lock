@@ -500,29 +500,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
-name = "gtk_learn"
-version = "0.1.0"
-dependencies = [
- "calloop",
- "calloop-wayland-source",
- "chrono",
- "env_logger",
- "gl",
- "hyprland",
- "log",
- "mpris",
- "niri-ipc",
- "notify",
- "serde",
- "serde_json",
- "skia-bindings",
- "skia-safe",
- "smithay-client-toolkit",
- "tokio",
- "wayland-client",
-]
-
-[[package]]
 name = "hashbrown"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -794,6 +771,29 @@ dependencies = [
  "dbus",
  "enum-kinds",
  "thiserror",
+]
+
+[[package]]
+name = "my_shell"
+version = "0.1.0"
+dependencies = [
+ "calloop",
+ "calloop-wayland-source",
+ "chrono",
+ "env_logger",
+ "gl",
+ "hyprland",
+ "log",
+ "mpris",
+ "niri-ipc",
+ "notify",
+ "serde",
+ "serde_json",
+ "skia-bindings",
+ "skia-safe",
+ "smithay-client-toolkit",
+ "tokio",
+ "wayland-client",
 ]
 
 [[package]]
