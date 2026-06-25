@@ -75,7 +75,7 @@ impl NiriIpc {
                     niri_ipc::Event::WorkspaceActivated { id, .. } => {
                         if id != focused_ws_id {
                             let _ =
-                                sender.send(IPCEvent::ForcusedWorkspaceChanged(focused_ws_id, id));
+                                sender.send(IPCEvent::FocusedWorkspaceChanged(focused_ws_id, id));
                             focused_ws_id = id;
                         }
                     }

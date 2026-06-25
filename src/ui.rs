@@ -74,7 +74,7 @@ impl UserInterface {
         self.components.iter_mut().for_each(|c| c.on_ipc(&event));
 
         match event {
-            IPCEvent::ForcusedWorkspaceChanged(_old, new) => {
+            IPCEvent::FocusedWorkspaceChanged(_old, new) => {
                 self.state.workspace_id = new.to_string();
                 let _ = self.sender.send(UiEvent::RequestRedraw(self.idx));
             }
