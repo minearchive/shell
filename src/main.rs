@@ -511,12 +511,8 @@ impl PointerHandler for Shell {
                     Release { button, .. } => {
                         info!("Release {:x} @ {:?}", button, event.position);
                     }
-                    Axis {
-                        horizontal,
-                        vertical,
-                        ..
-                    } => {
-                        info!("h: {horizontal:?}, v: {vertical:?}");
+                    Axis { .. } => {
+                        // info!("h: {horizontal:?}, v: {vertical:?}");
                     }
                 }
             }
