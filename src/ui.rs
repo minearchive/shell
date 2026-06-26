@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use calloop::channel::Sender;
 use skia_safe::{utils::text_utils::Align, Canvas, Color4f, FontStyle, Paint};
@@ -8,9 +8,11 @@ use smithay_client_toolkit::seat::{
 };
 
 use mpris::Event as MprisEvent;
+use tokio::sync::RwLock;
 
 use crate::{
     components::clock::Clock,
+    config::config::Configuration,
     dbus::mpris::PlayerState,
     font::FontBook,
     ipc::{events::IPCEvent, IpcTrait, WindowManagerIPC},
@@ -42,6 +44,7 @@ pub struct UserInterface {
     idx: usize,
     modifier: Modifiers,
     state: UIState,
+    config: Arc<RwLock<Configuration>>,
     sender: Sender<UiEvent>,
 }
 
@@ -57,14 +60,25 @@ impl UIState {
 }
 
 impl UserInterface {
-    pub fn new(rx: Sender<UiEvent>, idx: usize, ipc: &mut WindowManagerIPC) -> Self {
-        let components: Vec<Box<dyn Component>> = vec![Box::new(Clock::new(rx.clone(), idx, 1000))];
+    pub fn new(
+        rx: Sender<UiEvent>,
+        idx: usize,
+        ipc: &mut WindowManagerIPC,
+        config: Arc<RwLock<Configuration>>,
+    ) -> Self {
+        let components: Vec<Box<dyn Component>> = vec![Box::new(Clock::new(
+            rx.clone(),
+            idx,
+            1000,
+            Arc::clone(&config),
+        ))];
 
         Self {
             components,
             idx,
             modifier: Modifiers::default(),
             state: UIState::new(ipc),
+            config,
             sender: rx,
         }
     }

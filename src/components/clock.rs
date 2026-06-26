@@ -9,8 +9,10 @@ use chrono::Local;
 use mpris::Event;
 use skia_safe::{utils::text_utils::Align, Canvas, Color4f, Paint};
 use smithay_client_toolkit::seat::pointer::PointerEvent;
+use tokio::sync::RwLock;
 
 use crate::{
+    config::config::Configuration,
     dbus::mpris::PlayerState,
     font::FontBook,
     ipc::events::IPCEvent,
@@ -18,12 +20,18 @@ use crate::{
 };
 
 pub struct Clock {
+    config: Arc<RwLock<Configuration>>,
     _update_interval: usize,
     time: Arc<Mutex<String>>,
 }
 
 impl Clock {
-    pub fn new(sender: Sender<UiEvent>, screen_idx: usize, update_interval: usize) -> Self {
+    pub fn new(
+        sender: Sender<UiEvent>,
+        screen_idx: usize,
+        update_interval: usize,
+        config: Arc<RwLock<Configuration>>,
+    ) -> Self {
         let time = Arc::new(Mutex::new(String::new()));
         let time_clone = Arc::clone(&time);
         let interval = update_interval as u64;
@@ -37,6 +45,7 @@ impl Clock {
         Self {
             _update_interval: update_interval,
             time,
+            config,
         }
     }
 }
