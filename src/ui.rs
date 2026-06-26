@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 
 use calloop::channel::Sender;
 use skia_safe::{utils::text_utils::Align, Canvas, Color4f, FontStyle, Paint};
@@ -8,7 +11,6 @@ use smithay_client_toolkit::seat::{
 };
 
 use mpris::Event as MprisEvent;
-use tokio::sync::RwLock;
 
 use crate::{
     components::clock::Clock,
@@ -113,7 +115,8 @@ impl UserInterface {
     }
 
     pub fn draw(&mut self, canvas: &Canvas, fonts: &FontBook) {
-        canvas.clear(Color4f::new(1., 1., 1., 1.));
+        let cfg = self.config.read().unwrap();
+        canvas.clear(cfg.dark.surface_container);
 
         self.components
             .iter()

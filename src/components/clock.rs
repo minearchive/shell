@@ -1,5 +1,5 @@
 use std::{
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
     thread,
     time::Duration,
 };
@@ -9,7 +9,6 @@ use chrono::Local;
 use mpris::Event;
 use skia_safe::{utils::text_utils::Align, Canvas, Color4f, Paint};
 use smithay_client_toolkit::seat::pointer::PointerEvent;
-use tokio::sync::RwLock;
 
 use crate::{
     config::config::Configuration,
@@ -52,12 +51,22 @@ impl Clock {
 
 impl Component for Clock {
     fn draw(&self, canvas: &Canvas, _state: &UIState, fonts: &FontBook) {
+        let cfg = self.config.read().unwrap();
         let time = self.time.lock().unwrap().clone();
         let mut paint = Paint::default();
-        paint.set_anti_alias(true);
-        paint.set_color4f(Color4f::new(0., 0., 0., 1.), None);
 
-        let font = fonts.sized("noto_sans", 24.);
+        paint.set_anti_alias(true);
+        paint.set_color4f(
+            Color4f::new(
+                cfg.dark.primary.r,
+                cfg.dark.primary.g,
+                cfg.dark.primary.b,
+                cfg.dark.primary.a,
+            ),
+            None,
+        );
+
+        let font = fonts.sized("noto_sans", 32.);
         let metrics = font.metrics();
 
         canvas.draw_str_align(

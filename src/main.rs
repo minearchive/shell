@@ -1,4 +1,7 @@
-use std::{num::NonZeroU32, sync::Arc};
+use std::{
+    num::NonZeroU32,
+    sync::{Arc, RwLock},
+};
 
 use calloop::{channel, EventLoop, LoopHandle};
 use calloop_wayland_source::WaylandSource;
@@ -26,7 +29,6 @@ use smithay_client_toolkit::{
     shm::{slot::SlotPool, Shm, ShmHandler},
 };
 
-use tokio::sync::RwLock;
 use wayland_client::{
     globals::registry_queue_init,
     protocol::{
@@ -136,9 +138,8 @@ fn main() {
 
     let pool = SlotPool::new(256 * 256 * 4, &shm).expect("failed to create pool");
 
-    let config = Arc::new(RwLock::new(Configuration::load(
-        "/home/minearchive/project/gtk_shell/example/config.toml",
-    )));
+    let config =
+        Configuration::load_and_watch("/home/minearchive/project/gtk_shell/example/config.toml");
 
     let mut application = Shell {
         pool,
