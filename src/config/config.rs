@@ -3,6 +3,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::thread;
 
+use log::info;
 use notify::{RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use skia_safe::Color4f;
@@ -134,10 +135,10 @@ pub struct ColorTheme {
 impl Configuration {
     fn try_load(path: &str) -> Option<Self> {
         let src = fs::read_to_string(path)
-            .map_err(|e| println!("Config read failed: {e}"))
+            .map_err(|e| info!("Config read failed: {e}"))
             .ok()?;
         toml::from_str(&src)
-            .map_err(|e| println!("Config parse failed:\n{e}"))
+            .map_err(|e| info!("Config parse failed:\n{e}"))
             .ok()
     }
 
@@ -161,7 +162,7 @@ impl Configuration {
                 if event.kind.is_modify() {
                     if let Some(new_cfg) = Self::try_load(&path) {
                         *config_ref.write().unwrap() = new_cfg;
-                        println!("Config reloaded.");
+                        info!("Config reloaded.");
                     }
                 }
             }
