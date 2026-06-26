@@ -2,6 +2,7 @@ use std::sync::OnceLock;
 use std::thread;
 
 use calloop::channel::Sender;
+use log::{error, info};
 use mpris::{Event, LoopStatus, PlaybackStatus, PlayerFinder};
 
 static MPRIS: OnceLock<MprisClient> = OnceLock::new();
@@ -72,7 +73,7 @@ impl MprisClient {
             let finder = match PlayerFinder::new() {
                 Ok(finder) => finder,
                 Err(err) => {
-                    println!("Could not connect to D-Bus: {err}");
+                    error!("Could not connect to D-Bus: {err}");
                     return;
                 }
             };
@@ -80,7 +81,7 @@ impl MprisClient {
             let players = match finder.find_all() {
                 Ok(players) => players,
                 Err(err) => {
-                    println!("Could not list players: {err}");
+                    error!("Could not list players: {err}");
                     return;
                 }
             };
@@ -89,7 +90,7 @@ impl MprisClient {
                 let identity = player.identity().to_string();
                 let sender = sender.clone();
 
-                println!("listening {identity:?}");
+                info!("listening {identity:?}");
 
                 thread::spawn(move || Self::listen_player(identity, sender));
             }
@@ -100,7 +101,7 @@ impl MprisClient {
         let finder = match PlayerFinder::new() {
             Ok(finder) => finder,
             Err(err) => {
-                println!("[{identity}] Could not connect to D-Bus: {err}");
+                error!("[{identity}] Could not connect to D-Bus: {err}");
                 return;
             }
         };
@@ -108,7 +109,7 @@ impl MprisClient {
         let player = match finder.find_by_name(&identity) {
             Ok(player) => player,
             Err(err) => {
-                println!("[{identity}] Could not reopen player: {err}");
+                error!("[{identity}] Could not reopen player: {err}");
                 return;
             }
         };
@@ -116,7 +117,7 @@ impl MprisClient {
         let events = match player.events() {
             Ok(events) => events,
             Err(err) => {
-                println!("[{identity}] Could not start event stream: {err}");
+                error!("[{identity}] Could not start event stream: {err}");
                 return;
             }
         };
@@ -133,7 +134,7 @@ impl MprisClient {
                     }
                 }
                 Err(err) => {
-                    println!("[{identity}] D-Bus error: {err}. Aborting.");
+                    error!("[{identity}] D-Bus error: {err}. Aborting.");
                     break;
                 }
             }
