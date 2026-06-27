@@ -2,10 +2,11 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::thread;
+use std::time::Duration;
 
 use calloop::channel::Sender;
-use log::info;
-use notify::{RecursiveMode, Watcher};
+use log::{debug, info};
+use notify::{Config, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use skia_safe::Color4f;
 
@@ -157,6 +158,9 @@ impl Configuration {
         thread::spawn(move || {
             let (tx, rx) = std::sync::mpsc::channel();
             let mut watcher = notify::recommended_watcher(tx).unwrap();
+            let _ =
+                watcher.configure(Config::default().with_poll_interval(Duration::from_millis(100)));
+
             watcher
                 .watch(Path::new(&path), RecursiveMode::NonRecursive)
                 .unwrap();
