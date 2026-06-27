@@ -5,7 +5,7 @@ use std::thread;
 use std::time::Duration;
 
 use calloop::channel::Sender;
-use log::{debug, info};
+use log::info;
 use notify::{Config, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use skia_safe::Color4f;
