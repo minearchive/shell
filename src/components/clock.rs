@@ -58,10 +58,10 @@ impl Component for Clock {
         paint.set_anti_alias(true);
         paint.set_color4f(
             Color4f::new(
-                cfg.dark.primary.r,
-                cfg.dark.primary.g,
-                cfg.dark.primary.b,
-                cfg.dark.primary.a,
+                cfg.theme().primary.r,
+                cfg.theme().primary.g,
+                cfg.theme().primary.b,
+                cfg.theme().primary.a,
             ),
             None,
         );

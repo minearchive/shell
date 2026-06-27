@@ -1,4 +1,5 @@
 name = "shell"
+is_dark = false
 
 [light]
 primary = "#814c77"

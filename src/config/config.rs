@@ -3,10 +3,13 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::thread;
 
+use calloop::channel::Sender;
 use log::info;
 use notify::{RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use skia_safe::Color4f;
+
+use crate::ui::UiEvent;
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(try_from = "String")]
@@ -146,7 +149,7 @@ impl Configuration {
         Self::try_load(path).unwrap_or_default()
     }
 
-    pub fn load_and_watch(path: &str) -> Arc<RwLock<Self>> {
+    pub fn load_and_watch(path: &str, ui_tx: Sender<UiEvent>) -> Arc<RwLock<Self>> {
         let config = Arc::new(RwLock::new(Self::load(path)));
         let config_ref = Arc::clone(&config);
         let path = path.to_string();
@@ -163,12 +166,21 @@ impl Configuration {
                     if let Some(new_cfg) = Self::try_load(&path) {
                         *config_ref.write().unwrap() = new_cfg;
                         info!("Config reloaded.");
+                        let _ = ui_tx.send(UiEvent::RequestRedrawAll);
                     }
                 }
             }
         });
 
         config
+    }
+
+    pub fn theme(&self) -> &ColorTheme {
+        if self.is_dark {
+            &self.dark
+        } else {
+            &self.light
+        }
     }
 }
 

@@ -32,6 +32,7 @@ pub trait Component {
 pub enum UiEvent {
     RequestRedraw(usize),
     RegisterFont(String, String, FontStyle),
+    RequestRedrawAll,
 }
 
 pub struct UIState {
@@ -116,7 +117,7 @@ impl UserInterface {
 
     pub fn draw(&mut self, canvas: &Canvas, fonts: &FontBook) {
         let cfg = self.config.read().unwrap();
-        canvas.clear(cfg.dark.surface_container);
+        canvas.clear(cfg.theme().surface_container);
 
         self.components
             .iter()
