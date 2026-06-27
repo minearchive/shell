@@ -21,6 +21,12 @@ pub struct Color {
     pub a: f32,
 }
 
+impl PartialEq for Color {
+    fn eq(&self, other: &Self) -> bool {
+        self.r == other.r && self.g == other.g && self.b == other.b && self.a == other.a
+    }
+}
+
 impl Default for Color {
     fn default() -> Self {
         Self {
@@ -136,11 +142,25 @@ pub struct ColorTheme {
     pub scrim: Color,
 }
 
+impl PartialEq for Configuration {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.is_dark == other.is_dark
+            && self.dark == other.dark
+            && self.light == other.light
+    }
+}
+
 impl Configuration {
     fn try_load(path: &str) -> Option<Self> {
         let src = fs::read_to_string(path)
             .map_err(|e| info!("Config read failed: {e}"))
             .ok()?;
+
+        if src.trim().is_empty() {
+            return None;
+        }
+
         toml::from_str(&src)
             .map_err(|e| info!("Config parse failed:\n{e}"))
             .ok()
@@ -168,9 +188,11 @@ impl Configuration {
             for event in rx.into_iter().flatten() {
                 if event.kind.is_modify() {
                     if let Some(new_cfg) = Self::try_load(&path) {
-                        *config_ref.write().unwrap() = new_cfg;
-                        info!("Config reloaded.");
-                        let _ = ui_tx.send(UiEvent::RequestRedrawAll);
+                        if *config_ref.read().unwrap() != new_cfg {
+                            *config_ref.write().unwrap() = new_cfg;
+                            info!("Config reloaded.");
+                            let _ = ui_tx.send(UiEvent::RequestRedrawAll);
+                        }
                     }
                 }
             }
@@ -185,6 +207,60 @@ impl Configuration {
         } else {
             &self.light
         }
+    }
+}
+
+impl PartialEq for ColorTheme {
+    fn eq(&self, other: &Self) -> bool {
+        self.primary == other.primary
+            && self.on_primary == other.on_primary
+            && self.primary_container == other.primary_container
+            && self.on_primary_container == other.on_primary_container
+            && self.inverse_primary == other.inverse_primary
+            && self.primary_fixed == other.primary_fixed
+            && self.primary_fixed_dim == other.primary_fixed_dim
+            && self.on_primary_fixed == other.on_primary_fixed
+            && self.on_primary_fixed_variant == other.on_primary_fixed_variant
+            && self.secondary == other.secondary
+            && self.on_secondary == other.on_secondary
+            && self.secondary_container == other.secondary_container
+            && self.on_secondary_container == other.on_secondary_container
+            && self.secondary_fixed == other.secondary_fixed
+            && self.secondary_fixed_dim == other.secondary_fixed_dim
+            && self.on_secondary_fixed == other.on_secondary_fixed
+            && self.on_secondary_fixed_variant == other.on_secondary_fixed_variant
+            && self.tertiary == other.tertiary
+            && self.on_tertiary == other.on_tertiary
+            && self.tertiary_container == other.tertiary_container
+            && self.on_tertiary_container == other.on_tertiary_container
+            && self.tertiary_fixed == other.tertiary_fixed
+            && self.tertiary_fixed_dim == other.tertiary_fixed_dim
+            && self.on_tertiary_fixed == other.on_tertiary_fixed
+            && self.on_tertiary_fixed_variant == other.on_tertiary_fixed_variant
+            && self.source_color == other.source_color
+            && self.error == other.error
+            && self.on_error == other.on_error
+            && self.error_container == other.error_container
+            && self.on_error_container == other.on_error_container
+            && self.surface_dim == other.surface_dim
+            && self.surface == other.surface
+            && self.surface_bright == other.surface_bright
+            && self.surface_container_lowest == other.surface_container_lowest
+            && self.surface_container_low == other.surface_container_low
+            && self.surface_container == other.surface_container
+            && self.surface_container_high == other.surface_container_high
+            && self.surface_container_highest == other.surface_container_highest
+            && self.on_surface == other.on_surface
+            && self.on_surface_variant == other.on_surface_variant
+            && self.outline == other.outline
+            && self.outline_variant == other.outline_variant
+            && self.inverse_surface == other.inverse_surface
+            && self.inverse_on_surface == other.inverse_on_surface
+            && self.surface_variant == other.surface_variant
+            && self.background == other.background
+            && self.on_background == other.on_background
+            && self.shadow == other.shadow
+            && self.scrim == other.scrim
     }
 }
 
