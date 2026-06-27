@@ -1,6 +1,12 @@
-use std::num::NonZeroU32;
+use std::{
+    num::NonZeroU32,
+    sync::{Arc, RwLock},
+};
 
-use calloop::{channel, EventLoop, LoopHandle};
+use calloop::{
+    channel::{self, Sender},
+    EventLoop, LoopHandle,
+};
 use calloop_wayland_source::WaylandSource;
 use log::info;
 use skia_safe::{surfaces, ImageInfo};
@@ -41,6 +47,7 @@ use wayland_client::{
 use mpris::Event as MprisEvent;
 
 use crate::{
+    config::config::Configuration,
     dbus::mpris::{MprisClient, PlayerState},
     font::FontBook,
     ipc::{events::IPCEvent, WindowManagerIPC},
@@ -48,6 +55,7 @@ use crate::{
 };
 
 mod components;
+mod config;
 mod dbus;
 mod font;
 mod ipc;
@@ -71,7 +79,7 @@ pub struct Shell {
     seat_state: SeatState,
     compositor_state: CompositorState,
     layer_shell: LayerShell,
-    loop_handle: LoopHandle<'static, Shell>,
+    _loop_handle: LoopHandle<'static, Shell>,
     keyboard: Option<WlKeyboard>,
     pointer: Option<WlPointer>,
     screen: Vec<Screen>,
@@ -80,6 +88,8 @@ pub struct Shell {
     registry_state: RegistryState,
     ipc: WindowManagerIPC,
     font: FontBook,
+    config: Arc<RwLock<Configuration>>,
+    ui_tx: Sender<UiEvent>,
     exit: bool,
     counter: usize,
 }
@@ -123,6 +133,25 @@ fn main() {
         })
         .unwrap();
 
+    let (ui_tx, ui_channel) = channel::channel::<UiEvent>();
+    loop_handle
+        .insert_source(ui_channel, |event, _, shell| {
+            if let calloop::channel::Event::Msg(msg) = event {
+                match msg {
+                    UiEvent::RequestRedraw(idx) => shell.draw(idx),
+                    UiEvent::RegisterFont(key, font_family, font_style) => {
+                        shell.font.register(key, font_family.as_str(), font_style);
+                    }
+                    UiEvent::RequestRedrawAll => {
+                        for i in 0..shell.counter {
+                            shell.draw(i);
+                        }
+                    }
+                }
+            }
+        })
+        .unwrap();
+
     let compositor = CompositorState::bind(&globals, &qh).expect("Wayland compositor not found");
 
     let layer_shell =
@@ -132,12 +161,17 @@ fn main() {
 
     let pool = SlotPool::new(256 * 256 * 4, &shm).expect("failed to create pool");
 
+    let config = Configuration::load_and_watch(
+        "/home/minearchive/project/gtk_shell/example/config.toml",
+        ui_tx.clone(),
+    );
+
     let mut application = Shell {
         pool,
         output_state: OutputState::new(&globals, &qh),
         seat_state: SeatState::new(&globals, &qh),
         compositor_state: compositor,
-        loop_handle,
+        _loop_handle: loop_handle,
         layer_shell,
         keyboard: None,
         pointer: None,
@@ -155,6 +189,8 @@ fn main() {
             );
             book
         },
+        config: config,
+        ui_tx: ui_tx,
         exit: false,
         counter: 0,
     };
@@ -238,21 +274,7 @@ impl OutputHandler for Shell {
         layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
         layer.commit();
 
-        let (tx, channel) = channel::channel::<UiEvent>();
         let c = self.counter;
-
-        self.loop_handle
-            .insert_source(channel, |event, _, shell| {
-                if let calloop::channel::Event::Msg(msg) = event {
-                    match msg {
-                        UiEvent::RequestRedraw(idx) => shell.draw(idx),
-                        UiEvent::RegisterFont(key, font_family, font_style) => {
-                            shell.font.register(key, font_family.as_str(), font_style);
-                        }
-                    }
-                }
-            })
-            .unwrap();
 
         self.screen.push(Screen {
             layer,
@@ -260,7 +282,12 @@ impl OutputHandler for Shell {
             height: 0,
             first_configure: true,
             _keyboard_focus: false,
-            ui: UserInterface::new(tx, c, &mut self.ipc),
+            ui: UserInterface::new(
+                self.ui_tx.clone(),
+                c,
+                &mut self.ipc,
+                Arc::clone(&self.config),
+            ),
             output,
         });
 
