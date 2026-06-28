@@ -80,9 +80,6 @@ impl MprisClient {
                 }
             };
 
-            // bus_name (例: org.mpris.MediaPlayer2.mpv.instance123) でプレイヤーを追跡する。
-            // identity ("mpv" など) は同一アプリの複数インスタンスで衝突するが、
-            // bus_name は D-Bus 上でユニークなので追跡キーとして使える。
             let mut tracked: HashSet<String> = HashSet::new();
 
             loop {
@@ -164,7 +161,6 @@ impl MprisClient {
             match event {
                 Ok(event) => {
                     state.apply(&event);
-                    // info!("[{identity}] event={event:?}, state={state:?}");
                     let _ = sender.send((state.clone(), event));
 
                     if !state.active {
