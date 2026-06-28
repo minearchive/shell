@@ -161,7 +161,6 @@ impl MprisClient {
             match event {
                 Ok(event) => {
                     state.apply(&event);
-                    // info!("[{identity}] event={event:?}, state={state:?}");
                     let _ = sender.send((state.clone(), event));
 
                     if !state.active {
