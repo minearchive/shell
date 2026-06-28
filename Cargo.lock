@@ -1032,6 +1032,7 @@ dependencies = [
  "skia-safe",
  "smithay-client-toolkit",
  "tokio",
+ "toml",
  "wayland-client",
  "zbus",
 ]

@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 
 use calloop::channel::Sender;
 use skia_safe::{utils::text_utils::Align, Canvas, Color4f, FontStyle, Paint};
@@ -11,6 +14,7 @@ use mpris::Event as MprisEvent;
 
 use crate::{
     components::clock::Clock,
+    config::config::Configuration,
     dbus::mpris::PlayerState,
     font::FontBook,
     ipc::{events::IPCEvent, IpcTrait, WindowManagerIPC},
@@ -28,6 +32,7 @@ pub trait Component {
 pub enum UiEvent {
     RequestRedraw(usize),
     RegisterFont(String, String, FontStyle),
+    RequestRedrawAll,
 }
 
 pub struct UIState {
@@ -42,6 +47,7 @@ pub struct UserInterface {
     idx: usize,
     modifier: Modifiers,
     state: UIState,
+    config: Arc<RwLock<Configuration>>,
     sender: Sender<UiEvent>,
 }
 
@@ -57,14 +63,25 @@ impl UIState {
 }
 
 impl UserInterface {
-    pub fn new(rx: Sender<UiEvent>, idx: usize, ipc: &mut WindowManagerIPC) -> Self {
-        let components: Vec<Box<dyn Component>> = vec![Box::new(Clock::new(rx.clone(), idx, 1000))];
+    pub fn new(
+        rx: Sender<UiEvent>,
+        idx: usize,
+        ipc: &mut WindowManagerIPC,
+        config: Arc<RwLock<Configuration>>,
+    ) -> Self {
+        let components: Vec<Box<dyn Component>> = vec![Box::new(Clock::new(
+            rx.clone(),
+            idx,
+            1000,
+            Arc::clone(&config),
+        ))];
 
         Self {
             components,
             idx,
             modifier: Modifiers::default(),
             state: UIState::new(ipc),
+            config,
             sender: rx,
         }
     }
@@ -99,7 +116,8 @@ impl UserInterface {
     }
 
     pub fn draw(&mut self, canvas: &Canvas, fonts: &FontBook) {
-        canvas.clear(Color4f::new(1., 1., 1., 1.));
+        let cfg = self.config.read().unwrap();
+        canvas.clear(cfg.theme().surface_container);
 
         self.components
             .iter()

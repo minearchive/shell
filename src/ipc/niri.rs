@@ -69,6 +69,7 @@ impl NiriIpc {
                     }
                 };
 
+                #[allow(unused)]
                 match events.clone() {
                     niri_ipc::Event::WorkspacesChanged { .. } => {}
                     niri_ipc::Event::WorkspaceUrgencyChanged { .. } => {}
