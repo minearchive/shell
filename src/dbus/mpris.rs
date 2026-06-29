@@ -1,5 +1,7 @@
+use std::collections::HashSet;
 use std::sync::OnceLock;
 use std::thread;
+use std::time::Duration;
 
 use calloop::channel::Sender;
 use log::{error, info};
@@ -71,48 +73,79 @@ impl MprisClient {
     fn start_listener(sender: Sender<(PlayerState, Event)>) {
         thread::spawn(move || {
             let finder = match PlayerFinder::new() {
-                Ok(finder) => finder,
+                Ok(f) => f,
                 Err(err) => {
-                    error!("Could not connect to D-Bus: {err}");
+                    error!("Failed to connect to D-Bus: {err}");
                     return;
                 }
             };
 
-            let players = match finder.find_all() {
-                Ok(players) => players,
-                Err(err) => {
-                    error!("Could not list players: {err}");
-                    return;
+            let mut tracked: HashSet<String> = HashSet::new();
+
+            loop {
+                let players = match finder.find_all() {
+                    Ok(p) => p,
+                    Err(err) => match err {
+                        mpris::FindingError::NoPlayerFound => Vec::new(),
+                        mpris::FindingError::DBusError(dbus_error) => {
+                            error!("Failed to get players: {dbus_error:?}");
+                            error!("Paused for 1secs");
+                            thread::sleep(Duration::from_secs(1));
+                            continue;
+                        }
+                    },
+                };
+
+                let current: HashSet<String> =
+                    players.iter().map(|p| p.bus_name().to_string()).collect();
+
+                tracked.retain(|bus_name| current.contains(bus_name));
+
+                for player in &players {
+                    let bus_name = player.bus_name().to_string();
+                    if tracked.insert(bus_name.clone()) {
+                        let sender = sender.clone();
+                        info!("[{}] new player spawned. listening...", player.identity());
+                        thread::spawn(move || {
+                            MprisClient::read_events_for_player(bus_name, sender);
+                        });
+                    }
                 }
-            };
 
-            for player in players {
-                let identity = player.identity().to_string();
-                let sender = sender.clone();
-
-                info!("listening {identity:?}");
-
-                thread::spawn(move || Self::listen_player(identity, sender));
+                thread::sleep(Duration::from_millis(500));
             }
         });
     }
 
-    fn listen_player(identity: String, sender: Sender<(PlayerState, Event)>) {
+    fn read_events_for_player(bus_name: String, sender: Sender<(PlayerState, Event)>) {
         let finder = match PlayerFinder::new() {
             Ok(finder) => finder,
             Err(err) => {
-                error!("[{identity}] Could not connect to D-Bus: {err}");
+                error!("[{bus_name}] Could not connect to D-Bus: {err}");
                 return;
             }
         };
 
-        let player = match finder.find_by_name(&identity) {
-            Ok(player) => player,
+        let players = match finder.iter_players() {
+            Ok(players) => players,
             Err(err) => {
-                error!("[{identity}] Could not reopen player: {err}");
+                error!("[{bus_name}] Could not list players: {err}");
                 return;
             }
         };
+
+        let player = match players
+            .filter_map(Result::ok)
+            .find(|p| p.bus_name() == bus_name)
+        {
+            Some(player) => player,
+            None => {
+                error!("[{bus_name}] Player no longer present");
+                return;
+            }
+        };
+
+        let identity = player.identity().to_string();
 
         let events = match player.events() {
             Ok(events) => events,
@@ -129,7 +162,9 @@ impl MprisClient {
                 Ok(event) => {
                     state.apply(&event);
                     let _ = sender.send((state.clone(), event));
+
                     if !state.active {
+                        info!("[{identity}] Player has been closed");
                         break;
                     }
                 }

@@ -1,5 +1,5 @@
 use std::{
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
     thread,
     time::Duration,
 };
@@ -11,6 +11,7 @@ use skia_safe::{utils::text_utils::Align, Canvas, Color4f, Paint};
 use smithay_client_toolkit::seat::pointer::PointerEvent;
 
 use crate::{
+    config::config::Configuration,
     dbus::mpris::PlayerState,
     font::FontBook,
     ipc::events::IPCEvent,
@@ -18,12 +19,18 @@ use crate::{
 };
 
 pub struct Clock {
+    config: Arc<RwLock<Configuration>>,
     _update_interval: usize,
     time: Arc<Mutex<String>>,
 }
 
 impl Clock {
-    pub fn new(sender: Sender<UiEvent>, screen_idx: usize, update_interval: usize) -> Self {
+    pub fn new(
+        sender: Sender<UiEvent>,
+        screen_idx: usize,
+        update_interval: usize,
+        config: Arc<RwLock<Configuration>>,
+    ) -> Self {
         let time = Arc::new(Mutex::new(String::new()));
         let time_clone = Arc::clone(&time);
         let interval = update_interval as u64;
@@ -37,18 +44,29 @@ impl Clock {
         Self {
             _update_interval: update_interval,
             time,
+            config,
         }
     }
 }
 
 impl Component for Clock {
     fn draw(&self, canvas: &Canvas, _state: &UIState, fonts: &FontBook) {
+        let cfg = self.config.read().unwrap();
         let time = self.time.lock().unwrap().clone();
         let mut paint = Paint::default();
-        paint.set_anti_alias(true);
-        paint.set_color4f(Color4f::new(0., 0., 0., 1.), None);
 
-        let font = fonts.sized("noto_sans", 24.);
+        paint.set_anti_alias(true);
+        paint.set_color4f(
+            Color4f::new(
+                cfg.theme().primary.r,
+                cfg.theme().primary.g,
+                cfg.theme().primary.b,
+                cfg.theme().primary.a,
+            ),
+            None,
+        );
+
+        let font = fonts.sized("noto_sans", 32.);
         let metrics = font.metrics();
 
         canvas.draw_str_align(

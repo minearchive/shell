@@ -8,17 +8,16 @@
 - [ ] status provider
 - [ ] alert
 
-## Network
-- [ ] status provider
-- [ ] network events
-- [ ] warp-cli connection
-
 ## IPC
 - [ ] mapping all niri events
 - [ ] mapping all hyprland events
 - [ ] IPC events
 
 ## DBUS
+- [ ] kde-connect
+- [ ] notification
+- [ ] cloudflare-warp 
+- [ ] network stats, event
 
 ## Monitor
 - [ ] status provider
