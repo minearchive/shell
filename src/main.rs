@@ -54,6 +54,7 @@ use crate::{
     ui::{UiEvent, UserInterface},
 };
 
+mod animation;
 mod components;
 mod config;
 mod dbus;
@@ -141,13 +142,13 @@ fn main() {
         .insert_source(ui_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg(msg) = event {
                 match msg {
-                    UiEvent::RequestRedraw(idx) => shell.draw(idx),
+                    UiEvent::RequestRedraw(idx) => shell.request_redraw(idx),
                     UiEvent::RegisterFont(key, font_family, font_style) => {
                         shell.font.register(key, font_family.as_str(), font_style);
                     }
                     UiEvent::RequestRedrawAll => {
                         for i in 0..shell.counter {
-                            shell.draw(i);
+                            shell.request_redraw(i);
                         }
                     }
                 }
@@ -282,19 +283,6 @@ impl OutputHandler for Shell {
         layer.commit();
 
         let c = self.counter;
-
-        self.loop_handle
-            .insert_source(channel, |event, _, shell| {
-                if let calloop::channel::Event::Msg(msg) = event {
-                    match msg {
-                        UiEvent::RequestRedraw(idx) => shell.request_redraw(idx),
-                        UiEvent::RegisterFont(key, font_family, font_style) => {
-                            shell.font.register(key, font_family.as_str(), font_style);
-                        }
-                    }
-                }
-            })
-            .unwrap();
 
         self.screen.push(Screen {
             layer,
