@@ -1,18 +1,18 @@
 use std::time::{Duration, Instant};
 
 pub struct Animation<T> {
-    begin: T,
-    end: T,
+    from: T,
+    to: T,
     started: Instant,
     duration: Duration,
     easing: fn(f32) -> f32,
 }
 
 impl Animation<f32> {
-    pub fn new(begin: f32, end: f32, duration: Duration, easing: fn(f32) -> f32) -> Self {
+    pub fn new(from: f32, to: f32, duration: Duration, easing: fn(f32) -> f32) -> Self {
         Self {
-            begin,
-            end,
+            from,
+            to,
             started: Instant::now(),
             duration,
             easing,
@@ -21,24 +21,48 @@ impl Animation<f32> {
 
     pub fn value(&self) -> f32 {
         if self.is_done() {
-            return self.end();
+            return self.to();
         }
-        let t = self.started.elapsed().as_secs_f32() / self.duration.as_secs_f32().min(1.0);
+        let ratio = self.started.elapsed().as_secs_f32() / self.duration.as_secs_f32();
+        let t = ratio.min(1.0).max(0.0);
         let t_eased = (self.easing)(t);
-        self.begin + (self.end - self.begin) * t_eased
+        self.from + (self.to - self.from) * t_eased
     }
 
     pub fn reverse(&mut self) {
-        self.reset(self.end(), self.begin());
+        self.set_target(self.from());
     }
 
     pub fn is_done(&self) -> bool {
         self.started.elapsed() >= self.duration
     }
 
-    pub fn reset(&mut self, begin: f32, end: f32) {
-        self.begin = begin;
-        self.end = end;
+    pub fn reset(&mut self, from: f32, to: f32) {
+        self.from = from;
+        self.to = to;
+        self.started = Instant::now();
+    }
+
+    pub fn set_target(&mut self, to: f32) {
+        let v = self.value();
+        self.from = v;
+        self.to = to;
+        self.started = Instant::now();
+    }
+
+    pub fn transition_easing(&mut self, easing: fn(f32) -> f32) {
+        let v = self.value();
+
+        self.from = v;
+        self.easing = easing;
+
+        let elapsed = self.started.elapsed();
+        self.duration = if elapsed < self.duration {
+            self.duration - elapsed
+        } else {
+            Duration::from_secs(0)
+        };
+
         self.started = Instant::now();
     }
 
@@ -50,11 +74,11 @@ impl Animation<f32> {
         self.duration = duration
     }
 
-    pub fn begin(&self) -> f32 {
-        self.begin
+    pub fn from(&self) -> f32 {
+        self.from
     }
-    pub fn end(&self) -> f32 {
-        self.end
+    pub fn to(&self) -> f32 {
+        self.to
     }
 }
 
