@@ -54,6 +54,7 @@ use crate::{
     ui::{UiEvent, UserInterface},
 };
 
+mod animation;
 mod components;
 mod config;
 mod dbus;
@@ -69,6 +70,8 @@ pub struct Screen {
     height: u32,
     first_configure: bool,
     _keyboard_focus: bool,
+    needs_redraw: bool,
+    frame_pending: bool,
     ui: UserInterface,
     output: WlOutput,
 }
@@ -79,6 +82,7 @@ pub struct Shell {
     seat_state: SeatState,
     compositor_state: CompositorState,
     layer_shell: LayerShell,
+    qh: QueueHandle<Shell>,
     _loop_handle: LoopHandle<'static, Shell>,
     keyboard: Option<WlKeyboard>,
     pointer: Option<WlPointer>,
@@ -138,13 +142,13 @@ fn main() {
         .insert_source(ui_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg(msg) = event {
                 match msg {
-                    UiEvent::RequestRedraw(idx) => shell.draw(idx),
+                    UiEvent::RequestRedraw(idx) => shell.request_redraw(idx),
                     UiEvent::RegisterFont(key, font_family, font_style) => {
                         shell.font.register(key, font_family.as_str(), font_style);
                     }
                     UiEvent::RequestRedrawAll => {
                         for i in 0..shell.counter {
-                            shell.draw(i);
+                            shell.request_redraw(i);
                         }
                     }
                 }
@@ -171,6 +175,7 @@ fn main() {
         output_state: OutputState::new(&globals, &qh),
         seat_state: SeatState::new(&globals, &qh),
         compositor_state: compositor,
+        qh: qh.clone(),
         _loop_handle: loop_handle,
         layer_shell,
         keyboard: None,
@@ -230,7 +235,10 @@ impl CompositorHandler for Shell {
             .iter()
             .position(|p| p.layer.wl_surface() == surfaces)
         {
-            self.draw(idx);
+            self.screen[idx].frame_pending = false;
+            if self.screen[idx].needs_redraw {
+                self.draw(idx);
+            }
         }
     }
 
@@ -282,6 +290,8 @@ impl OutputHandler for Shell {
             height: 0,
             first_configure: true,
             _keyboard_focus: false,
+            needs_redraw: false,
+            frame_pending: false,
             ui: UserInterface::new(
                 self.ui_tx.clone(),
                 c,
@@ -538,8 +548,12 @@ impl PointerHandler for Shell {
                     Release { button, .. } => {
                         info!("Release {:x} @ {:?}", button, event.position);
                     }
-                    Axis { .. } => {
-                        // info!("h: {horizontal:?}, v: {vertical:?}");
+                    Axis {
+                        horizontal,
+                        vertical,
+                        ..
+                    } => {
+                        info!("h: {horizontal:?}, v: {vertical:?}");
                     }
                 }
             }
@@ -560,6 +574,16 @@ pub enum KeyTiming {
 }
 
 impl Shell {
+    pub fn request_redraw(&mut self, idx: usize) {
+        let Some(screen) = self.screen.get_mut(idx) else {
+            return;
+        };
+        screen.needs_redraw = true;
+        if !screen.frame_pending {
+            self.draw(idx);
+        }
+    }
+
     pub fn draw(&mut self, idx: usize) {
         let width = self.screen[idx].width;
         let height = self.screen[idx].height;
@@ -567,6 +591,9 @@ impl Shell {
         if width == 0 || height == 0 {
             return;
         }
+
+        self.screen[idx].needs_redraw = false;
+        self.screen[idx].frame_pending = true;
 
         let stride = width as i32 * 4;
 
@@ -586,14 +613,11 @@ impl Shell {
         let font = &self.font;
         self.screen[idx].ui.draw(skia_surface.canvas(), font);
 
-        let layer = &self.screen[idx].layer;
-        layer
-            .wl_surface()
-            .damage_buffer(0, 0, width as i32, height as i32);
-        buffer
-            .attach_to(layer.wl_surface())
-            .expect("Failed to attach buffer");
-        layer.commit();
+        let surface = self.screen[idx].layer.wl_surface();
+        surface.frame(&self.qh, surface.clone());
+        surface.damage_buffer(0, 0, width as i32, height as i32);
+        buffer.attach_to(surface).expect("Failed to attach buffer");
+        surface.commit();
     }
 
     // pub fn on_key(&mut self, _qh: &QueueHandle<Self>, event: KeyEvent, timing: KeyTiming) {
