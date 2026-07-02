@@ -15,6 +15,7 @@
 
 ## DBUS
 - [ ] kde-connect
+  - [ ] Handling Connect/Disconnect
 - [ ] notification
 - [ ] cloudflare-warp 
 - [ ] network stats, event

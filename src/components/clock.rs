@@ -12,7 +12,7 @@ use smithay_client_toolkit::seat::pointer::PointerEvent;
 
 use crate::{
     config::config::Configuration,
-    dbus::mpris::PlayerState,
+    dbus::{kdeconnect::KDEConnectEvent, mpris::PlayerState},
     font::FontBook,
     ipc::events::IPCEvent,
     ui::{Component, UIState, UiEvent},
@@ -82,4 +82,5 @@ impl Component for Clock {
     // fn on_key(&mut self, _: &KeyEvent, _: &crate::KeyTiming) {}
     fn on_ipc(&mut self, _: &IPCEvent) {}
     fn on_mpris(&mut self, _: &PlayerState, _: &Event) {}
+    fn on_kde_connect_event(&mut self, _: &KDEConnectEvent) {}
 }

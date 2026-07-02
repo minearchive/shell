@@ -15,7 +15,7 @@ use mpris::Event as MprisEvent;
 use crate::{
     components::clock::Clock,
     config::config::Configuration,
-    dbus::mpris::PlayerState,
+    dbus::{kdeconnect::KDEConnectEvent, mpris::PlayerState},
     font::FontBook,
     ipc::{events::IPCEvent, IpcTrait, WindowManagerIPC},
 };
@@ -26,6 +26,7 @@ pub trait Component {
     // fn on_key(&mut self, event: &KeyEvent, timing: &KeyTiming);
     fn on_ipc(&mut self, events: &IPCEvent);
     fn on_mpris(&mut self, state: &PlayerState, event: &MprisEvent);
+    fn on_kde_connect_event(&mut self, event: &KDEConnectEvent);
 }
 
 #[allow(unused)]
@@ -113,6 +114,12 @@ impl UserInterface {
         } else {
             self.state.players.remove(&state.identity);
         }
+    }
+
+    pub fn on_kde_connect_event(&mut self, event: &KDEConnectEvent) {
+        self.components
+            .iter_mut()
+            .for_each(|c| c.on_kde_connect_event(event));
     }
 
     pub fn draw(&mut self, canvas: &Canvas, fonts: &FontBook) {
