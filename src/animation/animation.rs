@@ -1,15 +1,17 @@
 use std::time::{Duration, Instant};
 
+use super::parser::Easing;
+
 pub struct Animation<T> {
     from: T,
     to: T,
     started: Instant,
     duration: Duration,
-    easing: fn(f32) -> f32,
+    easing: Easing,
 }
 
 impl Animation<f32> {
-    pub fn new(from: f32, to: f32, duration: Duration, easing: fn(f32) -> f32) -> Self {
+    pub fn new(from: f32, to: f32, duration: Duration, easing: Easing) -> Self {
         Self {
             from,
             to,
@@ -50,7 +52,7 @@ impl Animation<f32> {
         self.started = Instant::now();
     }
 
-    pub fn transition_easing(&mut self, easing: fn(f32) -> f32) {
+    pub fn transition_easing(&mut self, easing: Easing) {
         let v = self.value();
 
         self.from = v;
@@ -66,7 +68,7 @@ impl Animation<f32> {
         self.started = Instant::now();
     }
 
-    pub fn set_easing(&mut self, easing: fn(f32) -> f32) {
+    pub fn set_easing(&mut self, easing: Easing) {
         self.easing = easing;
     }
 
