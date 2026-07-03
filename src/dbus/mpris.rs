@@ -4,7 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use calloop::channel::Sender;
-use log::{error, info};
+use log::{debug, error, info};
 use mpris::{Event, LoopStatus, PlaybackStatus, PlayerFinder};
 
 static MPRIS: OnceLock<MprisClient> = OnceLock::new();
@@ -83,17 +83,21 @@ impl MprisClient {
             let mut tracked: HashSet<String> = HashSet::new();
 
             loop {
-                let players = match finder.find_all() {
-                    Ok(p) => p,
-                    Err(err) => match err {
-                        mpris::FindingError::NoPlayerFound => Vec::new(),
-                        mpris::FindingError::DBusError(dbus_error) => {
-                            error!("Failed to get players: {dbus_error:?}");
-                            error!("Paused for 1secs");
-                            thread::sleep(Duration::from_secs(1));
-                            continue;
-                        }
-                    },
+                let players: Vec<_> = match finder.iter_players() {
+                    Ok(iter) => iter
+                        .filter_map(|res| match res {
+                            Ok(player) => Some(player),
+                            Err(err) => {
+                                debug!("Skipping unreadable player: {err}");
+                                None
+                            }
+                        })
+                        .collect(),
+                    Err(err) => {
+                        error!("Failed to list players: {err:?}");
+                        thread::sleep(Duration::from_secs(1));
+                        continue;
+                    }
                 };
 
                 let current: HashSet<String> =

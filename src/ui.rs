@@ -4,6 +4,7 @@ use std::{
 };
 
 use calloop::channel::Sender;
+use log::debug;
 use skia_safe::{utils::text_utils::Align, Canvas, Color4f, FontStyle, Paint};
 use smithay_client_toolkit::seat::{
     keyboard::Modifiers,
@@ -120,6 +121,25 @@ impl UserInterface {
         self.components
             .iter_mut()
             .for_each(|c| c.on_kde_connect_event(event));
+
+        debug!("{event:?}");
+
+        match event {
+            KDEConnectEvent::PhoneCall {
+                number,
+                name,
+                call_type: _,
+            } => {
+                debug!("YOUR PHONE RINGING! YOUR PHONE RINGING! {number} CALLS YOU!!!! {name}")
+            }
+            KDEConnectEvent::DeviceConnected { name, id } => {
+                debug!("Connected device {name}: {id}");
+            }
+            KDEConnectEvent::DeviceDisconnected { name, id, reason } => {
+                debug!("NOWAY DISCONNECTED... {name}: {id}: {reason}")
+            }
+            _ => {}
+        }
     }
 
     pub fn draw(&mut self, canvas: &Canvas, fonts: &FontBook) {

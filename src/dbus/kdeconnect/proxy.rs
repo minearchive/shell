@@ -57,19 +57,19 @@ pub trait Daemon {
     fn set_link_provider_state(&self, link_provider: &str, enabled: bool) -> zbus::Result<()>;
 
     // Signals
-    #[zbus(signal)]
+    #[zbus(signal, name = "announcedNameChanged")]
     fn announced_name_changed(&self, announced_name: String) -> zbus::Result<()>;
     #[zbus(signal, name = "customDevicesChanged")]
     fn on_custom_devices_changed(&self, custom_devices: Vec<String>) -> zbus::Result<()>;
-    #[zbus(signal)]
+    #[zbus(signal, name = "deviceAdded")]
     fn device_added(&self, id: String) -> zbus::Result<()>;
-    #[zbus(signal)]
+    #[zbus(signal, name = "deviceListChanged")]
     fn device_list_changed(&self) -> zbus::Result<()>;
-    #[zbus(signal)]
+    #[zbus(signal, name = "deviceRemoved")]
     fn device_removed(&self, id: String) -> zbus::Result<()>;
-    #[zbus(signal)]
+    #[zbus(signal, name = "deviceVisibilityChanged")]
     fn device_visibility_changed(&self, id: String, is_visible: bool) -> zbus::Result<()>;
-    #[zbus(signal)]
+    #[zbus(signal, name = "linkProvidersChanged")]
     fn link_providers_changed(&self, link_providers: Vec<String>) -> zbus::Result<()>;
     #[zbus(signal, name = "pairingRequestsChanged")]
     fn on_pairing_requests_changed(&self) -> zbus::Result<()>;
@@ -106,9 +106,9 @@ pub trait Device {
     fn verification_key(&self) -> zbus::Result<String>;
 
     // Properties
-    #[zbus(property)]
+    #[zbus(property, name = "activeProviderNames")]
     fn active_provider_names(&self) -> zbus::Result<Vec<String>>;
-    #[zbus(property)]
+    #[zbus(property, name = "iconName")]
     fn icon_name(&self) -> zbus::Result<String>;
     #[zbus(property, name = "isPairRequested")]
     fn is_pair_requested_prop(&self) -> zbus::Result<bool>;
@@ -116,17 +116,17 @@ pub trait Device {
     fn is_pair_requested_by_peer_prop(&self) -> zbus::Result<bool>;
     #[zbus(property, name = "isPaired")]
     fn is_paired_prop(&self) -> zbus::Result<bool>;
-    #[zbus(property)]
+    #[zbus(property, name = "isReachable")]
     fn is_reachable(&self) -> zbus::Result<bool>;
-    #[zbus(property)]
+    #[zbus(property, name = "name")]
     fn name(&self) -> zbus::Result<String>;
-    #[zbus(property)]
+    #[zbus(property, name = "pairState")]
     fn pair_state(&self) -> zbus::Result<i32>;
-    #[zbus(property)]
+    #[zbus(property, name = "reachableAddresses")]
     fn reachable_addresses(&self) -> zbus::Result<Vec<String>>;
-    #[zbus(property)]
+    #[zbus(property, name = "statusIconName")]
     fn status_icon_name(&self) -> zbus::Result<String>;
-    #[zbus(property)]
+    #[zbus(property, name = "supportedPlugins")]
     fn supported_plugins(&self) -> zbus::Result<Vec<String>>;
     #[zbus(property, name = "type")]
     fn device_type(&self) -> zbus::Result<String>;
@@ -134,21 +134,21 @@ pub trait Device {
     fn verification_key_prop(&self) -> zbus::Result<String>;
 
     // Signals
-    #[zbus(signal)]
+    #[zbus(signal, name = "linksChanged")]
     fn links_changed(&self) -> zbus::Result<()>;
     #[zbus(signal, name = "nameChanged")]
     fn on_name_changed(&self, name: String) -> zbus::Result<()>;
     #[zbus(signal, name = "pairStateChanged")]
     fn on_pair_state_changed(&self, state: i32) -> zbus::Result<()>;
-    #[zbus(signal)]
+    #[zbus(signal, name = "pairingFailed")]
     fn pairing_failed(&self, error: String) -> zbus::Result<()>;
-    #[zbus(signal)]
+    #[zbus(signal, name = "pluginsChanged")]
     fn plugins_changed(&self) -> zbus::Result<()>;
-    #[zbus(signal)]
+    #[zbus(signal, name = "reachableChanged")]
     fn reachable_changed(&self, reachable: bool) -> zbus::Result<()>;
     #[zbus(signal, name = "statusIconNameChanged")]
     fn on_status_icon_name_changed(&self) -> zbus::Result<()>;
-    #[zbus(signal)]
+    #[zbus(signal, name = "typeChanged")]
     fn type_changed(&self, type_: String) -> zbus::Result<()>;
 }
 
@@ -177,15 +177,15 @@ pub trait Conversations {
         attachment_urls: Vec<OwnedValue>,
     ) -> zbus::Result<()>;
 
-    #[zbus(signal)]
+    #[zbus(signal, name = "attachmentReceived")]
     fn attachment_received(&self, part_id: String, unique_identifier: String) -> zbus::Result<()>;
-    #[zbus(signal)]
+    #[zbus(signal, name = "conversationCreated")]
     fn conversation_created(&self, conversation: OwnedValue) -> zbus::Result<()>;
-    #[zbus(signal)]
+    #[zbus(signal, name = "conversationLoaded")]
     fn conversation_loaded(&self, conversation_id: i64, count: u64) -> zbus::Result<()>;
-    #[zbus(signal)]
+    #[zbus(signal, name = "conversationRemoved")]
     fn conversation_removed(&self, conversation_id: i64) -> zbus::Result<()>;
-    #[zbus(signal)]
+    #[zbus(signal, name = "conversationUpdated")]
     fn conversation_updated(&self, conversation: OwnedValue) -> zbus::Result<()>;
 }
 
@@ -198,31 +198,38 @@ pub trait Conversations {
     default_service = "org.kde.kdeconnect"
 )]
 pub trait Battery {
-    #[zbus(property)]
+    #[zbus(property, name = "charge")]
     fn charge(&self) -> zbus::Result<i32>;
-    #[zbus(property)]
+    #[zbus(property, name = "isCharging")]
     fn is_charging(&self) -> zbus::Result<bool>;
 
-    #[zbus(signal)]
+    #[zbus(signal, name = "refreshed")]
     fn refreshed(&self, is_charging: bool, charge: i32) -> zbus::Result<()>;
 }
 
 // ==========================================================================
 // Connectivity report — org.kde.kdeconnect.device.connectivity_report
 // path: <device>/connectivity_report
+// Isolated in its own module: its `refreshed` signal generates helper types
+// (`refreshedArgs`/`refreshedStream`) whose names collide with Battery's
+// `refreshed` signal. Only the proxy is re-exported.
 // ==========================================================================
-#[proxy(
-    interface = "org.kde.kdeconnect.device.connectivity_report",
-    default_service = "org.kde.kdeconnect"
-)]
-pub trait ConnectivityReport {
-    #[zbus(property)]
-    fn cellular_network_strength(&self) -> zbus::Result<i32>;
-    #[zbus(property)]
-    fn cellular_network_type(&self) -> zbus::Result<String>;
+mod connectivity_report {
+    use super::*;
 
-    #[zbus(signal, name = "refreshed")]
-    fn connectivity_refreshed(&self, network_type: String, strength: i32) -> zbus::Result<()>;
+    #[proxy(
+        interface = "org.kde.kdeconnect.device.connectivity_report",
+        default_service = "org.kde.kdeconnect"
+    )]
+    pub trait ConnectivityReport {
+        #[zbus(property, name = "cellularNetworkStrength")]
+        fn cellular_network_strength(&self) -> zbus::Result<i32>;
+        #[zbus(property, name = "cellularNetworkType")]
+        fn cellular_network_type(&self) -> zbus::Result<String>;
+
+        #[zbus(signal, name = "refreshed")]
+        fn connectivity_refreshed(&self, network_type: String, strength: i32) -> zbus::Result<()>;
+    }
 }
 
 // ==========================================================================
@@ -236,12 +243,12 @@ pub trait ConnectivityReport {
 pub trait Clipboard {
     fn send_clipboard(&self) -> zbus::Result<()>;
 
-    #[zbus(property)]
+    #[zbus(property, name = "isAutoShareDisabled")]
     fn is_auto_share_disabled(&self) -> zbus::Result<bool>;
-    #[zbus(property)]
+    #[zbus(property, name = "isAutoShareDisabled")]
     fn set_is_auto_share_disabled(&self, disabled: bool) -> zbus::Result<()>;
 
-    #[zbus(signal)]
+    #[zbus(signal, name = "autoShareDisabledChanged")]
     fn auto_share_disabled_changed(&self, disabled: bool) -> zbus::Result<()>;
 }
 
@@ -286,7 +293,7 @@ pub trait Share {
     fn share_url(&self, url: &str) -> zbus::Result<()>;
     fn share_urls(&self, urls: Vec<String>) -> zbus::Result<()>;
 
-    #[zbus(signal)]
+    #[zbus(signal, name = "shareReceived")]
     fn share_received(&self, url: String) -> zbus::Result<()>;
 }
 
@@ -303,13 +310,13 @@ pub trait Notifications {
     fn send_action(&self, key: &str, action: &str) -> zbus::Result<()>;
     fn send_reply(&self, reply_id: &str, message: &str) -> zbus::Result<()>;
 
-    #[zbus(signal)]
+    #[zbus(signal, name = "allNotificationsRemoved")]
     fn all_notifications_removed(&self) -> zbus::Result<()>;
-    #[zbus(signal)]
+    #[zbus(signal, name = "notificationPosted")]
     fn notification_posted(&self, public_id: String) -> zbus::Result<()>;
-    #[zbus(signal)]
+    #[zbus(signal, name = "notificationRemoved")]
     fn notification_removed(&self, public_id: String) -> zbus::Result<()>;
-    #[zbus(signal)]
+    #[zbus(signal, name = "notificationUpdated")]
     fn notification_updated(&self, public_id: String) -> zbus::Result<()>;
 }
 
@@ -326,34 +333,34 @@ pub trait Notification {
     fn reply(&self) -> zbus::Result<()>;
     fn send_reply(&self, message: &str) -> zbus::Result<()>;
 
-    #[zbus(property)]
+    #[zbus(property, name = "appName")]
     fn app_name(&self) -> zbus::Result<String>;
-    #[zbus(property)]
+    #[zbus(property, name = "dismissable")]
     fn dismissable(&self) -> zbus::Result<bool>;
-    #[zbus(property)]
+    #[zbus(property, name = "groupName")]
     fn group_name(&self) -> zbus::Result<String>;
-    #[zbus(property)]
+    #[zbus(property, name = "hasIcon")]
     fn has_icon(&self) -> zbus::Result<bool>;
-    #[zbus(property)]
+    #[zbus(property, name = "iconPath")]
     fn icon_path(&self) -> zbus::Result<String>;
-    #[zbus(property)]
+    #[zbus(property, name = "internalId")]
     fn internal_id(&self) -> zbus::Result<String>;
-    #[zbus(property)]
+    #[zbus(property, name = "isConversation")]
     fn is_conversation(&self) -> zbus::Result<bool>;
-    #[zbus(property)]
+    #[zbus(property, name = "isGroupConversation")]
     fn is_group_conversation(&self) -> zbus::Result<bool>;
-    #[zbus(property)]
+    #[zbus(property, name = "replyId")]
     fn reply_id(&self) -> zbus::Result<String>;
-    #[zbus(property)]
+    #[zbus(property, name = "silent")]
     fn silent(&self) -> zbus::Result<bool>;
-    #[zbus(property)]
+    #[zbus(property, name = "text")]
     fn text(&self) -> zbus::Result<String>;
-    #[zbus(property)]
+    #[zbus(property, name = "ticker")]
     fn ticker(&self) -> zbus::Result<String>;
-    #[zbus(property)]
+    #[zbus(property, name = "title")]
     fn title(&self) -> zbus::Result<String>;
 
-    #[zbus(signal)]
+    #[zbus(signal, name = "ready")]
     fn ready(&self) -> zbus::Result<()>;
 }
 
@@ -413,7 +420,7 @@ pub trait Sms {
     default_service = "org.kde.kdeconnect"
 )]
 pub trait Telephony {
-    #[zbus(signal)]
+    #[zbus(signal, name = "callReceived")]
     fn call_received(
         &self,
         event: String,
@@ -435,36 +442,36 @@ pub trait MprisRemote {
     fn seek(&self, offset: i32) -> zbus::Result<()>;
     fn send_action(&self, action: &str) -> zbus::Result<()>;
 
-    #[zbus(property)]
+    #[zbus(property, name = "album")]
     fn album(&self) -> zbus::Result<String>;
-    #[zbus(property)]
+    #[zbus(property, name = "artist")]
     fn artist(&self) -> zbus::Result<String>;
-    #[zbus(property)]
+    #[zbus(property, name = "canSeek")]
     fn can_seek(&self) -> zbus::Result<bool>;
-    #[zbus(property)]
+    #[zbus(property, name = "isPlaying")]
     fn is_playing(&self) -> zbus::Result<bool>;
-    #[zbus(property)]
+    #[zbus(property, name = "length")]
     fn length(&self) -> zbus::Result<i32>;
-    #[zbus(property)]
+    #[zbus(property, name = "localAlbumArtUrl")]
     fn local_album_art_url(&self) -> zbus::Result<String>;
-    #[zbus(property)]
+    #[zbus(property, name = "player")]
     fn player(&self) -> zbus::Result<String>;
-    #[zbus(property)]
+    #[zbus(property, name = "player")]
     fn set_player(&self, player: &str) -> zbus::Result<()>;
-    #[zbus(property)]
+    #[zbus(property, name = "playerList")]
     fn player_list(&self) -> zbus::Result<Vec<String>>;
-    #[zbus(property)]
+    #[zbus(property, name = "position")]
     fn position(&self) -> zbus::Result<i32>;
-    #[zbus(property)]
+    #[zbus(property, name = "position")]
     fn set_position(&self, position: i32) -> zbus::Result<()>;
-    #[zbus(property)]
+    #[zbus(property, name = "title")]
     fn title(&self) -> zbus::Result<String>;
-    #[zbus(property)]
+    #[zbus(property, name = "volume")]
     fn volume(&self) -> zbus::Result<i32>;
-    #[zbus(property)]
+    #[zbus(property, name = "volume")]
     fn set_volume(&self, volume: i32) -> zbus::Result<()>;
 
-    #[zbus(signal)]
+    #[zbus(signal, name = "propertiesChanged")]
     fn properties_changed(&self) -> zbus::Result<()>;
 }
 
@@ -493,10 +500,10 @@ pub trait RemoteKeyboard {
     ) -> zbus::Result<()>;
     fn translate_qt_key(&self, qt_key: i32) -> zbus::Result<i32>;
 
-    #[zbus(property)]
+    #[zbus(property, name = "remoteState")]
     fn remote_state(&self) -> zbus::Result<bool>;
 
-    #[zbus(signal)]
+    #[zbus(signal, name = "keyPressReceived")]
     fn key_press_received(
         &self,
         key: String,
@@ -540,9 +547,9 @@ pub trait Sftp {
     fn start_browsing(&self) -> zbus::Result<bool>;
     fn unmount(&self) -> zbus::Result<()>;
 
-    #[zbus(signal)]
+    #[zbus(signal, name = "mounted")]
     fn mounted(&self) -> zbus::Result<()>;
-    #[zbus(signal)]
+    #[zbus(signal, name = "unmounted")]
     fn unmounted(&self) -> zbus::Result<()>;
 }
 
@@ -557,6 +564,6 @@ pub trait Sftp {
 pub trait Contacts {
     fn synchronize_remote_with_local(&self) -> zbus::Result<()>;
 
-    #[zbus(signal)]
+    #[zbus(signal, name = "localCacheSynchronized")]
     fn local_cache_synchronized(&self, uids: Vec<String>) -> zbus::Result<()>;
 }

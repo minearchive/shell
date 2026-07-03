@@ -49,7 +49,7 @@ use mpris::Event as MprisEvent;
 use crate::{
     config::config::Configuration,
     dbus::{
-        kdeconnect::{KDEConnectEvent, KdeConnectClient},
+        kdeconnect::{KDEConnectClient, KDEConnectEvent},
         mpris::{MprisClient, PlayerState},
     },
     font::FontBook,
@@ -137,7 +137,7 @@ fn main() {
         .unwrap();
 
     let (kde_tx, kde_channel) = channel::channel::<KDEConnectEvent>();
-    KdeConnectClient::init(kde_tx);
+    KDEConnectClient::init(kde_tx);
     loop_handle
         .insert_source(kde_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg(kde_event) = event {
