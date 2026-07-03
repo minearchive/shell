@@ -6,6 +6,7 @@ mod proxy;
 use futures_util::StreamExt;
 pub use proxy::*;
 use tokio::sync::mpsc;
+use zbus::proxy::CacheProperties;
 use zbus::Connection;
 
 #[allow(unused)]
@@ -28,15 +29,25 @@ pub enum KDEConnectEvent {
         name: String,
         call_type: PhoneCallType,
     },
-    NotificationReceived {
-        title: String,
-        detail: String,
-        icon: String,
+    NotificationPosted {
+        device_id: String,
+        id: String,
+        data: NotificationSnapshot,
     },
+    NotificationUpdated {
+        device_id: String,
+        id: String,
+        data: NotificationSnapshot,
+    },
+    /// The object is already gone by the time this fires, so it carries only
+    /// the key needed to drop the matching widget entry.
     NotificationRemoved {
-        title: String,
-        detail: String,
-        icon: String,
+        device_id: String,
+        id: String,
+    },
+    /// The device cleared every notification at once (`allNotificationsRemoved`).
+    AllNotificationsRemoved {
+        device_id: String,
     },
 }
 
@@ -61,16 +72,18 @@ impl Display for KDEConnectEvent {
                 name,
                 call_type,
             } => write!(f, "{call_type} call: {name} <{number}>"),
-            Self::NotificationReceived {
-                title,
-                detail,
-                icon: _,
-            } => write!(f, "notification: {title} - {detail}"),
-            Self::NotificationRemoved {
-                title,
-                detail,
-                icon: _,
-            } => write!(f, "notification removed: {title} - {detail}"),
+            Self::NotificationPosted { id, data, .. } => {
+                write!(f, "notification [{id}]: {} - {}", data.title, data.text)
+            }
+            Self::NotificationUpdated { id, data, .. } => {
+                write!(f, "notification updated [{id}]: {} - {}", data.title, data.text)
+            }
+            Self::NotificationRemoved { device_id, id } => {
+                write!(f, "notification removed: {device_id}/{id}")
+            }
+            Self::AllNotificationsRemoved { device_id } => {
+                write!(f, "all notifications removed: {device_id}")
+            }
         }
     }
 }
@@ -117,6 +130,57 @@ impl Display for PhoneCallType {
         };
         f.write_str(s)
     }
+}
+
+#[allow(unused)]
+#[derive(Clone, Debug, Default)]
+pub struct NotificationSnapshot {
+    pub app_name: String,
+    pub title: String,
+    pub text: String,
+    pub ticker: String,
+    pub icon_path: String,
+    pub group_name: String,
+    pub reply_id: String,
+    pub dismissable: bool,
+    pub silent: bool,
+    pub is_conversation: bool,
+}
+
+impl NotificationSnapshot {
+    pub async fn from_proxy(proxy: &NotificationProxy<'_>) -> Self {
+        Self {
+            app_name: proxy.app_name().await.unwrap_or_default(),
+            title: proxy.title().await.unwrap_or_default(),
+            text: proxy.text().await.unwrap_or_default(),
+            ticker: proxy.ticker().await.unwrap_or_default(),
+            icon_path: proxy.icon_path().await.unwrap_or_default(),
+            group_name: proxy.group_name().await.unwrap_or_default(),
+            reply_id: proxy.reply_id().await.unwrap_or_default(),
+            dismissable: proxy.dismissable().await.unwrap_or_default(),
+            silent: proxy.silent().await.unwrap_or_default(),
+            is_conversation: proxy.is_conversation().await.unwrap_or_default(),
+        }
+    }
+}
+
+/// Build a cache-free proxy for `<device_path>/notifications/<public_id>` and
+/// snapshot it. Returns `None` if the object can't be built (e.g. it was already
+/// removed between the signal and this read).
+async fn read_notification(
+    connection: &Connection,
+    device_path: &str,
+    public_id: &str,
+) -> Option<NotificationSnapshot> {
+    let path = format!("{device_path}/notifications/{public_id}");
+    let proxy = NotificationProxy::builder(connection)
+        .path(path)
+        .ok()?
+        .cache_properties(CacheProperties::No)
+        .build()
+        .await
+        .ok()?;
+    Some(NotificationSnapshot::from_proxy(&proxy).await)
 }
 
 #[allow(unused)]
@@ -292,106 +356,110 @@ impl KDEConnectClient {
             }));
         }
 
-        // Notifications -> NotificationReceived, NotificationRemoved, NotificationUpdated
+        // Notifications -> NotificationPosted, NotificationUpdated, NotificationRemoved,
+        // AllNotificationsRemoved. Every event carries (device_id, public_id) so a widget
+        // can key notifications and drop them on removal without matching on text.
         {
             let notifications = NotificationsProxy::builder(connection)
                 .path(format!("{path}/notifications"))?
                 .build()
                 .await?;
-            let connection = connection.clone();
-            let sender = sender.clone();
+            let device_id = id.to_string();
 
-            let (c_notification, c_connection, c_sender, c_path) = (
-                notifications.clone(),
-                connection.clone(),
-                sender.clone(),
-                path.clone(),
-            );
-            tasks.push(tokio::spawn(async move {
-                let Ok(mut post_stream) = c_notification.receive_notification_posted().await else {
-                    return;
-                };
+            // notificationPosted -> read the object once into a snapshot.
+            {
+                let (notifications, connection, sender, path, device_id) = (
+                    notifications.clone(),
+                    connection.clone(),
+                    sender.clone(),
+                    path.clone(),
+                    device_id.clone(),
+                );
+                tasks.push(tokio::spawn(async move {
+                    let Ok(mut stream) = notifications.receive_notification_posted().await else {
+                        return;
+                    };
+                    while let Some(sig) = stream.next().await {
+                        let Ok(args) = sig.args() else { continue };
+                        let id = args.public_id().to_string();
+                        let Some(data) =
+                            read_notification(&connection, &path, &id).await
+                        else {
+                            continue;
+                        };
+                        let _ = sender.send(KDEConnectEvent::NotificationPosted {
+                            device_id: device_id.clone(),
+                            id,
+                            data,
+                        });
+                    }
+                }));
+            }
 
-                while let Some(sig) = { post_stream.next().await } {
-                    let Ok(args) = sig.args() else { continue };
-                    let notif_path = format!("{c_path}/notifications/{}", args.public_id());
-                    let Ok(builder) = NotificationProxy::builder(&c_connection).path(notif_path)
+            // notificationUpdated -> same read, different event so the widget can
+            // distinguish a fresh notification from a content change.
+            {
+                let (notifications, connection, sender, path, device_id) = (
+                    notifications.clone(),
+                    connection.clone(),
+                    sender.clone(),
+                    path.clone(),
+                    device_id.clone(),
+                );
+                tasks.push(tokio::spawn(async move {
+                    let Ok(mut stream) = notifications.receive_notification_updated().await else {
+                        return;
+                    };
+                    while let Some(sig) = stream.next().await {
+                        let Ok(args) = sig.args() else { continue };
+                        let id = args.public_id().to_string();
+                        let Some(data) =
+                            read_notification(&connection, &path, &id).await
+                        else {
+                            continue;
+                        };
+                        let _ = sender.send(KDEConnectEvent::NotificationUpdated {
+                            device_id: device_id.clone(),
+                            id,
+                            data,
+                        });
+                    }
+                }));
+            }
+
+            // notificationRemoved -> the object is gone; forward only the key.
+            {
+                let (notifications, sender, device_id) =
+                    (notifications.clone(), sender.clone(), device_id.clone());
+                tasks.push(tokio::spawn(async move {
+                    let Ok(mut stream) = notifications.receive_notification_removed().await else {
+                        return;
+                    };
+                    while let Some(sig) = stream.next().await {
+                        let Ok(args) = sig.args() else { continue };
+                        let _ = sender.send(KDEConnectEvent::NotificationRemoved {
+                            device_id: device_id.clone(),
+                            id: args.public_id().to_string(),
+                        });
+                    }
+                }));
+            }
+
+            // allNotificationsRemoved -> clear everything for this device at once.
+            {
+                let (notifications, sender, device_id) = (notifications, sender.clone(), device_id);
+                tasks.push(tokio::spawn(async move {
+                    let Ok(mut stream) = notifications.receive_all_notifications_removed().await
                     else {
-                        continue;
+                        return;
                     };
-                    let Ok(n) = builder.build().await else {
-                        continue;
-                    };
-                    let title = n.title().await.unwrap_or_default();
-                    let text = n.text().await.unwrap_or_default();
-                    let icon = n.icon_path().await.unwrap_or_default();
-                    let _ = c_sender.send(KDEConnectEvent::NotificationReceived {
-                        title,
-                        detail: text,
-                        icon,
-                    });
-                }
-            }));
-
-            let (c_notification, c_connection, c_sender, c_path) = (
-                notifications.clone(),
-                connection.clone(),
-                sender.clone(),
-                path.clone(),
-            );
-            tasks.push(tokio::spawn(async move {
-                let Ok(mut removed_stream) = c_notification.receive_notification_removed().await
-                else {
-                    return;
-                };
-
-                while let Some(sig) = removed_stream.next().await {
-                    let Ok(args) = sig.args() else { continue };
-                    let notif_path = format!("{c_path}/notifications/{}", args.public_id());
-                    let Ok(builder) = NotificationProxy::builder(&c_connection).path(notif_path)
-                    else {
-                        continue;
-                    };
-                    let Ok(n) = builder.build().await else {
-                        continue;
-                    };
-                    let title = n.title().await.unwrap_or_default();
-                    let text = n.text().await.unwrap_or_default();
-                    let icon = n.icon_path().await.unwrap_or_default();
-                    let _ = c_sender.send(KDEConnectEvent::NotificationReceived {
-                        title,
-                        detail: text,
-                        icon,
-                    });
-                }
-            }));
-
-            tasks.push(tokio::spawn(async move {
-                let Ok(mut updated_stream) = notifications.receive_notification_updated().await
-                else {
-                    return;
-                };
-
-                while let Some(sig) = updated_stream.next().await {
-                    let Ok(args) = sig.args() else { continue };
-                    let notif_path = format!("{path}/notifications/{}", args.public_id());
-                    let Ok(builder) = NotificationProxy::builder(&connection).path(notif_path)
-                    else {
-                        continue;
-                    };
-                    let Ok(n) = builder.build().await else {
-                        continue;
-                    };
-                    let title = n.title().await.unwrap_or_default();
-                    let text = n.text().await.unwrap_or_default();
-                    let icon = n.icon_path().await.unwrap_or_default();
-                    let _ = sender.send(KDEConnectEvent::NotificationReceived {
-                        title,
-                        detail: text,
-                        icon,
-                    });
-                }
-            }));
+                    while stream.next().await.is_some() {
+                        let _ = sender.send(KDEConnectEvent::AllNotificationsRemoved {
+                            device_id: device_id.clone(),
+                        });
+                    }
+                }));
+            }
         }
 
         devices.insert(id.to_string(), DeviceHandles { name, tasks });
