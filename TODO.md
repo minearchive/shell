@@ -1,5 +1,8 @@
 # TODO
 
+## Rendering
+- [ ] Redraw Only updated Area
+
 ## Audio
 - [ ] status provider
 - [ ] OSD

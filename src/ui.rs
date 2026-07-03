@@ -22,8 +22,8 @@ use crate::{
 };
 
 pub trait Component {
-    fn draw(&self, canvas: &Canvas, state: &UIState, fonts: &FontBook);
-    fn on_cursor(&self, events: &PointerEvent);
+    fn draw(&mut self, canvas: &Canvas, state: &UIState, fonts: &FontBook);
+    fn on_cursor(&mut self, events: &PointerEvent);
     // fn on_key(&mut self, event: &KeyEvent, timing: &KeyTiming);
     fn on_ipc(&mut self, events: &IPCEvent);
     fn on_mpris(&mut self, state: &PlayerState, event: &MprisEvent);
@@ -147,7 +147,7 @@ impl UserInterface {
         canvas.clear(cfg.theme().surface_container);
 
         self.components
-            .iter()
+            .iter_mut()
             .for_each(|c| c.draw(canvas, &self.state, fonts));
 
         let font = fonts.sized("noto_sans", 32.);

@@ -1,14 +1,15 @@
 # AGENTS.md
 
-See [CLAUDE.md](./CLAUDE.md) for build/run commands, architecture, commit-message
-conventions, and project status. It is the source of truth for working in this
-repository.
+See [CLAUDE.md](./CLAUDE.md) for build/run commands and high-level architecture.
 
-## Commit messages
+Agent-facing documentation lives in [`docs/`](./docs/):
 
-Follow [Conventional Commits](https://www.conventionalcommits.org/): write each
-message as `<type>(<optional scope>): <description>`, lowercase description, no
-trailing period. Common types here: `feat`, `fix`, `refactor`, `docs`, `test`,
-`chore`. Use scopes that match the module being touched, e.g.
-`feat(ipc): map niri workspace events`, `fix(ui): reset redraw flag`,
-`refactor(font): cache typeface`.
+| File | Contents |
+|------|----------|
+| [docs/agent.md](./docs/agent.md) | Quick-reference: key files, commit rules, sharp edges |
+| [docs/components.md](./docs/components.md) | How to add a `Component` |
+| [docs/ipc.md](./docs/ipc.md) | How to extend `IPCEvent` and IPC backends |
+| [docs/data-sources.md](./docs/data-sources.md) | How to add audio/battery/network providers |
+| [docs/config.md](./docs/config.md) | `Configuration`, `UIState`, `FontBook` reference |
+
+Start at **[docs/agent.md](./docs/agent.md)**.
