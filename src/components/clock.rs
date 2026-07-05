@@ -11,7 +11,10 @@ use skia_safe::{utils::text_utils::Align, Canvas, Color4f, Paint};
 use smithay_client_toolkit::seat::pointer::PointerEvent;
 
 use crate::{
-    animation::animation::{easing::ease_out_bounce, Animation},
+    animation::{
+        animation::{easing::ease_out_bounce, Animation},
+        parser::css_to_easing,
+    },
     config::config::Configuration,
     dbus::mpris::PlayerState,
     font::FontBook,
@@ -38,7 +41,13 @@ impl Clock {
     ) -> Self {
         let time = Arc::new(Mutex::new(String::new()));
         let time_clone = Arc::clone(&time);
-        let animation = Animation::new(0., 1., Duration::from_millis(1000), ease_out_bounce);
+        let animation = Animation::new(
+            0.,
+            1.,
+            Duration::from_millis(1000),
+            css_to_easing("cubic-bezier(0.68, -0.6, 0.32, 1.6)")
+                .unwrap_or_else(|_| Box::new(ease_out_bounce)),
+        );
         let sender_clone = sender.clone();
         let interval = update_interval as u64;
 
