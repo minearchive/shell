@@ -47,7 +47,7 @@ use wayland_client::{
 use mpris::Event as MprisEvent;
 
 use crate::{
-    config::config::Configuration,
+    config::{animation::AnimationConfig, config::Configuration, WatchableConfig},
     dbus::mpris::{MprisClient, PlayerState},
     font::FontBook,
     ipc::{events::IPCEvent, WindowManagerIPC},
@@ -93,6 +93,7 @@ pub struct Shell {
     ipc: WindowManagerIPC,
     font: FontBook,
     config: Arc<RwLock<Configuration>>,
+    animation_config: Arc<RwLock<AnimationConfig>>,
     ui_tx: Sender<UiEvent>,
     exit: bool,
     counter: usize,
@@ -151,6 +152,13 @@ fn main() {
                             shell.request_redraw(i);
                         }
                     }
+                    UiEvent::AnimationUpdated(easings) => {
+                        for screen in &mut shell.screen {
+                            for (id, easing) in &easings {
+                                screen.ui.on_easing_updated(id.clone(), easing.clone());
+                            }
+                        }
+                    }
                 }
             }
         })
@@ -167,6 +175,11 @@ fn main() {
 
     let config = Configuration::load_and_watch(
         "/home/minearchive/project/gtk_shell/example/config.toml",
+        ui_tx.clone(),
+    );
+
+    let animation_config = AnimationConfig::load_and_watch(
+        "/home/minearchive/project/gtk_shell/example/animation.toml",
         ui_tx.clone(),
     );
 
@@ -194,8 +207,9 @@ fn main() {
             );
             book
         },
-        config: config,
-        ui_tx: ui_tx,
+        config,
+        animation_config,
+        ui_tx,
         exit: false,
         counter: 0,
     };
@@ -297,6 +311,7 @@ impl OutputHandler for Shell {
                 c,
                 &mut self.ipc,
                 Arc::clone(&self.config),
+                Arc::clone(&self.animation_config),
             ),
             output,
         });

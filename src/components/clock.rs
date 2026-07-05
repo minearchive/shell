@@ -13,9 +13,9 @@ use smithay_client_toolkit::seat::pointer::PointerEvent;
 use crate::{
     animation::{
         animation::{easing::ease_out_bounce, Animation},
-        parser::css_to_easing,
+        parser::Easing,
     },
-    config::config::Configuration,
+    config::{animation::AnimationConfig, config::Configuration},
     dbus::mpris::PlayerState,
     font::FontBook,
     ipc::events::IPCEvent,
@@ -38,6 +38,7 @@ impl Clock {
         screen_idx: usize,
         update_interval: usize,
         config: Arc<RwLock<Configuration>>,
+        animation: Arc<RwLock<AnimationConfig>>,
     ) -> Self {
         let time = Arc::new(Mutex::new(String::new()));
         let time_clone = Arc::clone(&time);
@@ -45,8 +46,12 @@ impl Clock {
             0.,
             1.,
             Duration::from_millis(1000),
-            css_to_easing("cubic-bezier(0.68, -0.6, 0.32, 1.6)")
-                .unwrap_or_else(|_| Box::new(ease_out_bounce)),
+            animation
+                .read()
+                .unwrap()
+                .get_easing("a")
+                .cloned()
+                .unwrap_or(Arc::new(ease_out_bounce)),
         );
         let sender_clone = sender.clone();
         let interval = update_interval as u64;
@@ -129,4 +134,10 @@ impl Component for Clock {
 
     fn on_ipc(&mut self, _: &IPCEvent) {}
     fn on_mpris(&mut self, _: &PlayerState, _: &Event) {}
+    fn on_easing_updated(&mut self, id: String, easing: &Easing) {
+        if id == "a" {
+            self.animation.set_easing(easing.clone());
+            let _ = self.sender.send(UiEvent::RequestRedrawAll);
+        }
+    }
 }

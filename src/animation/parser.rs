@@ -1,6 +1,7 @@
 use std::fmt;
+use std::sync::Arc;
 
-pub type Easing = Box<dyn Fn(f32) -> f32 + Send + Sync>;
+pub type Easing = Arc<dyn Fn(f32) -> f32 + Send + Sync>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParseError {
@@ -94,7 +95,7 @@ pub fn cubic_bezier(x1: f32, y1: f32, x2: f32, y2: f32) -> Easing {
     let sample_y = move |s: f32| ((ay * s + by) * s + cy) * s;
     let sample_dx = move |s: f32| (3.0 * ax * s + 2.0 * bx) * s + cx;
 
-    Box::new(move |t: f32| {
+    Arc::new(move |t: f32| {
         let t = t.clamp(0.0, 1.0);
         let s = solve_curve_x(t, sample_x, sample_dx);
         sample_y(s)
