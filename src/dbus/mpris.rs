@@ -81,14 +81,21 @@ impl MprisClient {
             };
 
             let mut tracked: HashSet<String> = HashSet::new();
+            let mut suppressed_errors: HashSet<String> = HashSet::new();
 
             loop {
+                let mut current_errors: HashSet<String> = HashSet::new();
+
                 let players: Vec<_> = match finder.iter_players() {
                     Ok(iter) => iter
                         .filter_map(|res| match res {
                             Ok(player) => Some(player),
                             Err(err) => {
-                                debug!("Skipping unreadable player: {err}");
+                                let msg = err.to_string();
+                                if !suppressed_errors.contains(&msg) {
+                                    debug!("Skipping unreadable player: {err}");
+                                }
+                                current_errors.insert(msg);
                                 None
                             }
                         })
@@ -116,6 +123,7 @@ impl MprisClient {
                     }
                 }
 
+                suppressed_errors = current_errors;
                 thread::sleep(Duration::from_millis(500));
             }
         });
