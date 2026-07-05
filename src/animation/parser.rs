@@ -34,7 +34,7 @@ pub fn css_to_easing(css: &str) -> Result<Easing, ParseError> {
     let css = css.trim();
 
     match css {
-        "linear" => return Ok(Box::new(|t: f32| t)),
+        "linear" => return Ok(Arc::new(|t: f32| t)),
         "ease" => return Ok(cubic_bezier(0.25, 0.1, 0.25, 1.0)),
         "ease-in" => return Ok(cubic_bezier(0.42, 0.0, 1.0, 1.0)),
         "ease-out" => return Ok(cubic_bezier(0.0, 0.0, 0.58, 1.0)),
@@ -181,7 +181,7 @@ fn resolve_positions(mut stops: Vec<(f32, Option<f32>)>) -> Vec<(f32, f32)> {
 }
 
 pub fn linear_stops(stops: Vec<(f32, f32)>) -> Easing {
-    Box::new(move |t: f32| {
+    Arc::new(move |t: f32| {
         if stops.is_empty() {
             return t;
         }
