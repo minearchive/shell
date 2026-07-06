@@ -8,7 +8,7 @@ use calloop::{
     EventLoop, LoopHandle,
 };
 use calloop_wayland_source::WaylandSource;
-use log::info;
+use log::{debug, info};
 use skia_safe::{surfaces, ImageInfo};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
@@ -48,7 +48,10 @@ use mpris::Event as MprisEvent;
 
 use crate::{
     config::{animation::AnimationConfig, config::Configuration, WatchableConfig},
-    dbus::mpris::{MprisClient, PlayerState},
+    dbus::{
+        mpris::{MprisClient, PlayerState},
+        notification::{NotificationEvent, NotificationHandle},
+    },
     font::FontBook,
     ipc::{events::IPCEvent, WindowManagerIPC},
     ui::{UiEvent, UserInterface},
@@ -112,6 +115,23 @@ fn main() {
 
     WaylandSource::new(connection, event_queue)
         .insert(loop_handle.clone())
+        .unwrap();
+
+    let (notification_tx, notification_channel) = channel::channel::<NotificationEvent>();
+    // Bind the handle for the whole lifetime of `main`: dropping it would close
+    // the zbus `Connection`, releasing the `org.freedesktop.Notifications` name
+    // and tearing down the object-server task.
+    let _notification_handle =
+        NotificationHandle::init(notification_tx).expect("Failed to start dbus session");
+    loop_handle
+        .insert_source(notification_channel, |event, _, shell| {
+            if let calloop::channel::Event::Msg(events) = event {
+                debug!("{events:?}");
+                for screen in &mut shell.screen {
+                    screen.ui.on_notification(events.clone());
+                }
+            }
+        })
         .unwrap();
 
     let (mpris_tx, mpris_channel) = channel::channel::<(PlayerState, MprisEvent)>();
