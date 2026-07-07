@@ -133,10 +133,19 @@ impl NotificationServer {
     }
 
     fn get_capabilities(&self) -> Vec<String> {
-        ["actions", "body", "body-markup"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect()
+        [
+            "action-icons",
+            "actions",
+            "body",
+            "body-hyperlinks",
+            "mody-images",
+            "mody-markup",
+            "icon-static",
+            "sound",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
     }
 
     fn get_server_information(&self) -> (String, String, String, String) {
