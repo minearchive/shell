@@ -13,10 +13,13 @@ use smithay_client_toolkit::seat::{
 
 use mpris::Event as MprisEvent;
 
+use crate::dbus::mpris::PlayerState;
 use crate::{
+    animation::parser::Easing,
     components::clock::Clock,
+    config::animation::AnimationConfig,
     config::config::Configuration,
-    dbus::{kdeconnect::KDEConnectEvent, mpris::PlayerState},
+    dbus::kdeconnect::KDEConnectEvent,
     font::FontBook,
     ipc::{events::IPCEvent, IpcTrait, WindowManagerIPC},
 };
@@ -28,6 +31,7 @@ pub trait Component {
     fn on_ipc(&mut self, events: &IPCEvent);
     fn on_mpris(&mut self, state: &PlayerState, event: &MprisEvent);
     fn on_kde_connect_event(&mut self, event: &KDEConnectEvent);
+    fn on_easing_updated(&mut self, id: String, easing: &Easing);
 }
 
 #[allow(unused)]
@@ -35,6 +39,7 @@ pub enum UiEvent {
     RequestRedraw(usize),
     RegisterFont(String, String, FontStyle),
     RequestRedrawAll,
+    AnimationUpdated(HashMap<String, Easing>),
 }
 
 pub struct UIState {
@@ -70,12 +75,14 @@ impl UserInterface {
         idx: usize,
         ipc: &mut WindowManagerIPC,
         config: Arc<RwLock<Configuration>>,
+        animation: Arc<RwLock<AnimationConfig>>,
     ) -> Self {
         let components: Vec<Box<dyn Component>> = vec![Box::new(Clock::new(
             rx.clone(),
             idx,
             1000,
             Arc::clone(&config),
+            Arc::clone(&animation),
         ))];
 
         Self {
@@ -229,5 +236,11 @@ impl UserInterface {
 
     pub fn on_modifier(&mut self, modifier: Modifiers) {
         self.modifier = modifier;
+    }
+
+    pub fn on_easing_updated(&mut self, id: String, easing: Easing) {
+        self.components
+            .iter_mut()
+            .for_each(|c| c.on_easing_updated(id.clone(), &easing));
     }
 }

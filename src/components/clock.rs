@@ -11,8 +11,11 @@ use skia_safe::{utils::text_utils::Align, Canvas, Color4f, Paint};
 use smithay_client_toolkit::seat::pointer::PointerEvent;
 
 use crate::{
-    animation::animation::{easing::ease_out_bounce, Animation},
-    config::config::Configuration,
+    animation::{
+        animation::{easing::ease_out_bounce, Animation},
+        parser::Easing,
+    },
+    config::{animation::AnimationConfig, config::Configuration},
     dbus::{kdeconnect::KDEConnectEvent, mpris::PlayerState},
     font::FontBook,
     ipc::events::IPCEvent,
@@ -35,10 +38,21 @@ impl Clock {
         screen_idx: usize,
         update_interval: usize,
         config: Arc<RwLock<Configuration>>,
+        animation: Arc<RwLock<AnimationConfig>>,
     ) -> Self {
         let time = Arc::new(Mutex::new(String::new()));
         let time_clone = Arc::clone(&time);
-        let animation = Animation::new(0., 1., Duration::from_millis(1000), ease_out_bounce);
+        let animation = Animation::new(
+            0.,
+            1.,
+            Duration::from_millis(1000),
+            animation
+                .read()
+                .unwrap()
+                .get_easing("a")
+                .cloned()
+                .unwrap_or(Arc::new(ease_out_bounce)),
+        );
         let sender_clone = sender.clone();
         let interval = update_interval as u64;
 
@@ -121,4 +135,10 @@ impl Component for Clock {
     fn on_ipc(&mut self, _: &IPCEvent) {}
     fn on_mpris(&mut self, _: &PlayerState, _: &Event) {}
     fn on_kde_connect_event(&mut self, _: &KDEConnectEvent) {}
+    fn on_easing_updated(&mut self, id: String, easing: &Easing) {
+        if id == "a" {
+            self.animation.set_easing(easing.clone());
+            let _ = self.sender.send(UiEvent::RequestRedrawAll);
+        }
+    }
 }
