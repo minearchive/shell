@@ -3,68 +3,11 @@ use std::collections::HashMap;
 use calloop::channel::Sender;
 use zbus::connection;
 use zbus::object_server::SignalEmitter;
-use zbus::zvariant::{OwnedValue, Value};
-use zbus::{interface, proxy, Connection};
+use zbus::zvariant::Value;
+use zbus::{interface, Connection};
 
 const NAME: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
-
-// ==========================================================================
-// Notifications — org.freedesktop.Notifications
-// service: org.freedesktop.Notifications
-// path:    /org/freedesktop/Notifications
-// The Desktop Notifications Specification (v1.2). Method/signal names map to
-// their PascalCase D-Bus names via zbus's default conversion, so no explicit
-// `name =` is needed. `hints` is `a{sv}`; `actions` is a flat `as` list of
-// (key, label, key, label, …) pairs.
-// ==========================================================================
-#[proxy(
-    interface = "org.freedesktop.Notifications",
-    default_service = "org.freedesktop.Notifications",
-    default_path = "/org/freedesktop/Notifications"
-)]
-pub trait Notifications {
-    /// Post a notification. `replaces_id` of 0 requests a fresh id; any other
-    /// value updates the notification with that id in place. Returns the id the
-    /// server assigned (or echoed back).
-    #[allow(clippy::too_many_arguments)]
-    fn notify(
-        &self,
-        app_name: &str,
-        replaces_id: u32,
-        app_icon: &str,
-        summary: &str,
-        body: &str,
-        actions: Vec<&str>,
-        hints: HashMap<&str, OwnedValue>,
-        expire_timeout: i32,
-    ) -> zbus::Result<u32>;
-
-    /// Ask the server to close the notification with the given id.
-    fn close_notification(&self, id: u32) -> zbus::Result<()>;
-
-    /// The capabilities the server supports (e.g. "body", "actions",
-    /// "body-markup", "persistence").
-    fn get_capabilities(&self) -> zbus::Result<Vec<String>>;
-
-    /// (name, vendor, version, spec_version) describing the running server.
-    fn get_server_information(&self) -> zbus::Result<(String, String, String, String)>;
-
-    /// A notification was closed. `reason`: 1 = expired, 2 = dismissed by the
-    /// user, 3 = closed via `CloseNotification`, 4 = undefined/reserved.
-    #[zbus(signal)]
-    fn notification_closed(&self, id: u32, reason: u32) -> zbus::Result<()>;
-
-    /// The user invoked an action; `action_key` matches a key passed in the
-    /// `actions` list of `Notify`.
-    #[zbus(signal)]
-    fn action_invoked(&self, id: u32, action_key: String) -> zbus::Result<()>;
-
-    /// Carries the XDG activation token for the notification whose action was
-    /// just invoked, letting the handler raise its window without focus steal.
-    #[zbus(signal)]
-    fn activation_token(&self, id: u32, activation_token: String) -> zbus::Result<()>;
-}
 
 /// Urgency level carried in the `urgency` hint (a byte).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
