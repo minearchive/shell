@@ -49,6 +49,7 @@ use mpris::Event as MprisEvent;
 use crate::{
     config::{animation::AnimationConfig, config::Configuration, WatchableConfig},
     dbus::{
+        kdeconnect::{KDEConnectClient, KDEConnectEvent},
         mpris::{MprisClient, PlayerState},
         notification::{NotificationEvent, NotificationHandle},
     },
@@ -153,6 +154,18 @@ fn main() {
             if let calloop::channel::Event::Msg(ipc_event) = event {
                 for screen in &mut shell.screen {
                     screen.ui.on_ipc(ipc_event.clone());
+                }
+            }
+        })
+        .unwrap();
+
+    let (kde_tx, kde_channel) = channel::channel::<KDEConnectEvent>();
+    KDEConnectClient::init(kde_tx);
+    loop_handle
+        .insert_source(kde_channel, |event, _, shell| {
+            if let calloop::channel::Event::Msg(kde_event) = event {
+                for screen in &mut shell.screen {
+                    screen.ui.on_kde_connect_event(&kde_event.clone());
                 }
             }
         })

@@ -16,7 +16,7 @@ use crate::{
         parser::Easing,
     },
     config::{animation::AnimationConfig, config::Configuration},
-    dbus::mpris::PlayerState,
+    dbus::{kdeconnect::KDEConnectEvent, mpris::PlayerState},
     font::FontBook,
     ipc::events::IPCEvent,
     ui::{Component, UIState, UiEvent},
@@ -134,6 +134,7 @@ impl Component for Clock {
 
     fn on_ipc(&mut self, _: &IPCEvent) {}
     fn on_mpris(&mut self, _: &PlayerState, _: &Event) {}
+    fn on_kde_connect_event(&mut self, _: &KDEConnectEvent) {}
     fn on_easing_updated(&mut self, id: String, easing: &Easing) {
         if id == "a" {
             self.animation.set_easing(easing.clone());

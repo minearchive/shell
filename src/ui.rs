@@ -4,6 +4,7 @@ use std::{
 };
 
 use calloop::channel::Sender;
+use log::debug;
 use skia_safe::{utils::text_utils::Align, Canvas, Color4f, FontStyle, Paint};
 use smithay_client_toolkit::seat::{
     keyboard::Modifiers,
@@ -12,11 +13,12 @@ use smithay_client_toolkit::seat::{
 
 use mpris::Event as MprisEvent;
 
+use crate::dbus::mpris::PlayerState;
 use crate::{
     animation::parser::Easing,
     components::clock::Clock,
     config::{animation::AnimationConfig, config::Configuration},
-    dbus::{mpris::PlayerState, notification::NotificationEvent},
+    dbus::{kdeconnect::KDEConnectEvent, notification::NotificationEvent},
     font::FontBook,
     ipc::{events::IPCEvent, IpcTrait, WindowManagerIPC},
 };
@@ -27,6 +29,7 @@ pub trait Component {
     // fn on_key(&mut self, event: &KeyEvent, timing: &KeyTiming);
     fn on_ipc(&mut self, events: &IPCEvent);
     fn on_mpris(&mut self, state: &PlayerState, event: &MprisEvent);
+    fn on_kde_connect_event(&mut self, event: &KDEConnectEvent);
     fn on_easing_updated(&mut self, id: String, easing: &Easing);
 }
 
@@ -117,6 +120,31 @@ impl UserInterface {
                 .insert(state.identity.clone(), state.clone());
         } else {
             self.state.players.remove(&state.identity);
+        }
+    }
+
+    pub fn on_kde_connect_event(&mut self, event: &KDEConnectEvent) {
+        self.components
+            .iter_mut()
+            .for_each(|c| c.on_kde_connect_event(event));
+
+        debug!("{event:?}");
+
+        match event {
+            KDEConnectEvent::PhoneCall {
+                number,
+                name,
+                call_type: _,
+            } => {
+                debug!("YOUR PHONE RINGING! YOUR PHONE RINGING! {number} CALLS YOU!!!! {name}")
+            }
+            KDEConnectEvent::DeviceConnected { name, id } => {
+                debug!("Connected device {name}: {id}");
+            }
+            KDEConnectEvent::DeviceDisconnected { name, id, reason } => {
+                debug!("NOWAY DISCONNECTED... {name}: {id}: {reason}")
+            }
+            _ => {}
         }
     }
 
