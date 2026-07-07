@@ -17,9 +17,8 @@ use crate::dbus::mpris::PlayerState;
 use crate::{
     animation::parser::Easing,
     components::clock::Clock,
-    config::animation::AnimationConfig,
-    config::config::Configuration,
-    dbus::kdeconnect::KDEConnectEvent,
+    config::{animation::AnimationConfig, config::Configuration},
+    dbus::{kdeconnect::KDEConnectEvent, notification::NotificationEvent},
     font::FontBook,
     ipc::{events::IPCEvent, IpcTrait, WindowManagerIPC},
 };
@@ -149,6 +148,8 @@ impl UserInterface {
         }
     }
 
+    pub fn on_notification(&mut self, _event: NotificationEvent) {}
+
     pub fn draw(&mut self, canvas: &Canvas, fonts: &FontBook) {
         let cfg = self.config.read().unwrap();
         canvas.clear(cfg.theme().surface_container);
@@ -175,13 +176,13 @@ impl UserInterface {
             Align::Left,
         );
 
-        canvas.draw_str_align(
-            &self.state.window_title,
-            (self.state.padding + 64., y),
-            &font,
-            &paint,
-            Align::Left,
-        );
+        // canvas.draw_str_align(
+        //     &self.state.window_title,
+        //     (self.state.padding + 64., y),
+        //     &font,
+        //     &paint,
+        //     Align::Left,
+        // );
     }
 
     // pub fn on_key(&mut self, event: &KeyEvent, timing: &KeyTiming) {
