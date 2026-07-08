@@ -160,7 +160,7 @@ fn main() {
         .unwrap();
 
     let (kde_tx, kde_channel) = channel::channel::<KDEConnectEvent>();
-    KDEConnectClient::init(kde_tx);
+    let _kde_command_sender = KDEConnectClient::init(kde_tx);
     loop_handle
         .insert_source(kde_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg(kde_event) = event {

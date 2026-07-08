@@ -76,7 +76,11 @@ impl Display for KDEConnectEvent {
                 write!(f, "notification [{id}]: {} - {}", data.title, data.text)
             }
             Self::NotificationUpdated { id, data, .. } => {
-                write!(f, "notification updated [{id}]: {} - {}", data.title, data.text)
+                write!(
+                    f,
+                    "notification updated [{id}]: {} - {}",
+                    data.title, data.text
+                )
             }
             Self::NotificationRemoved { device_id, id } => {
                 write!(f, "notification removed: {device_id}/{id}")
@@ -382,9 +386,7 @@ impl KDEConnectClient {
                     while let Some(sig) = stream.next().await {
                         let Ok(args) = sig.args() else { continue };
                         let id = args.public_id().to_string();
-                        let Some(data) =
-                            read_notification(&connection, &path, &id).await
-                        else {
+                        let Some(data) = read_notification(&connection, &path, &id).await else {
                             continue;
                         };
                         let _ = sender.send(KDEConnectEvent::NotificationPosted {
@@ -413,9 +415,7 @@ impl KDEConnectClient {
                     while let Some(sig) = stream.next().await {
                         let Ok(args) = sig.args() else { continue };
                         let id = args.public_id().to_string();
-                        let Some(data) =
-                            read_notification(&connection, &path, &id).await
-                        else {
+                        let Some(data) = read_notification(&connection, &path, &id).await else {
                             continue;
                         };
                         let _ = sender.send(KDEConnectEvent::NotificationUpdated {
