@@ -4,12 +4,8 @@ use std::{
 };
 
 use calloop::channel::Sender;
-use log::debug;
-use skia_safe::{utils::text_utils::Align, Canvas, Color4f, FontStyle, Paint};
-use smithay_client_toolkit::seat::{
-    keyboard::Modifiers,
-    pointer::{PointerEvent, PointerEventKind},
-};
+use skia_safe::{Canvas, FontStyle};
+use smithay_client_toolkit::seat::{keyboard::Modifiers, pointer::PointerEvent};
 
 use mpris::Event as MprisEvent;
 
@@ -20,17 +16,18 @@ use crate::{
     config::{animation::AnimationConfig, config::Configuration},
     dbus::{kdeconnect::KDEConnectEvent, notification::NotificationEvent},
     font::FontBook,
-    ipc::{events::IPCEvent, IpcTrait, WindowManagerIPC},
+    ipc::{events::IPCEvent, WindowManagerIPC},
 };
 
 pub trait Component {
     fn draw(&mut self, canvas: &Canvas, state: &UIState, fonts: &FontBook);
     fn on_cursor(&mut self, events: &PointerEvent);
     // fn on_key(&mut self, event: &KeyEvent, timing: &KeyTiming);
-    fn on_ipc(&mut self, events: &IPCEvent);
-    fn on_mpris(&mut self, state: &PlayerState, event: &MprisEvent);
-    fn on_kde_connect_event(&mut self, event: &KDEConnectEvent);
-    fn on_easing_updated(&mut self, id: String, easing: &Easing);
+    fn on_ipc(&mut self, _events: &IPCEvent) {}
+    fn on_mpris(&mut self, _state: &PlayerState, _event: &MprisEvent) {}
+    fn on_kde_connect_event(&mut self, _event: &KDEConnectEvent) {}
+    fn on_notification(&mut self, _event: &NotificationEvent) {}
+    fn on_easing_updated(&mut self, _id: String, _easing: &Easing) {}
 }
 
 #[allow(unused)]
@@ -43,27 +40,21 @@ pub enum UiEvent {
 
 pub struct UIState {
     pub players: HashMap<String, PlayerState>,
-    pub workspace_id: String,
-    pub window_title: String,
-    pub padding: f32,
 }
 
 pub struct UserInterface {
     pub components: Vec<Box<dyn Component>>,
-    idx: usize,
+    _idx: usize,
     modifier: Modifiers,
     state: UIState,
     config: Arc<RwLock<Configuration>>,
-    sender: Sender<UiEvent>,
+    _sender: Sender<UiEvent>,
 }
 
 impl UIState {
-    pub fn new(ipc: &mut WindowManagerIPC) -> Self {
+    pub fn new() -> Self {
         Self {
             players: HashMap::new(),
-            workspace_id: ipc.get_current_workspace().to_string(),
-            window_title: ipc.get_current_window_name().unwrap_or_default(),
-            padding: 0.,
         }
     }
 }
@@ -72,7 +63,7 @@ impl UserInterface {
     pub fn new(
         rx: Sender<UiEvent>,
         idx: usize,
-        ipc: &mut WindowManagerIPC,
+        _ipc: &mut WindowManagerIPC,
         config: Arc<RwLock<Configuration>>,
         animation: Arc<RwLock<AnimationConfig>>,
     ) -> Self {
@@ -86,27 +77,16 @@ impl UserInterface {
 
         Self {
             components,
-            idx,
+            _idx: idx,
             modifier: Modifiers::default(),
-            state: UIState::new(ipc),
+            state: UIState::new(),
             config,
-            sender: rx,
+            _sender: rx,
         }
     }
 
     pub fn on_ipc(&mut self, event: IPCEvent) {
         self.components.iter_mut().for_each(|c| c.on_ipc(&event));
-
-        match event {
-            IPCEvent::FocusedWorkspaceChanged(_old, new) => {
-                self.state.workspace_id = new.to_string();
-                let _ = self.sender.send(UiEvent::RequestRedraw(self.idx));
-            }
-            IPCEvent::FocusedWindowTitleChanged(title) => {
-                self.state.window_title = title.unwrap_or_default();
-                let _ = self.sender.send(UiEvent::RequestRedraw(self.idx));
-            }
-        }
     }
 
     pub fn on_mpris(&mut self, state: &PlayerState, event: &MprisEvent) {
@@ -127,28 +107,13 @@ impl UserInterface {
         self.components
             .iter_mut()
             .for_each(|c| c.on_kde_connect_event(event));
-
-        debug!("{event:?}");
-
-        match event {
-            KDEConnectEvent::PhoneCall {
-                number,
-                name,
-                call_type: _,
-            } => {
-                debug!("YOUR PHONE RINGING! YOUR PHONE RINGING! {number} CALLS YOU!!!! {name}")
-            }
-            KDEConnectEvent::DeviceConnected { name, id } => {
-                debug!("Connected device {name}: {id}");
-            }
-            KDEConnectEvent::DeviceDisconnected { name, id, reason } => {
-                debug!("NOWAY DISCONNECTED... {name}: {id}: {reason}")
-            }
-            _ => {}
-        }
     }
 
-    pub fn on_notification(&mut self, _event: NotificationEvent) {}
+    pub fn on_notification(&mut self, event: NotificationEvent) {
+        self.components
+            .iter_mut()
+            .for_each(|c| c.on_notification(&event));
+    }
 
     pub fn draw(&mut self, canvas: &Canvas, fonts: &FontBook) {
         let cfg = self.config.read().unwrap();
@@ -157,81 +122,9 @@ impl UserInterface {
         self.components
             .iter_mut()
             .for_each(|c| c.draw(canvas, &self.state, fonts));
-
-        let font = fonts.sized("noto_sans", 32.);
-
-        let mut paint = Paint::default();
-        paint.set_anti_alias(true);
-        paint.set_color4f(Color4f::new(0., 0., 0., 1.), None);
-
-        let font_metrics = font.metrics();
-
-        let y = -font_metrics.1.ascent;
-
-        canvas.draw_str_align(
-            &self.state.workspace_id,
-            (self.state.padding, y),
-            &font,
-            &paint,
-            Align::Left,
-        );
-
-        // canvas.draw_str_align(
-        //     &self.state.window_title,
-        //     (self.state.padding + 64., y),
-        //     &font,
-        //     &paint,
-        //     Align::Left,
-        // );
     }
 
-    // pub fn on_key(&mut self, event: &KeyEvent, timing: &KeyTiming) {
-    //     if event.keysym == Keysym::KP_Space {
-    //         match timing {
-    //             KeyTiming::Press => println!("Space Pressed"),
-    //             KeyTiming::Repeat => println!("Space Repeating"),
-    //             KeyTiming::Release => println!("Space Released"),
-    //         }
-    //     }
-
-    //     self.components
-    //         .iter_mut()
-    //         .for_each(|c| c.on_key(event, timing));
-    // }
-
     pub fn on_cursor(&mut self, event: &PointerEvent) {
-        #[allow(unused)]
-        match event.kind {
-            PointerEventKind::Axis {
-                horizontal,
-                vertical,
-                ..
-            } => {
-                if horizontal.absolute != 0. {
-                    self.state.padding -= horizontal.absolute as f32;
-                    let _ = self.sender.send(UiEvent::RequestRedraw(self.idx));
-                }
-
-                if vertical.absolute != 0. && self.modifier.shift {
-                    self.state.padding -= vertical.absolute as f32;
-                    let _ = self.sender.send(UiEvent::RequestRedraw(self.idx));
-                }
-            }
-            PointerEventKind::Enter { serial } => {}
-            PointerEventKind::Leave { serial } => {}
-            PointerEventKind::Motion { time } => {}
-            PointerEventKind::Press {
-                time,
-                button,
-                serial,
-            } => {}
-            PointerEventKind::Release {
-                time,
-                button,
-                serial,
-            } => {}
-        }
-
         self.components.iter_mut().for_each(|c| c.on_cursor(event));
     }
 

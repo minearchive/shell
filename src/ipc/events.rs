@@ -1,3 +1,4 @@
+#[allow(unused)]
 #[derive(Clone)]
 pub enum IPCEvent {
     FocusedWorkspaceChanged(u64, u64),         //(old, new)

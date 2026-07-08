@@ -14,6 +14,7 @@ pub(crate) trait IpcTrait {
     // fn get_monitors() -> Vec<?>;
 }
 
+#[allow(unused)]
 pub enum WindowManagerIPC {
     Niri(niri::NiriIpc),
     Hyprland(hyprland::HyprlandIpc),
