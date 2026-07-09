@@ -14,7 +14,7 @@ use crate::{
     animation::parser::Easing,
     components::clock::Clock,
     config::{animation::AnimationConfig, config::Configuration},
-    dbus::{kdeconnect::KDEConnectEvent, notification::NotificationEvent},
+    dbus::{kdeconnect::KDEConnectEvent, notification::NotificationEvent, warp::WarpStatus},
     font::FontBook,
     ipc::{events::IPCEvent, WindowManagerIPC},
 };
@@ -26,6 +26,7 @@ pub trait Component {
     fn on_ipc(&mut self, _events: &IPCEvent) {}
     fn on_mpris(&mut self, _state: &PlayerState, _event: &MprisEvent) {}
     fn on_kde_connect_event(&mut self, _event: &KDEConnectEvent) {}
+    fn on_warp(&mut self, _status: &WarpStatus) {}
     fn on_notification(&mut self, _event: &NotificationEvent) {}
     fn on_easing_updated(&mut self, _id: String, _easing: &Easing) {}
 }
@@ -40,6 +41,7 @@ pub enum UiEvent {
 
 pub struct UIState {
     pub players: HashMap<String, PlayerState>,
+    pub warp: Option<WarpStatus>,
 }
 
 pub struct UserInterface {
@@ -55,6 +57,7 @@ impl UIState {
     pub fn new() -> Self {
         Self {
             players: HashMap::new(),
+            warp: None,
         }
     }
 }
@@ -107,6 +110,11 @@ impl UserInterface {
         self.components
             .iter_mut()
             .for_each(|c| c.on_kde_connect_event(event));
+    }
+
+    pub fn on_warp(&mut self, status: &WarpStatus) {
+        self.components.iter_mut().for_each(|c| c.on_warp(status));
+        self.state.warp = Some(status.clone());
     }
 
     pub fn on_notification(&mut self, event: NotificationEvent) {

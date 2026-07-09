@@ -52,6 +52,7 @@ use crate::{
         kdeconnect::{KDEConnectClient, KDEConnectEvent},
         mpris::{MprisClient, PlayerState},
         notification::{NotificationEvent, NotificationHandle},
+        warp::{WarpClient, WarpStatus},
     },
     font::FontBook,
     ipc::{events::IPCEvent, WindowManagerIPC},
@@ -166,6 +167,20 @@ fn main() {
             if let calloop::channel::Event::Msg(kde_event) = event {
                 for screen in &mut shell.screen {
                     screen.ui.on_kde_connect_event(&kde_event.clone());
+                }
+            }
+        })
+        .unwrap();
+
+    let (warp_tx, warp_channel) = channel::channel::<WarpStatus>();
+    // Held for the lifetime of `main`; dropping it closes the command channel and
+    // stops the provider from acting on connect/disconnect requests.
+    let _warp_command_sender = WarpClient::init(warp_tx);
+    loop_handle
+        .insert_source(warp_channel, |event, _, shell| {
+            if let calloop::channel::Event::Msg(status) = event {
+                for screen in &mut shell.screen {
+                    screen.ui.on_warp(&status);
                 }
             }
         })
