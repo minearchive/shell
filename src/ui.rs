@@ -9,7 +9,6 @@ use smithay_client_toolkit::seat::{keyboard::Modifiers, pointer::PointerEvent};
 
 use mpris::Event as MprisEvent;
 
-use crate::dbus::mpris::PlayerState;
 use crate::{
     animation::parser::Easing,
     components::clock::Clock,
@@ -18,10 +17,11 @@ use crate::{
     font::FontBook,
     ipc::{events::IPCEvent, WindowManagerIPC},
 };
+use crate::{components::warp::Warp, dbus::mpris::PlayerState};
 
 pub trait Component {
     fn draw(&mut self, canvas: &Canvas, state: &UIState, fonts: &FontBook);
-    fn on_cursor(&mut self, events: &PointerEvent);
+    fn on_cursor(&mut self, _events: &PointerEvent) {}
     // fn on_key(&mut self, event: &KeyEvent, timing: &KeyTiming);
     fn on_ipc(&mut self, _events: &IPCEvent) {}
     fn on_mpris(&mut self, _state: &PlayerState, _event: &MprisEvent) {}
@@ -70,13 +70,16 @@ impl UserInterface {
         config: Arc<RwLock<Configuration>>,
         animation: Arc<RwLock<AnimationConfig>>,
     ) -> Self {
-        let components: Vec<Box<dyn Component>> = vec![Box::new(Clock::new(
-            rx.clone(),
-            idx,
-            1000,
-            Arc::clone(&config),
-            Arc::clone(&animation),
-        ))];
+        let components: Vec<Box<dyn Component>> = vec![
+            Box::new(Clock::new(
+                rx.clone(),
+                idx,
+                1000,
+                Arc::clone(&config),
+                Arc::clone(&animation),
+            )),
+            Box::new(Warp::new(rx.clone(), Arc::clone(&config))),
+        ];
 
         Self {
             components,
