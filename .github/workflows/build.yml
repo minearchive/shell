@@ -3,7 +3,25 @@ name: Build
 on:
   push:
     branches: ["**"]
+    paths:
+      - "src/**.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "devenv.nix"
+      - "devenv.yaml"
+      - "devenv.lock"
+      - "flake.nix"
+      - "flake.lock"
   pull_request:
+    paths:
+      - "src/**.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "devenv.nix"
+      - "devenv.yaml"
+      - "devenv.lock"
+      - "flake.nix"
+      - "flake.lock"
   workflow_dispatch:
 
 # Cancel superseded runs on the same ref to save CI minutes.
