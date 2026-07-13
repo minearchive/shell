@@ -32,6 +32,7 @@ use smithay_client_toolkit::{
     shm::{slot::SlotPool, Shm, ShmHandler},
 };
 
+use tokio::sync::mpsc::UnboundedSender;
 use wayland_client::{
     globals::registry_queue_init,
     protocol::{
@@ -49,10 +50,10 @@ use mpris::Event as MprisEvent;
 use crate::{
     config::{animation::AnimationConfig, config::Configuration, WatchableConfig},
     dbus::{
-        kdeconnect::{KDEConnectClient, KDEConnectEvent},
+        kdeconnect::{KDEConnectClient, KDEConnectCommand, KDEConnectEvent},
         mpris::{MprisClient, PlayerState},
         notification::{NotificationEvent, NotificationHandle},
-        warp::{WarpClient, WarpStatus},
+        warp::{WarpClient, WarpCommand, WarpStatus},
     },
     font::FontBook,
     ipc::{events::IPCEvent, WindowManagerIPC},
@@ -68,6 +69,12 @@ mod ipc;
 
 mod ui;
 mod util;
+
+#[derive(Clone)]
+pub struct Commands {
+    kdeconnect: UnboundedSender<KDEConnectCommand>,
+    warp: UnboundedSender<WarpCommand>,
+}
 
 pub struct Screen {
     layer: LayerSurface,
@@ -100,6 +107,7 @@ pub struct Shell {
     config: Arc<RwLock<Configuration>>,
     animation_config: Arc<RwLock<AnimationConfig>>,
     ui_tx: Sender<UiEvent>,
+    commands: Commands,
     exit: bool,
     counter: usize,
 }
@@ -173,8 +181,6 @@ fn main() {
         .unwrap();
 
     let (warp_tx, warp_channel) = channel::channel::<WarpStatus>();
-    // Held for the lifetime of `main`; dropping it closes the command channel and
-    // stops the provider from acting on connect/disconnect requests.
     let _warp_command_sender = WarpClient::init(warp_tx);
     loop_handle
         .insert_source(warp_channel, |event, _, shell| {
@@ -257,6 +263,10 @@ fn main() {
         },
         config,
         animation_config,
+        commands: Commands {
+            kdeconnect: _kde_command_sender,
+            warp: _warp_command_sender,
+        },
         ui_tx,
         exit: false,
         counter: 0,
@@ -358,6 +368,7 @@ impl OutputHandler for Shell {
                 self.ui_tx.clone(),
                 c,
                 &mut self.ipc,
+                self.commands.clone(),
                 Arc::clone(&self.config),
                 Arc::clone(&self.animation_config),
             ),

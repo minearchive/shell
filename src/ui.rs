@@ -16,6 +16,7 @@ use crate::{
     dbus::{kdeconnect::KDEConnectEvent, notification::NotificationEvent, warp::WarpStatus},
     font::FontBook,
     ipc::{events::IPCEvent, WindowManagerIPC},
+    Commands,
 };
 use crate::{components::warp::Warp, dbus::mpris::PlayerState};
 
@@ -67,6 +68,7 @@ impl UserInterface {
         rx: Sender<UiEvent>,
         idx: usize,
         _ipc: &mut WindowManagerIPC,
+        commands: Commands,
         config: Arc<RwLock<Configuration>>,
         animation: Arc<RwLock<AnimationConfig>>,
     ) -> Self {
@@ -78,7 +80,7 @@ impl UserInterface {
                 Arc::clone(&config),
                 Arc::clone(&animation),
             )),
-            Box::new(Warp::new(rx.clone(), Arc::clone(&config))),
+            Box::new(Warp::new(rx.clone(), Arc::clone(&config), commands.warp)),
         ];
 
         Self {
