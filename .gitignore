@@ -17,3 +17,5 @@ devenv.local.yaml
 .codex
 .claude
 .agents
+
+example/config.toml

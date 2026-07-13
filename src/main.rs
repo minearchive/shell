@@ -32,6 +32,7 @@ use smithay_client_toolkit::{
     shm::{slot::SlotPool, Shm, ShmHandler},
 };
 
+use tokio::sync::mpsc::UnboundedSender;
 use wayland_client::{
     globals::registry_queue_init,
     protocol::{
@@ -49,9 +50,10 @@ use mpris::Event as MprisEvent;
 use crate::{
     config::{animation::AnimationConfig, config::Configuration, WatchableConfig},
     dbus::{
-        kdeconnect::{KDEConnectClient, KDEConnectEvent},
+        kdeconnect::{KDEConnectClient, KDEConnectCommand, KDEConnectEvent},
         mpris::{MprisClient, PlayerState},
         notification::{NotificationEvent, NotificationHandle},
+        warp::{WarpClient, WarpCommand, WarpStatus},
     },
     font::FontBook,
     ipc::{events::IPCEvent, WindowManagerIPC},
@@ -67,6 +69,13 @@ mod ipc;
 
 mod ui;
 mod util;
+
+#[allow(unused)]
+#[derive(Clone)]
+pub struct Commands {
+    kdeconnect: UnboundedSender<KDEConnectCommand>,
+    warp: UnboundedSender<WarpCommand>,
+}
 
 pub struct Screen {
     layer: LayerSurface,
@@ -99,6 +108,7 @@ pub struct Shell {
     config: Arc<RwLock<Configuration>>,
     animation_config: Arc<RwLock<AnimationConfig>>,
     ui_tx: Sender<UiEvent>,
+    commands: Commands,
     exit: bool,
     counter: usize,
 }
@@ -160,12 +170,24 @@ fn main() {
         .unwrap();
 
     let (kde_tx, kde_channel) = channel::channel::<KDEConnectEvent>();
-    let _kde_command_sender = KDEConnectClient::init(kde_tx);
+    let kde_command_sender = KDEConnectClient::init(kde_tx);
     loop_handle
         .insert_source(kde_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg(kde_event) = event {
                 for screen in &mut shell.screen {
                     screen.ui.on_kde_connect_event(&kde_event.clone());
+                }
+            }
+        })
+        .unwrap();
+
+    let (warp_tx, warp_channel) = channel::channel::<WarpStatus>();
+    let warp_command_sender = WarpClient::init(warp_tx);
+    loop_handle
+        .insert_source(warp_channel, |event, _, shell| {
+            if let calloop::channel::Event::Msg(status) = event {
+                for screen in &mut shell.screen {
+                    screen.ui.on_warp(&status);
                 }
             }
         })
@@ -242,6 +264,10 @@ fn main() {
         },
         config,
         animation_config,
+        commands: Commands {
+            kdeconnect: kde_command_sender,
+            warp: warp_command_sender,
+        },
         ui_tx,
         exit: false,
         counter: 0,
@@ -343,6 +369,7 @@ impl OutputHandler for Shell {
                 self.ui_tx.clone(),
                 c,
                 &mut self.ipc,
+                self.commands.clone(),
                 Arc::clone(&self.config),
                 Arc::clone(&self.animation_config),
             ),

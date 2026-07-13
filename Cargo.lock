@@ -1090,6 +1090,7 @@ dependencies = [
  "notify",
  "notify-rust",
  "serde",
+ "serde_json",
  "skia-bindings",
  "skia-safe",
  "smithay-client-toolkit",

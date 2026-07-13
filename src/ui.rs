@@ -9,23 +9,27 @@ use smithay_client_toolkit::seat::{keyboard::Modifiers, pointer::PointerEvent};
 
 use mpris::Event as MprisEvent;
 
-use crate::dbus::mpris::PlayerState;
 use crate::{
     animation::parser::Easing,
-    components::clock::Clock,
+    components::{clock::Clock, warp::Warp},
     config::{animation::AnimationConfig, config::Configuration},
-    dbus::{kdeconnect::KDEConnectEvent, notification::NotificationEvent},
+    dbus::{
+        kdeconnect::KDEConnectEvent, mpris::PlayerState, notification::NotificationEvent,
+        warp::WarpStatus,
+    },
     font::FontBook,
     ipc::{events::IPCEvent, WindowManagerIPC},
+    Commands,
 };
 
 pub trait Component {
     fn draw(&mut self, canvas: &Canvas, state: &UIState, fonts: &FontBook);
-    fn on_cursor(&mut self, events: &PointerEvent);
+    fn on_cursor(&mut self, _events: &PointerEvent) {}
     // fn on_key(&mut self, event: &KeyEvent, timing: &KeyTiming);
     fn on_ipc(&mut self, _events: &IPCEvent) {}
     fn on_mpris(&mut self, _state: &PlayerState, _event: &MprisEvent) {}
     fn on_kde_connect_event(&mut self, _event: &KDEConnectEvent) {}
+    fn on_warp(&mut self, _status: &WarpStatus) {}
     fn on_notification(&mut self, _event: &NotificationEvent) {}
     fn on_easing_updated(&mut self, _id: String, _easing: &Easing) {}
 }
@@ -40,6 +44,7 @@ pub enum UiEvent {
 
 pub struct UIState {
     pub players: HashMap<String, PlayerState>,
+    pub warp: Option<WarpStatus>,
 }
 
 pub struct UserInterface {
@@ -55,6 +60,7 @@ impl UIState {
     pub fn new() -> Self {
         Self {
             players: HashMap::new(),
+            warp: None,
         }
     }
 }
@@ -64,16 +70,20 @@ impl UserInterface {
         rx: Sender<UiEvent>,
         idx: usize,
         _ipc: &mut WindowManagerIPC,
+        commands: Commands,
         config: Arc<RwLock<Configuration>>,
         animation: Arc<RwLock<AnimationConfig>>,
     ) -> Self {
-        let components: Vec<Box<dyn Component>> = vec![Box::new(Clock::new(
-            rx.clone(),
-            idx,
-            1000,
-            Arc::clone(&config),
-            Arc::clone(&animation),
-        ))];
+        let components: Vec<Box<dyn Component>> = vec![
+            Box::new(Clock::new(
+                rx.clone(),
+                idx,
+                1000,
+                Arc::clone(&config),
+                Arc::clone(&animation),
+            )),
+            Box::new(Warp::new(rx.clone(), Arc::clone(&config), commands.warp)),
+        ];
 
         Self {
             components,
@@ -107,6 +117,11 @@ impl UserInterface {
         self.components
             .iter_mut()
             .for_each(|c| c.on_kde_connect_event(event));
+    }
+
+    pub fn on_warp(&mut self, status: &WarpStatus) {
+        self.components.iter_mut().for_each(|c| c.on_warp(status));
+        self.state.warp = Some(status.clone());
     }
 
     pub fn on_notification(&mut self, event: NotificationEvent) {

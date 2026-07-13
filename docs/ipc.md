@@ -3,10 +3,10 @@
 ## Overview
 
 `WindowManagerIPC` (`src/ipc/mod.rs`) is an enum dispatcher instantiated once in
-`main.rs:125` from `$XDG_CURRENT_DESKTOP`. It spawns a listener thread that
+`main.rs:160` from `$XDG_CURRENT_DESKTOP`. It spawns a listener thread that
 translates compositor-native events into the internal `IPCEvent` enum and sends
 them over a `calloop::channel`. The main loop fans each event out to every screen
-(`main.rs:128`), which calls `UserInterface::on_ipc`.
+(`main.rs:161`), which calls `UserInterface::on_ipc`.
 
 ## Adding a new IPCEvent variant
 
@@ -33,7 +33,7 @@ let _ = sender.send(IPCEvent::MonitorAdded(name));
 
 ### 3. Handle in UserInterface
 
-`src/ui.rs` → `UserInterface::on_ipc` (around line 89):
+`src/ui.rs` → `UserInterface::on_ipc` (around line 96):
 ```rust
 IPCEvent::MonitorAdded(name) => {
     // update UIState if needed

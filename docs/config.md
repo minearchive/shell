@@ -51,23 +51,22 @@ surface_container = "#211F26"
 
 `UIState` is the shared render snapshot passed by reference to every
 `Component::draw` call. Components **read** it; they never write to it directly.
-Only `UserInterface` updates it via `on_ipc`, `on_mpris`, and `on_cursor`.
+Only `UserInterface` updates it, inside the `on_*` handlers (e.g. `on_mpris`
+updates `players`, `on_warp` updates `warp`).
 
 ```rust
 pub struct UIState {
-    pub workspace_id: String,
-    pub window_title: String,
     pub players: HashMap<String, PlayerState>,
-    pub padding: f32,
+    pub warp: Option<WarpStatus>,
 }
 ```
 
-| Field | Updated by | Notes |
-|-------|-----------|-------|
-| `workspace_id` | `on_ipc` / `FocusedWorkspaceChanged` | String form of workspace number |
-| `window_title` | `on_ipc` / `FocusedWindowTitleChanged` | Empty string when no window |
-| `players` | `on_mpris` | Keyed by player identity; inactive players are removed |
-| `padding` | `on_cursor` (horizontal scroll) | Debug/experimental |
+| Field | Type | Updated by | Notes |
+|-------|------|-----------|-------|
+| `players` | `HashMap<String, PlayerState>` | `on_mpris` | Keyed by player identity; inactive players are removed |
+| `warp` | `Option<WarpStatus>` | `on_warp` | Latest Cloudflare WARP status, if any |
+
+To add a field, follow the steps under "Adding a field" below.
 
 ### Adding a field
 
