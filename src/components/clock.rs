@@ -14,14 +14,14 @@ use crate::{
         animation::{easing::ease_out_bounce, Animation},
         parser::Easing,
     },
-    config::{animation::AnimationConfig, config::Configuration},
+    config::{animation::AnimationConfig, theme::Theme},
     font::FontBook,
     ui::{Component, UIState, UiEvent},
     util::BoundingBox,
 };
 
 pub struct Clock {
-    config: Arc<RwLock<Configuration>>,
+    theme: Arc<RwLock<Theme>>,
     animation: Animation<f32>,
     sender: Sender<UiEvent>,
     time: Arc<Mutex<String>>,
@@ -34,7 +34,7 @@ impl Clock {
         sender: Sender<UiEvent>,
         screen_idx: usize,
         update_interval: usize,
-        config: Arc<RwLock<Configuration>>,
+        theme: Arc<RwLock<Theme>>,
         animation: Arc<RwLock<AnimationConfig>>,
     ) -> Self {
         let time = Arc::new(Mutex::new(String::new()));
@@ -70,7 +70,7 @@ impl Clock {
             time,
             animation,
             sender,
-            config,
+            theme,
             destination: 1.,
             bounding: BoundingBox::zero(),
         }
@@ -79,7 +79,7 @@ impl Clock {
 
 impl Component for Clock {
     fn draw(&mut self, canvas: &Canvas, _state: &UIState, fonts: &FontBook) {
-        let cfg = self.config.read().unwrap();
+        let cfg = self.theme.read().unwrap();
         let pos = 10. + self.animation.value() * 200.;
         let time = self.time.lock().unwrap().clone();
         let mut paint = Paint::default();

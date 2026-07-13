@@ -6,25 +6,28 @@ use serde::{Deserialize, Serialize};
 
 use crate::ui::UiEvent;
 
+use super::scheme::ColorTheme;
 use super::watchable::WatchableConfig;
 
 #[allow(unused)]
 #[derive(Deserialize, Serialize, Default)]
 #[serde(default)]
-pub struct Configuration {
-    pub name: String,
+pub struct Theme {
+    pub is_dark: bool,
+    pub dark: ColorTheme,
+    pub light: ColorTheme,
 }
 
-impl PartialEq for Configuration {
+impl PartialEq for Theme {
     fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
+        self.is_dark == other.is_dark && self.dark == other.dark && self.light == other.light
     }
 }
 
-impl WatchableConfig for Configuration {
+impl WatchableConfig for Theme {
     fn try_load(path: &str) -> Option<Self> {
         let src = fs::read_to_string(path)
-            .map_err(|e| info!("Config read failed: {e}"))
+            .map_err(|e| info!("Theme read failed: {e}"))
             .ok()?;
 
         if src.trim().is_empty() {
@@ -32,7 +35,7 @@ impl WatchableConfig for Configuration {
         }
 
         toml::from_str(&src)
-            .map_err(|e| info!("Config parse failed:\n{e}"))
+            .map_err(|e| info!("Theme parse failed:\n{e}"))
             .ok()
     }
 
@@ -48,5 +51,15 @@ impl WatchableConfig for Configuration {
 
     fn reload_event(&self) -> UiEvent {
         UiEvent::RequestRedrawAll
+    }
+}
+
+impl Theme {
+    pub fn theme(&self) -> &ColorTheme {
+        if self.is_dark {
+            &self.dark
+        } else {
+            &self.light
+        }
     }
 }

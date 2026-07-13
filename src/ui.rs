@@ -12,7 +12,7 @@ use mpris::Event as MprisEvent;
 use crate::{
     animation::parser::Easing,
     components::{clock::Clock, warp::Warp},
-    config::{animation::AnimationConfig, config::Configuration},
+    config::{animation::AnimationConfig, theme::Theme},
     dbus::{
         kdeconnect::KDEConnectEvent, mpris::PlayerState, notification::NotificationEvent,
         warp::WarpStatus,
@@ -52,7 +52,7 @@ pub struct UserInterface {
     _idx: usize,
     modifier: Modifiers,
     state: UIState,
-    config: Arc<RwLock<Configuration>>,
+    theme: Arc<RwLock<Theme>>,
     _sender: Sender<UiEvent>,
 }
 
@@ -71,7 +71,7 @@ impl UserInterface {
         idx: usize,
         _ipc: &mut WindowManagerIPC,
         commands: Commands,
-        config: Arc<RwLock<Configuration>>,
+        theme: Arc<RwLock<Theme>>,
         animation: Arc<RwLock<AnimationConfig>>,
     ) -> Self {
         let components: Vec<Box<dyn Component>> = vec![
@@ -79,10 +79,10 @@ impl UserInterface {
                 rx.clone(),
                 idx,
                 1000,
-                Arc::clone(&config),
+                Arc::clone(&theme),
                 Arc::clone(&animation),
             )),
-            Box::new(Warp::new(rx.clone(), Arc::clone(&config), commands.warp)),
+            Box::new(Warp::new(rx.clone(), Arc::clone(&theme), commands.warp)),
         ];
 
         Self {
@@ -90,7 +90,7 @@ impl UserInterface {
             _idx: idx,
             modifier: Modifiers::default(),
             state: UIState::new(),
-            config,
+            theme,
             _sender: rx,
         }
     }
@@ -131,7 +131,7 @@ impl UserInterface {
     }
 
     pub fn draw(&mut self, canvas: &Canvas, fonts: &FontBook) {
-        let cfg = self.config.read().unwrap();
+        let cfg = self.theme.read().unwrap();
         canvas.clear(cfg.theme().surface_container);
 
         self.components

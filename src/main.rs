@@ -48,7 +48,7 @@ use wayland_client::{
 use mpris::Event as MprisEvent;
 
 use crate::{
-    config::{animation::AnimationConfig, config::Configuration, WatchableConfig},
+    config::{animation::AnimationConfig, config::Configuration, theme::Theme, WatchableConfig},
     dbus::{
         kdeconnect::{KDEConnectClient, KDEConnectCommand, KDEConnectEvent},
         mpris::{MprisClient, PlayerState},
@@ -105,7 +105,8 @@ pub struct Shell {
     registry_state: RegistryState,
     ipc: WindowManagerIPC,
     font: FontBook,
-    config: Arc<RwLock<Configuration>>,
+    _config: Arc<RwLock<Configuration>>,
+    theme: Arc<RwLock<Theme>>,
     animation_config: Arc<RwLock<AnimationConfig>>,
     ui_tx: Sender<UiEvent>,
     commands: Commands,
@@ -233,6 +234,11 @@ fn main() {
         ui_tx.clone(),
     );
 
+    let theme = Theme::load_and_watch(
+        "/home/minearchive/project/gtk_shell/example/theme.toml",
+        ui_tx.clone(),
+    );
+
     let animation_config = AnimationConfig::load_and_watch(
         "/home/minearchive/project/gtk_shell/example/animation.toml",
         ui_tx.clone(),
@@ -262,7 +268,8 @@ fn main() {
             );
             book
         },
-        config,
+        _config: config,
+        theme,
         animation_config,
         commands: Commands {
             kdeconnect: kde_command_sender,
@@ -370,7 +377,7 @@ impl OutputHandler for Shell {
                 c,
                 &mut self.ipc,
                 self.commands.clone(),
-                Arc::clone(&self.config),
+                Arc::clone(&self.theme),
                 Arc::clone(&self.animation_config),
             ),
             output,

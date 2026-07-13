@@ -5,25 +5,25 @@ use skia_safe::{utils::text_utils::Align, Color4f, Paint};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
-    config::config::Configuration,
+    config::theme::Theme,
     dbus::warp::WarpCommand,
     ui::{Component, UiEvent},
 };
 
 pub struct Warp {
     sender: Sender<UiEvent>,
-    config: Arc<RwLock<Configuration>>,
+    theme: Arc<RwLock<Theme>>,
 }
 
 impl Warp {
     pub fn new(
         sender: Sender<UiEvent>,
-        config: Arc<RwLock<Configuration>>,
+        theme: Arc<RwLock<Theme>>,
         cmd: UnboundedSender<WarpCommand>,
     ) -> Self {
         let _ = cmd.send(WarpCommand::UpdateState);
 
-        Self { sender, config }
+        Self { sender, theme }
     }
 }
 
@@ -36,7 +36,7 @@ impl Component for Warp {
     ) {
         let Some(status) = &state.warp else { return };
 
-        let cfg = self.config.read().unwrap();
+        let cfg = self.theme.read().unwrap();
         let theme = cfg.theme();
         let color = if status.is_connected() {
             theme.primary
