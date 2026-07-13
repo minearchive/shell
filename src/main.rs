@@ -70,6 +70,7 @@ mod ipc;
 mod ui;
 mod util;
 
+#[allow(unused)]
 #[derive(Clone)]
 pub struct Commands {
     kdeconnect: UnboundedSender<KDEConnectCommand>,
