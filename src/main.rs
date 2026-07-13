@@ -170,7 +170,7 @@ fn main() {
         .unwrap();
 
     let (kde_tx, kde_channel) = channel::channel::<KDEConnectEvent>();
-    let _kde_command_sender = KDEConnectClient::init(kde_tx);
+    let kde_command_sender = KDEConnectClient::init(kde_tx);
     loop_handle
         .insert_source(kde_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg(kde_event) = event {
@@ -182,7 +182,7 @@ fn main() {
         .unwrap();
 
     let (warp_tx, warp_channel) = channel::channel::<WarpStatus>();
-    let _warp_command_sender = WarpClient::init(warp_tx);
+    let warp_command_sender = WarpClient::init(warp_tx);
     loop_handle
         .insert_source(warp_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg(status) = event {
@@ -265,8 +265,8 @@ fn main() {
         config,
         animation_config,
         commands: Commands {
-            kdeconnect: _kde_command_sender,
-            warp: _warp_command_sender,
+            kdeconnect: kde_command_sender,
+            warp: warp_command_sender,
         },
         ui_tx,
         exit: false,

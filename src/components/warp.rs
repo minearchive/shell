@@ -13,7 +13,6 @@ use crate::{
 pub struct Warp {
     sender: Sender<UiEvent>,
     config: Arc<RwLock<Configuration>>,
-    // cmd: UnboundedSender<WarpCommand>,
 }
 
 impl Warp {
@@ -24,11 +23,7 @@ impl Warp {
     ) -> Self {
         let _ = cmd.send(WarpCommand::UpdateState);
 
-        Self {
-            sender,
-            config,
-            // cmd,
-        }
+        Self { sender, config }
     }
 }
 
@@ -39,43 +34,29 @@ impl Component for Warp {
         state: &crate::ui::UIState,
         fonts: &crate::font::FontBook,
     ) {
+        let Some(status) = &state.warp else { return };
+
         let cfg = self.config.read().unwrap();
+        let theme = cfg.theme();
+        let color = if status.is_connected() {
+            theme.primary
+        } else {
+            theme.error
+        };
+
         let mut paint = Paint::default();
+        paint.set_color4f(Color4f::from(color), None);
 
-        if let Some(state) = &state.warp {
-            if state.is_connected() {
-                paint.set_color4f(
-                    Color4f::new(
-                        cfg.theme().primary.r,
-                        cfg.theme().primary.g,
-                        cfg.theme().primary.b,
-                        cfg.theme().primary.a,
-                    ),
-                    None,
-                );
-            } else {
-                paint.set_color4f(
-                    Color4f::new(
-                        cfg.theme().error.r,
-                        cfg.theme().error.g,
-                        cfg.theme().error.b,
-                        cfg.theme().error.a,
-                    ),
-                    None,
-                );
-            }
+        let font = fonts.sized("noto_sans", 32.);
+        let metrics = font.metrics();
 
-            let font = fonts.sized("noto_sans", 32.);
-            let metrics = font.metrics();
-
-            canvas.draw_str_align(
-                state.status.as_str(),
-                (20., -metrics.1.ascent),
-                &font,
-                &paint,
-                Align::Left,
-            );
-        }
+        canvas.draw_str_align(
+            status.status.as_str(),
+            (20., -metrics.1.ascent),
+            &font,
+            &paint,
+            Align::Left,
+        );
     }
 
     fn on_warp(&mut self, _status: &crate::dbus::warp::WarpStatus) {

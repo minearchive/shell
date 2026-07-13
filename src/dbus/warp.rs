@@ -28,7 +28,6 @@ where
 }
 
 impl WarpStatus {
-    #[allow(unused)]
     pub fn is_connected(&self) -> bool {
         self.status.eq_ignore_ascii_case("connected")
     }
@@ -80,24 +79,22 @@ impl WarpClient {
         poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         let mut last: Option<WarpStatus> = None;
-        emit(
-            &sender,
-            &mut last,
-            query_status().await,
-            WarpCommand::UpdateState,
-        );
+        emit(&sender, &mut last, query_status().await, true);
 
         loop {
             tokio::select! {
                 Some(cmd) = cmd_rx.recv() => {
-                    run_command(cmd.clone()).await;
-                    emit(&sender, &mut last, query_status().await, cmd);
+                    // UpdateState is a re-emit request: skip dedup so the
+                    // requester always gets a status back.
+                    let force = cmd == WarpCommand::UpdateState;
+                    run_command(cmd).await;
+                    emit(&sender, &mut last, query_status().await, force);
                 }
                 Some(_) = sni.next() => {
-                    emit(&sender, &mut last, query_status().await, WarpCommand::UpdateState);
+                    emit(&sender, &mut last, query_status().await, false);
                 }
                 _ = poll.tick() => {
-                    emit(&sender, &mut last, query_status().await, WarpCommand::UpdateState);
+                    emit(&sender, &mut last, query_status().await, false);
                 }
             }
         }
@@ -108,10 +105,10 @@ fn emit(
     sender: &Sender<WarpStatus>,
     last: &mut Option<WarpStatus>,
     status: Option<WarpStatus>,
-    cmd: WarpCommand,
+    force: bool,
 ) {
     let Some(status) = status else { return };
-    if last.as_ref() == Some(&status) && cmd != WarpCommand::UpdateState {
+    if !force && last.as_ref() == Some(&status) {
         return;
     }
     let _ = sender.send(status.clone());
@@ -149,9 +146,8 @@ async fn run_command(cmd: WarpCommand) {
     let arg = match cmd {
         WarpCommand::Connect => "connect",
         WarpCommand::Disconnect => "disconnect",
-        WarpCommand::UpdateState => {
-            return; //no call command, emit are update state
-        }
+        // No CLI call; the caller re-queries and emits the status itself.
+        WarpCommand::UpdateState => return,
     };
 
     let result = tokio::task::spawn_blocking(move || {

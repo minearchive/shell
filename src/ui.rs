@@ -11,14 +11,16 @@ use mpris::Event as MprisEvent;
 
 use crate::{
     animation::parser::Easing,
-    components::clock::Clock,
+    components::{clock::Clock, warp::Warp},
     config::{animation::AnimationConfig, config::Configuration},
-    dbus::{kdeconnect::KDEConnectEvent, notification::NotificationEvent, warp::WarpStatus},
+    dbus::{
+        kdeconnect::KDEConnectEvent, mpris::PlayerState, notification::NotificationEvent,
+        warp::WarpStatus,
+    },
     font::FontBook,
     ipc::{events::IPCEvent, WindowManagerIPC},
     Commands,
 };
-use crate::{components::warp::Warp, dbus::mpris::PlayerState};
 
 pub trait Component {
     fn draw(&mut self, canvas: &Canvas, state: &UIState, fonts: &FontBook);
