@@ -19,15 +19,18 @@ pub struct MyWidget { /* fields */ }
 
 impl Component for MyWidget {
     fn draw(&self, canvas: &Canvas, state: &UIState, fonts: &FontBook) { /* … */ }
-    fn on_cursor(&self, _: &PointerEvent) {}
-    fn on_ipc(&mut self, _: &IPCEvent) {}
+
+    // The rest have default no-op bodies in the trait — implement only what you
+    // care about. on_mpris is shown as an example; the full set is:
+    //   on_cursor, on_ipc, on_mpris, on_kde_connect_event,
+    //   on_warp, on_notification, on_easing_updated
     fn on_mpris(&mut self, _: &PlayerState, _: &MprisEvent) {}
 }
-```
 
-All four methods must be implemented. Use empty bodies for unused ones.
-**Never leave `todo!()` in `on_mpris`** — it is called unconditionally for every
-player event and will crash the process.
+Only `draw` is required; every other trait method has a default empty body, so
+you only override the ones your component reacts to.
+**Never leave `todo!()` in any `on_*`** — these are called unconditionally for
+every event and will crash the process.
 
 ## 2. Register the module and instantiate
 
@@ -36,10 +39,16 @@ player event and will crash the process.
 pub mod my_widget;
 ```
 
-`src/ui.rs` → `UserInterface::new` (around line 72):
+`src/ui.rs` → `UserInterface::new` (around line 67):
 ```rust
 let components: Vec<Box<dyn Component>> = vec![
-    Box::new(Clock::new(rx.clone(), idx, 1000, Arc::clone(&config))),
+    Box::new(Clock::new(
+        rx.clone(),
+        idx,
+        1000,
+        Arc::clone(&config),
+        Arc::clone(&animation),
+    )),
     Box::new(MyWidget::new(/* … */)),
 ];
 ```
@@ -53,13 +62,13 @@ Hold a clone of the `Sender<UiEvent>` and the screen index passed into
 let _ = sender.send(UiEvent::RequestRedraw(screen_idx));
 ```
 
-`UiEvent::RequestRedraw(idx)` is handled in `main.rs:141` by calling
-`Shell::draw(idx)` directly. There is no separate dirty flag.
+`UiEvent::RequestRedraw(idx)` is handled in `main.rs:202` by calling
+`shell.request_redraw(idx)`. There is no separate dirty flag.
 
 ## 4. Using fonts
 
 `fonts.sized("noto_sans", 32.)` is always available — it is the only font
-registered by default (`main.rs:184`, Noto Sans CJK JP).
+registered by default (`main.rs:259`, Noto Sans CJK JP).
 
 To use another font, send `UiEvent::RegisterFont` once before the first draw:
 
@@ -80,11 +89,10 @@ panic, but wrong rendering.
 
 | Field | Type | Meaning |
 |-------|------|---------|
-| `workspace_id` | `String` | Current focused workspace |
-| `window_title` | `String` | Title of the focused window |
-| `players` | `HashMap<String, PlayerState>` | Active MPRIS players |
-| `padding` | `f32` | Horizontal scroll offset (debug feature) |
+| `players` | `HashMap<String, PlayerState>` | Active MPRIS players, keyed by identity |
+| `warp` | `Option<WarpStatus>` | Latest Cloudflare WARP status, if connected |
 
 To surface new data to components, add a field to `UIState` and update it in the
-relevant `UserInterface::on_*` handler. See [docs/config.md](config.md) for
+relevant `UserInterface::on_*` handler. See [docs/data-sources.md](data-sources.md)
+and [docs/config.md](config.md) for
 details on `UIState` and `Configuration`.
