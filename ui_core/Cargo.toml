@@ -1,9 +1,9 @@
 [package]
 name = "ui_core"
 version = "0.0.1"
-edition = "2021"
+edition.workspace = true
 
 [dependencies]
-serde = { version = "1.0.228", features = ["derive"] }
-skia-bindings = "0.97.2"
-skia-safe = "0.97.2"
+serde.workspace = true
+skia-bindings.workspace = true
+skia-safe.workspace = true
