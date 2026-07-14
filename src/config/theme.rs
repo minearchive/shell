@@ -9,7 +9,6 @@ use crate::ui::UiEvent;
 use super::scheme::ColorTheme;
 use super::watchable::WatchableConfig;
 
-#[allow(unused)]
 #[derive(Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct Theme {
@@ -40,8 +39,8 @@ impl WatchableConfig for Theme {
     }
 
     fn write(&self, path: &str) -> io::Result<()> {
-        let content = toml::to_string(self)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let content =
+            toml::to_string(self).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         fs::write(path, content)
     }
 

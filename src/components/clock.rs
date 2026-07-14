@@ -14,16 +14,14 @@ use crate::{
         animation::{easing::ease_out_bounce, Animation},
         parser::Easing,
     },
-    config::{animation::AnimationConfig, theme::Theme},
+    config::{animation::AnimationConfig, scheme::ColorTheme},
     font::FontBook,
-    ui::{Component, UIState, UiEvent},
+    ui::{Component, Redraw, UIState, UiEvent},
     util::BoundingBox,
 };
 
 pub struct Clock {
-    theme: Arc<RwLock<Theme>>,
     animation: Animation<f32>,
-    sender: Sender<UiEvent>,
     time: Arc<Mutex<String>>,
     destination: f32,
     bounding: BoundingBox,
@@ -34,7 +32,6 @@ impl Clock {
         sender: Sender<UiEvent>,
         screen_idx: usize,
         update_interval: usize,
-        theme: Arc<RwLock<Theme>>,
         animation: Arc<RwLock<AnimationConfig>>,
     ) -> Self {
         let time = Arc::new(Mutex::new(String::new()));
@@ -50,9 +47,11 @@ impl Clock {
                 .cloned()
                 .unwrap_or(Arc::new(ease_out_bounce)),
         );
-        let sender_clone = sender.clone();
         let interval = update_interval as u64;
 
+        // Time is a data source, not a widget animation: the clock thread owns
+        // waking the loop on each tick. Widget-driven repaints go through the
+        // `Redraw` return values instead.
         thread::spawn(move || {
             let mut first = true;
 
@@ -61,7 +60,7 @@ impl Clock {
                     thread::sleep(Duration::from_millis(interval));
                 }
                 *time_clone.lock().unwrap() = Local::now().format("%H:%M:%S").to_string();
-                let _ = sender_clone.send(UiEvent::RequestRedraw(screen_idx));
+                let _ = sender.send(UiEvent::RequestRedraw(screen_idx));
                 first = false;
             }
         });
@@ -69,8 +68,6 @@ impl Clock {
         Self {
             time,
             animation,
-            sender,
-            theme,
             destination: 1.,
             bounding: BoundingBox::zero(),
         }
@@ -78,8 +75,13 @@ impl Clock {
 }
 
 impl Component for Clock {
-    fn draw(&mut self, canvas: &Canvas, _state: &UIState, fonts: &FontBook) {
-        let cfg = self.theme.read().unwrap();
+    fn draw(
+        &mut self,
+        canvas: &Canvas,
+        _state: &UIState,
+        fonts: &FontBook,
+        theme: &ColorTheme,
+    ) -> Redraw {
         let pos = 10. + self.animation.value() * 200.;
         let time = self.time.lock().unwrap().clone();
         let mut paint = Paint::default();
@@ -87,10 +89,10 @@ impl Component for Clock {
         paint.set_anti_alias(true);
         paint.set_color4f(
             Color4f::new(
-                cfg.theme().primary.r,
-                cfg.theme().primary.g,
-                cfg.theme().primary.b,
-                cfg.theme().primary.a,
+                theme.primary.r,
+                theme.primary.g,
+                theme.primary.b,
+                theme.primary.a,
             ),
             None,
         );
@@ -108,12 +110,14 @@ impl Component for Clock {
 
         self.bounding = BoundingBox::from_text(10.0 + pos, 10.0 - metrics.1.ascent, &time, &font);
 
-        if !self.animation.is_done() {
-            let _ = self.sender.send(UiEvent::RequestRedrawAll);
+        if self.animation.is_done() {
+            Redraw::None
+        } else {
+            Redraw::Animating
         }
     }
 
-    fn on_cursor(&mut self, event: &PointerEvent) {
+    fn on_cursor(&mut self, event: &PointerEvent) -> Redraw {
         if let smithay_client_toolkit::seat::pointer::PointerEventKind::Press { button, .. } =
             event.kind
         {
@@ -124,15 +128,18 @@ impl Component for Clock {
             {
                 self.destination = 1. - self.destination;
                 self.animation.set_target(self.destination);
-                let _ = self.sender.send(UiEvent::RequestRedrawAll);
+                return Redraw::Now;
             }
         }
+        Redraw::None
     }
 
-    fn on_easing_updated(&mut self, id: String, easing: &Easing) {
+    fn on_easing_updated(&mut self, id: String, easing: &Easing) -> Redraw {
         if id == "a" {
             self.animation.set_easing(easing.clone());
-            let _ = self.sender.send(UiEvent::RequestRedrawAll);
+            Redraw::Now
+        } else {
+            Redraw::None
         }
     }
 }

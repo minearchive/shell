@@ -57,7 +57,7 @@ use crate::{
     },
     font::FontBook,
     ipc::{events::IPCEvent, WindowManagerIPC},
-    ui::{UiEvent, UserInterface},
+    ui::{Redraw, UiEvent, UserInterface},
 };
 
 mod animation;
@@ -139,8 +139,14 @@ fn main() {
         .insert_source(notification_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg(events) = event {
                 debug!("{events:?}");
-                for screen in &mut shell.screen {
-                    screen.ui.on_notification(events.clone());
+                let mut dirty = Vec::new();
+                for (i, screen) in shell.screen.iter_mut().enumerate() {
+                    if screen.ui.on_notification(events.clone()) != Redraw::None {
+                        dirty.push(i);
+                    }
+                }
+                for i in dirty {
+                    shell.request_redraw(i);
                 }
             }
         })
@@ -151,8 +157,14 @@ fn main() {
     loop_handle
         .insert_source(mpris_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg((ref state, ref ev)) = event {
-                for screen in &mut shell.screen {
-                    screen.ui.on_mpris(state, ev);
+                let mut dirty = Vec::new();
+                for (i, screen) in shell.screen.iter_mut().enumerate() {
+                    if screen.ui.on_mpris(state, ev) != Redraw::None {
+                        dirty.push(i);
+                    }
+                }
+                for i in dirty {
+                    shell.request_redraw(i);
                 }
             }
         })
@@ -163,8 +175,14 @@ fn main() {
     loop_handle
         .insert_source(ipc_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg(ipc_event) = event {
-                for screen in &mut shell.screen {
-                    screen.ui.on_ipc(ipc_event.clone());
+                let mut dirty = Vec::new();
+                for (i, screen) in shell.screen.iter_mut().enumerate() {
+                    if screen.ui.on_ipc(ipc_event.clone()) != Redraw::None {
+                        dirty.push(i);
+                    }
+                }
+                for i in dirty {
+                    shell.request_redraw(i);
                 }
             }
         })
@@ -175,8 +193,14 @@ fn main() {
     loop_handle
         .insert_source(kde_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg(kde_event) = event {
-                for screen in &mut shell.screen {
-                    screen.ui.on_kde_connect_event(&kde_event.clone());
+                let mut dirty = Vec::new();
+                for (i, screen) in shell.screen.iter_mut().enumerate() {
+                    if screen.ui.on_kde_connect_event(&kde_event.clone()) != Redraw::None {
+                        dirty.push(i);
+                    }
+                }
+                for i in dirty {
+                    shell.request_redraw(i);
                 }
             }
         })
@@ -187,8 +211,14 @@ fn main() {
     loop_handle
         .insert_source(warp_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg(status) = event {
-                for screen in &mut shell.screen {
-                    screen.ui.on_warp(&status);
+                let mut dirty = Vec::new();
+                for (i, screen) in shell.screen.iter_mut().enumerate() {
+                    if screen.ui.on_warp(&status) != Redraw::None {
+                        dirty.push(i);
+                    }
+                }
+                for i in dirty {
+                    shell.request_redraw(i);
                 }
             }
         })
@@ -209,10 +239,19 @@ fn main() {
                         }
                     }
                     UiEvent::AnimationUpdated(easings) => {
-                        for screen in &mut shell.screen {
+                        let mut dirty = Vec::new();
+                        for (i, screen) in shell.screen.iter_mut().enumerate() {
+                            let mut redraw = Redraw::None;
                             for (id, easing) in &easings {
-                                screen.ui.on_easing_updated(id.clone(), easing.clone());
+                                redraw = redraw
+                                    .max(screen.ui.on_easing_updated(id.clone(), easing.clone()));
                             }
+                            if redraw != Redraw::None {
+                                dirty.push(i);
+                            }
+                        }
+                        for i in dirty {
+                            shell.request_redraw(i);
                         }
                     }
                 }
@@ -709,7 +748,9 @@ impl Shell {
     // }
 
     pub fn on_cursor(&mut self, _qh: &QueueHandle<Self>, event: &PointerEvent, idx: usize) {
-        self.screen[idx].ui.on_cursor(event);
+        if self.screen[idx].ui.on_cursor(event) != Redraw::None {
+            self.request_redraw(idx);
+        }
     }
 }
 
