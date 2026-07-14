@@ -1,6 +1,5 @@
-//! Generic Material 3 widget toolkit: presentation-only building blocks
-//! (drawing, color scheme, fonts, animation) with no knowledge of the app's
-//! Wayland/D-Bus/IPC wiring.
+//! Generic widget toolkit: presentation-only building blocks
+//! (drawing, color scheme, fonts, animation)
 
 pub mod animation;
 pub mod font;

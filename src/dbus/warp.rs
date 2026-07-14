@@ -84,8 +84,6 @@ impl WarpClient {
         loop {
             tokio::select! {
                 Some(cmd) = cmd_rx.recv() => {
-                    // UpdateState is a re-emit request: skip dedup so the
-                    // requester always gets a status back.
                     let force = cmd == WarpCommand::UpdateState;
                     run_command(cmd).await;
                     emit(&sender, &mut last, query_status().await, force);
@@ -146,7 +144,6 @@ async fn run_command(cmd: WarpCommand) {
     let arg = match cmd {
         WarpCommand::Connect => "connect",
         WarpCommand::Disconnect => "disconnect",
-        // No CLI call; the caller re-queries and emits the status itself.
         WarpCommand::UpdateState => return,
     };
 

@@ -128,9 +128,6 @@ fn main() {
         .unwrap();
 
     let (notification_tx, notification_channel) = channel::channel::<NotificationEvent>();
-    // Bind the handle for the whole lifetime of `main`: dropping it would close
-    // the zbus `Connection`, releasing the `org.freedesktop.Notifications` name
-    // and tearing down the object-server task.
     let _notification_handle =
         NotificationHandle::init(notification_tx).expect("Failed to start dbus session");
     loop_handle
@@ -537,14 +534,6 @@ impl KeyboardHandler for Shell {
         _: &[u32],
         _: &[Keysym],
     ) {
-        // if let Some(find) = self
-        //     .screen
-        //     .iter_mut()
-        //     .find(|s| s.layer.wl_surface() == surface)
-        // {
-        //     info!("Keyboard focus on window with pressed symbol: {keysyms:?}");
-        //     find.keyboard_focus = true;
-        // };
     }
 
     fn leave(
@@ -555,14 +544,6 @@ impl KeyboardHandler for Shell {
         _: &WlSurface,
         _: u32,
     ) {
-        // if let Some(find) = self
-        //     .screen
-        //     .iter_mut()
-        //     .find(|s| s.layer.wl_surface() == surface)
-        // {
-        //     info!("Release keyboard focus on window");
-        //     find.keyboard_focus = false;
-        // };
     }
 
     fn press_key(
@@ -573,7 +554,6 @@ impl KeyboardHandler for Shell {
         _: u32,
         _: smithay_client_toolkit::seat::keyboard::KeyEvent,
     ) {
-        // self.on_key(qh, event, KeyTiming::Press);
     }
 
     fn repeat_key(
@@ -584,7 +564,6 @@ impl KeyboardHandler for Shell {
         _: u32,
         _: smithay_client_toolkit::seat::keyboard::KeyEvent,
     ) {
-        // self.on_key(qh, event, KeyTiming::Repeat);
     }
 
     fn release_key(
@@ -595,7 +574,6 @@ impl KeyboardHandler for Shell {
         _: u32,
         _: smithay_client_toolkit::seat::keyboard::KeyEvent,
     ) {
-        // self.on_key(qh, event, KeyTiming::Release);
     }
 
     fn update_modifiers(
@@ -738,12 +716,6 @@ impl Shell {
         buffer.attach_to(surface).expect("Failed to attach buffer");
         surface.commit();
     }
-
-    // pub fn on_key(&mut self, _qh: &QueueHandle<Self>, event: KeyEvent, timing: KeyTiming) {
-    //     for screen in &mut self.screen {
-    //         screen.ui.on_key(&event, &timing);
-    //     }
-    // }
 
     pub fn on_cursor(&mut self, _qh: &QueueHandle<Self>, event: &PointerEvent, idx: usize) {
         if self.screen[idx].ui.on_cursor(event) != Redraw::None {

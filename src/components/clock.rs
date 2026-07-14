@@ -53,9 +53,6 @@ impl Clock {
         );
         let interval = update_interval as u64;
 
-        // Time is a data source, not a widget animation: the clock thread owns
-        // waking the loop on each tick. Widget-driven repaints go through the
-        // `Redraw` return values instead.
         thread::spawn(move || {
             let mut first = true;
 
