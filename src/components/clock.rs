@@ -9,15 +9,19 @@ use chrono::Local;
 use skia_safe::{utils::text_utils::Align, Canvas, Color4f, Paint};
 use smithay_client_toolkit::seat::pointer::PointerEvent;
 
-use crate::{
+use ui_core::{
     animation::{
         animation::{easing::ease_out_bounce, Animation},
         parser::Easing,
     },
-    config::{animation::AnimationConfig, scheme::ColorTheme},
     font::FontBook,
-    ui::{Component, Redraw, UIState, UiEvent},
+    scheme::ColorTheme,
     util::BoundingBox,
+};
+
+use crate::{
+    config::animation::AnimationConfig,
+    ui::{Component, Redraw, UIState, UiEvent},
 };
 
 pub struct Clock {

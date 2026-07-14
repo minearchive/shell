@@ -4,9 +4,10 @@ use std::io;
 use log::info;
 use serde::{Deserialize, Serialize};
 
+use ui_core::scheme::ColorTheme;
+
 use crate::ui::UiEvent;
 
-use super::scheme::ColorTheme;
 use super::watchable::WatchableConfig;
 
 #[derive(Deserialize, Serialize, Default)]

@@ -1101,6 +1101,7 @@ dependencies = [
  "smithay-client-toolkit",
  "tokio",
  "toml",
+ "ui_core",
  "wayland-client",
  "zbus",
 ]
@@ -1828,6 +1829,15 @@ dependencies = [
  "memoffset",
  "tempfile",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ui_core"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "skia-bindings",
+ "skia-safe",
 ]
 
 [[package]]

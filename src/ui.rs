@@ -11,15 +11,15 @@ use smithay_client_toolkit::seat::{keyboard::Modifiers, pointer::PointerEvent};
 
 use mpris::Event as MprisEvent;
 
+use ui_core::{animation::parser::Easing, font::FontBook, scheme::ColorTheme};
+
 use crate::{
-    animation::parser::Easing,
     components::{clock::Clock, warp::Warp},
-    config::{animation::AnimationConfig, scheme::ColorTheme, theme::Theme},
+    config::{animation::AnimationConfig, theme::Theme},
     dbus::{
         kdeconnect::KDEConnectEvent, mpris::PlayerState, notification::NotificationEvent,
         warp::WarpStatus,
     },
-    font::FontBook,
     ipc::{events::IPCEvent, WindowManagerIPC},
     Commands,
 };

@@ -1,10 +1,10 @@
 use skia_safe::{utils::text_utils::Align, Canvas, Color4f, Paint};
 use tokio::sync::mpsc::UnboundedSender;
 
+use ui_core::{font::FontBook, scheme::ColorTheme};
+
 use crate::{
-    config::scheme::ColorTheme,
     dbus::warp::{WarpCommand, WarpStatus},
-    font::FontBook,
     ui::{Component, Redraw, UIState},
 };
 

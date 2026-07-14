@@ -55,20 +55,18 @@ use crate::{
         notification::{NotificationEvent, NotificationHandle},
         warp::{WarpClient, WarpCommand, WarpStatus},
     },
-    font::FontBook,
     ipc::{events::IPCEvent, WindowManagerIPC},
     ui::{Redraw, UiEvent, UserInterface},
 };
 
-mod animation;
+use ui_core::font::FontBook;
+
 mod components;
 mod config;
 mod dbus;
-mod font;
 mod ipc;
 
 mod ui;
-mod util;
 
 #[allow(unused)]
 #[derive(Clone)]
