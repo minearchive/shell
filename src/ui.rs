@@ -3,6 +3,8 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use macros::boxed;
+
 use calloop::channel::Sender;
 use skia_safe::{Canvas, FontStyle};
 use smithay_client_toolkit::seat::{keyboard::Modifiers, pointer::PointerEvent};
@@ -74,16 +76,16 @@ impl UserInterface {
         theme: Arc<RwLock<Theme>>,
         animation: Arc<RwLock<AnimationConfig>>,
     ) -> Self {
-        let components: Vec<Box<dyn Component>> = vec![
-            Box::new(Clock::new(
+        let components: Vec<Box<dyn Component>> = boxed!(
+            Clock::new(
                 rx.clone(),
                 idx,
                 1000,
                 Arc::clone(&theme),
                 Arc::clone(&animation),
-            )),
-            Box::new(Warp::new(rx.clone(), Arc::clone(&theme), commands.warp)),
-        ];
+            ),
+            Warp::new(rx.clone(), Arc::clone(&theme), commands.warp)
+        );
 
         Self {
             components,
