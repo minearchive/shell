@@ -14,6 +14,7 @@ edition = "2021"
 skia-safe = "0.97.2"
 skia-bindings = "0.97.2"
 serde = { version = "1.0.228", features = ["derive"] }
+toml = "1.1.2"
 # internal crates
 macros = { path = "./macros" }
 ui_core = { path = "./ui_core" }
