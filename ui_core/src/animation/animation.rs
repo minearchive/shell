@@ -84,7 +84,6 @@ impl Animation<f32> {
     }
 }
 
-#[allow(unused)]
 pub mod easing {
     use std::f32::consts::PI;
 

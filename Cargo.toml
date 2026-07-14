@@ -1,7 +1,29 @@
+[workspace]
+members = [
+    "macros",
+    "ui_core"
+]
+
+# Shared package metadata; members opt in with `edition.workspace = true`.
+[workspace.package]
+edition = "2021"
+
+# Shared dependency versions for every workspace member. Members opt in with
+# `<name>.workspace = true` and may add extra features locally.
+[workspace.dependencies]
+skia-safe = "0.97.2"
+skia-bindings = "0.97.2"
+serde = { version = "1.0.228", features = ["derive"] }
+toml = "1.1.2"
+# internal crates
+macros = { path = "./macros" }
+ui_core = { path = "./ui_core" }
+m3_widget = { path = "./m3_widget" }
+
 [package]
 name = "my_shell"
-version = "0.1.0"
-edition = "2021"
+version = "0.0.1"
+edition.workspace = true
 
 [dependencies]
 calloop = "0.14"
@@ -13,14 +35,16 @@ log = "0.4.32"
 mpris = "2.1.0"
 niri-ipc = "26.4.0"
 notify = "8.2.0"
-serde = "1.0.228"
+serde.workspace = true
 serde_json = "1.0"
-skia-bindings = "0.97.2"
-skia-safe = "0.97.2"
+skia-bindings.workspace = true
+skia-safe.workspace = true
 smithay-client-toolkit = "0.20.0"
 tokio = { version = "1.52.3", features=["rt","macros","sync","time"]}
 wayland-client = "0.31.14"
 zbus = { version = "5.16.0", default-features = false, features = ["tokio"] }
-toml = "1.1.2"
+toml.workspace = true
 futures-util = "0.3.32"
 notify-rust = "4.18.0"
+macros.workspace = true
+ui_core.workspace = true

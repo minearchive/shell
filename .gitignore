@@ -18,4 +18,4 @@ devenv.local.yaml
 .claude
 .agents
 
-example/config.toml
+example/theme.toml

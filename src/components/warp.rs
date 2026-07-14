@@ -1,43 +1,35 @@
-use std::sync::{Arc, RwLock};
-
-use calloop::channel::Sender;
-use skia_safe::{utils::text_utils::Align, Color4f, Paint};
+use skia_safe::{utils::text_utils::Align, Canvas, Color4f, Paint};
 use tokio::sync::mpsc::UnboundedSender;
 
+use ui_core::{font::FontBook, scheme::ColorTheme};
+
 use crate::{
-    config::config::Configuration,
-    dbus::warp::WarpCommand,
-    ui::{Component, UiEvent},
+    dbus::warp::{WarpCommand, WarpStatus},
+    ui::{Component, Redraw, UIState},
 };
 
-pub struct Warp {
-    sender: Sender<UiEvent>,
-    config: Arc<RwLock<Configuration>>,
-}
+pub struct Warp;
 
 impl Warp {
-    pub fn new(
-        sender: Sender<UiEvent>,
-        config: Arc<RwLock<Configuration>>,
-        cmd: UnboundedSender<WarpCommand>,
-    ) -> Self {
+    pub fn new(cmd: UnboundedSender<WarpCommand>) -> Self {
         let _ = cmd.send(WarpCommand::UpdateState);
 
-        Self { sender, config }
+        Self
     }
 }
 
 impl Component for Warp {
     fn draw(
         &mut self,
-        canvas: &skia_safe::Canvas,
-        state: &crate::ui::UIState,
-        fonts: &crate::font::FontBook,
-    ) {
-        let Some(status) = &state.warp else { return };
+        canvas: &Canvas,
+        state: &UIState,
+        fonts: &FontBook,
+        theme: &ColorTheme,
+    ) -> Redraw {
+        let Some(status) = &state.warp else {
+            return Redraw::None;
+        };
 
-        let cfg = self.config.read().unwrap();
-        let theme = cfg.theme();
         let color = if status.is_connected() {
             theme.primary
         } else {
@@ -57,9 +49,11 @@ impl Component for Warp {
             &paint,
             Align::Left,
         );
+
+        Redraw::None
     }
 
-    fn on_warp(&mut self, _status: &crate::dbus::warp::WarpStatus) {
-        let _ = self.sender.send(UiEvent::RequestRedrawAll);
+    fn on_warp(&mut self, _status: &WarpStatus) -> Redraw {
+        Redraw::Now
     }
 }

@@ -998,6 +998,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
+name = "m3_widget"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "skia-bindings",
+ "skia-safe",
+ "ui_core",
+]
+
+[[package]]
 name = "mac-notification-sys"
 version = "0.6.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1010,6 +1020,10 @@ dependencies = [
  "time",
  "uuid",
 ]
+
+[[package]]
+name = "macros"
+version = "0.0.1"
 
 [[package]]
 name = "memchr"
@@ -1076,7 +1090,7 @@ dependencies = [
 
 [[package]]
 name = "my_shell"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "calloop",
  "calloop-wayland-source",
@@ -1085,6 +1099,7 @@ dependencies = [
  "futures-util",
  "hyprland",
  "log",
+ "macros",
  "mpris",
  "niri-ipc",
  "notify",
@@ -1096,6 +1111,7 @@ dependencies = [
  "smithay-client-toolkit",
  "tokio",
  "toml",
+ "ui_core",
  "wayland-client",
  "zbus",
 ]
@@ -1823,6 +1839,15 @@ dependencies = [
  "memoffset",
  "tempfile",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ui_core"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "skia-bindings",
+ "skia-safe",
 ]
 
 [[package]]

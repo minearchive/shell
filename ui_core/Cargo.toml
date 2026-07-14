@@ -1,0 +1,9 @@
+[package]
+name = "ui_core"
+version = "0.0.1"
+edition.workspace = true
+
+[dependencies]
+serde.workspace = true
+skia-bindings.workspace = true
+skia-safe.workspace = true

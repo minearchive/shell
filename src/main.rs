@@ -48,27 +48,25 @@ use wayland_client::{
 use mpris::Event as MprisEvent;
 
 use crate::{
-    config::{animation::AnimationConfig, config::Configuration, WatchableConfig},
+    config::{animation::AnimationConfig, config::Configuration, theme::Theme, WatchableConfig},
     dbus::{
         kdeconnect::{KDEConnectClient, KDEConnectCommand, KDEConnectEvent},
         mpris::{MprisClient, PlayerState},
         notification::{NotificationEvent, NotificationHandle},
         warp::{WarpClient, WarpCommand, WarpStatus},
     },
-    font::FontBook,
     ipc::{events::IPCEvent, WindowManagerIPC},
-    ui::{UiEvent, UserInterface},
+    ui::{Redraw, UiEvent, UserInterface},
 };
 
-mod animation;
+use ui_core::font::FontBook;
+
 mod components;
 mod config;
 mod dbus;
-mod font;
 mod ipc;
 
 mod ui;
-mod util;
 
 #[allow(unused)]
 #[derive(Clone)]
@@ -105,7 +103,8 @@ pub struct Shell {
     registry_state: RegistryState,
     ipc: WindowManagerIPC,
     font: FontBook,
-    config: Arc<RwLock<Configuration>>,
+    _config: Arc<RwLock<Configuration>>,
+    theme: Arc<RwLock<Theme>>,
     animation_config: Arc<RwLock<AnimationConfig>>,
     ui_tx: Sender<UiEvent>,
     commands: Commands,
@@ -129,17 +128,20 @@ fn main() {
         .unwrap();
 
     let (notification_tx, notification_channel) = channel::channel::<NotificationEvent>();
-    // Bind the handle for the whole lifetime of `main`: dropping it would close
-    // the zbus `Connection`, releasing the `org.freedesktop.Notifications` name
-    // and tearing down the object-server task.
     let _notification_handle =
         NotificationHandle::init(notification_tx).expect("Failed to start dbus session");
     loop_handle
         .insert_source(notification_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg(events) = event {
                 debug!("{events:?}");
-                for screen in &mut shell.screen {
-                    screen.ui.on_notification(events.clone());
+                let mut dirty = Vec::new();
+                for (i, screen) in shell.screen.iter_mut().enumerate() {
+                    if screen.ui.on_notification(events.clone()) != Redraw::None {
+                        dirty.push(i);
+                    }
+                }
+                for i in dirty {
+                    shell.request_redraw(i);
                 }
             }
         })
@@ -150,8 +152,14 @@ fn main() {
     loop_handle
         .insert_source(mpris_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg((ref state, ref ev)) = event {
-                for screen in &mut shell.screen {
-                    screen.ui.on_mpris(state, ev);
+                let mut dirty = Vec::new();
+                for (i, screen) in shell.screen.iter_mut().enumerate() {
+                    if screen.ui.on_mpris(state, ev) != Redraw::None {
+                        dirty.push(i);
+                    }
+                }
+                for i in dirty {
+                    shell.request_redraw(i);
                 }
             }
         })
@@ -162,8 +170,14 @@ fn main() {
     loop_handle
         .insert_source(ipc_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg(ipc_event) = event {
-                for screen in &mut shell.screen {
-                    screen.ui.on_ipc(ipc_event.clone());
+                let mut dirty = Vec::new();
+                for (i, screen) in shell.screen.iter_mut().enumerate() {
+                    if screen.ui.on_ipc(ipc_event.clone()) != Redraw::None {
+                        dirty.push(i);
+                    }
+                }
+                for i in dirty {
+                    shell.request_redraw(i);
                 }
             }
         })
@@ -174,8 +188,14 @@ fn main() {
     loop_handle
         .insert_source(kde_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg(kde_event) = event {
-                for screen in &mut shell.screen {
-                    screen.ui.on_kde_connect_event(&kde_event.clone());
+                let mut dirty = Vec::new();
+                for (i, screen) in shell.screen.iter_mut().enumerate() {
+                    if screen.ui.on_kde_connect_event(&kde_event.clone()) != Redraw::None {
+                        dirty.push(i);
+                    }
+                }
+                for i in dirty {
+                    shell.request_redraw(i);
                 }
             }
         })
@@ -186,8 +206,14 @@ fn main() {
     loop_handle
         .insert_source(warp_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg(status) = event {
-                for screen in &mut shell.screen {
-                    screen.ui.on_warp(&status);
+                let mut dirty = Vec::new();
+                for (i, screen) in shell.screen.iter_mut().enumerate() {
+                    if screen.ui.on_warp(&status) != Redraw::None {
+                        dirty.push(i);
+                    }
+                }
+                for i in dirty {
+                    shell.request_redraw(i);
                 }
             }
         })
@@ -208,10 +234,19 @@ fn main() {
                         }
                     }
                     UiEvent::AnimationUpdated(easings) => {
-                        for screen in &mut shell.screen {
+                        let mut dirty = Vec::new();
+                        for (i, screen) in shell.screen.iter_mut().enumerate() {
+                            let mut redraw = Redraw::None;
                             for (id, easing) in &easings {
-                                screen.ui.on_easing_updated(id.clone(), easing.clone());
+                                redraw = redraw
+                                    .max(screen.ui.on_easing_updated(id.clone(), easing.clone()));
                             }
+                            if redraw != Redraw::None {
+                                dirty.push(i);
+                            }
+                        }
+                        for i in dirty {
+                            shell.request_redraw(i);
                         }
                     }
                 }
@@ -230,6 +265,11 @@ fn main() {
 
     let config = Configuration::load_and_watch(
         "/home/minearchive/project/gtk_shell/example/config.toml",
+        ui_tx.clone(),
+    );
+
+    let theme = Theme::load_and_watch(
+        "/home/minearchive/project/gtk_shell/example/theme.toml",
         ui_tx.clone(),
     );
 
@@ -262,7 +302,8 @@ fn main() {
             );
             book
         },
-        config,
+        _config: config,
+        theme,
         animation_config,
         commands: Commands {
             kdeconnect: kde_command_sender,
@@ -370,7 +411,7 @@ impl OutputHandler for Shell {
                 c,
                 &mut self.ipc,
                 self.commands.clone(),
-                Arc::clone(&self.config),
+                Arc::clone(&self.theme),
                 Arc::clone(&self.animation_config),
             ),
             output,
@@ -493,14 +534,6 @@ impl KeyboardHandler for Shell {
         _: &[u32],
         _: &[Keysym],
     ) {
-        // if let Some(find) = self
-        //     .screen
-        //     .iter_mut()
-        //     .find(|s| s.layer.wl_surface() == surface)
-        // {
-        //     info!("Keyboard focus on window with pressed symbol: {keysyms:?}");
-        //     find.keyboard_focus = true;
-        // };
     }
 
     fn leave(
@@ -511,14 +544,6 @@ impl KeyboardHandler for Shell {
         _: &WlSurface,
         _: u32,
     ) {
-        // if let Some(find) = self
-        //     .screen
-        //     .iter_mut()
-        //     .find(|s| s.layer.wl_surface() == surface)
-        // {
-        //     info!("Release keyboard focus on window");
-        //     find.keyboard_focus = false;
-        // };
     }
 
     fn press_key(
@@ -529,7 +554,6 @@ impl KeyboardHandler for Shell {
         _: u32,
         _: smithay_client_toolkit::seat::keyboard::KeyEvent,
     ) {
-        // self.on_key(qh, event, KeyTiming::Press);
     }
 
     fn repeat_key(
@@ -540,7 +564,6 @@ impl KeyboardHandler for Shell {
         _: u32,
         _: smithay_client_toolkit::seat::keyboard::KeyEvent,
     ) {
-        // self.on_key(qh, event, KeyTiming::Repeat);
     }
 
     fn release_key(
@@ -551,7 +574,6 @@ impl KeyboardHandler for Shell {
         _: u32,
         _: smithay_client_toolkit::seat::keyboard::KeyEvent,
     ) {
-        // self.on_key(qh, event, KeyTiming::Release);
     }
 
     fn update_modifiers(
@@ -695,14 +717,10 @@ impl Shell {
         surface.commit();
     }
 
-    // pub fn on_key(&mut self, _qh: &QueueHandle<Self>, event: KeyEvent, timing: KeyTiming) {
-    //     for screen in &mut self.screen {
-    //         screen.ui.on_key(&event, &timing);
-    //     }
-    // }
-
     pub fn on_cursor(&mut self, _qh: &QueueHandle<Self>, event: &PointerEvent, idx: usize) {
-        self.screen[idx].ui.on_cursor(event);
+        if self.screen[idx].ui.on_cursor(event) != Redraw::None {
+            self.request_redraw(idx);
+        }
     }
 }
 

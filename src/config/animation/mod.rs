@@ -6,7 +6,8 @@ use std::io;
 
 use log::warn;
 
-use crate::animation::parser::{css_to_easing, Easing};
+use ui_core::animation::parser::{css_to_easing, Easing};
+
 use crate::ui::UiEvent;
 
 use self::easings::RawAnimationConfig;
