@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 use std::rc::Rc;
 
 use serde::Deserialize;
-use skia_safe::{surfaces, Color4f, Contains, ImageInfo, Paint, Point, RRect, Rect};
+use skia_safe::{surfaces, Color4f, ImageInfo, Paint, Point};
 use softbuffer::{Context, Surface};
 use ui_core::font::FontBook;
 use ui_core::pointer::{self, AxisScroll, PointerEvent, PointerEventKind};
@@ -13,7 +13,7 @@ use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
-use m3_widget::Widget;
+use m3_widget::{Button, ButtonSize, ButtonVariant, Widget};
 
 fn button_code(button: MouseButton) -> Option<u32> {
     match button {
@@ -64,67 +64,6 @@ fn load_theme(path: &str) -> ColorTheme {
     }
 }
 
-// ---- demo widget ----
-
-#[derive(Default)]
-struct SwatchWidget {
-    active: bool,
-}
-
-impl SwatchWidget {
-    const CARD: Rect = Rect {
-        left: 24.0,
-        top: 80.0,
-        right: 24.0 + 300.0,
-        bottom: 80.0 + 120.0,
-    };
-}
-
-impl Widget for SwatchWidget {
-    fn on_pointer(&mut self, event: &PointerEvent) -> bool {
-        if event.is_press(pointer::button::LEFT)
-            && Self::CARD.contains(Point::new(event.x() as f32, event.y() as f32))
-        {
-            self.active = !self.active;
-            return true;
-        }
-        false
-    }
-
-    fn draw(&mut self, canvas: &skia_safe::Canvas, theme: &ColorTheme, fonts: &FontBook) {
-        let rrect = RRect::new_rect_xy(Self::CARD, 12.0, 12.0);
-
-        let bg = if self.active {
-            theme.primary
-        } else {
-            theme.primary_container
-        };
-        let mut fill = Paint::default();
-        fill.set_color4f(Color4f::from(bg), None);
-        fill.set_anti_alias(true);
-        canvas.draw_rrect(rrect, &fill);
-
-        // outline stroke
-        let mut stroke = Paint::default();
-        stroke.set_color4f(Color4f::from(theme.outline), None);
-        stroke.set_stroke(true);
-        stroke.set_stroke_width(1.5);
-        stroke.set_anti_alias(true);
-        canvas.draw_rrect(rrect, &stroke);
-
-        let on_bg = if self.active {
-            theme.on_primary
-        } else {
-            theme.on_primary_container
-        };
-        let mut label = Paint::default();
-        label.set_color4f(Color4f::from(on_bg), None);
-        let font = fonts.sized("noto_sans", 16.0);
-        canvas.draw_str("SwatchWidget", Point::new(40.0, 140.0), &font, &label);
-        canvas.draw_str("テーマ確認カード", Point::new(40.0, 162.0), &font, &label);
-    }
-}
-
 // ---- winit app ----
 
 struct App {
@@ -136,12 +75,81 @@ struct App {
     cursor: pointer::Point,
 }
 
+/// Top of each gallery row. The section captions are drawn just above these,
+/// so keep the two in step.
+const VARIANTS: f32 = 100.0;
+const SIZES: f32 = 180.0;
+const DISABLED: f32 = 280.0;
+
+/// Baseline offset from a row's top to its caption.
+const CAPTION_OFFSET: f32 = 8.0;
+
+/// One button per variant, then one per size, then the disabled treatments.
+fn button_gallery() -> Vec<Box<dyn Widget>> {
+    let variants = [
+        ("Filled", ButtonVariant::Filled, 24.0, 100.0),
+        ("Tonal", ButtonVariant::FilledTonal, 136.0, 100.0),
+        ("Elevated", ButtonVariant::Elevated, 248.0, 110.0),
+        ("Outlined", ButtonVariant::Outlined, 370.0, 110.0),
+        ("Text", ButtonVariant::Text, 492.0, 90.0),
+    ];
+
+    let sizes = [
+        ("XS", ButtonSize::ExtraSmall, 24.0, 90.0),
+        ("S", ButtonSize::Small, 126.0, 90.0),
+        ("M", ButtonSize::Medium, 228.0, 100.0),
+        ("L", ButtonSize::Large, 340.0, 110.0),
+        ("XL", ButtonSize::ExtraLarge, 462.0, 120.0),
+    ];
+
+    let disabled = [
+        ("Filled", ButtonVariant::Filled, 24.0, 100.0),
+        ("Tonal", ButtonVariant::FilledTonal, 136.0, 100.0),
+        ("Outlined", ButtonVariant::Outlined, 248.0, 110.0),
+        ("Text", ButtonVariant::Text, 370.0, 90.0),
+    ];
+
+    let mut widgets: Vec<Box<dyn Widget>> = Vec::new();
+
+    for (label, variant, x, width) in variants {
+        widgets.push(Box::new(
+            Button::new(label)
+                .variant(variant)
+                .position(x, VARIANTS)
+                .width(width)
+                .on_click(move || println!("clicked: {label}")),
+        ));
+    }
+
+    for (label, size, x, width) in sizes {
+        widgets.push(Box::new(
+            Button::new(label)
+                .size(size)
+                .position(x, SIZES)
+                .width(width)
+                .on_click(move || println!("clicked: size {label}")),
+        ));
+    }
+
+    for (label, variant, x, width) in disabled {
+        widgets.push(Box::new(
+            Button::new(label)
+                .variant(variant)
+                .position(x, DISABLED)
+                .width(width)
+                .enabled(false),
+        ));
+    }
+
+    widgets
+}
+
 impl App {
     fn new(theme: ColorTheme, fonts: FontBook) -> Self {
         Self {
             theme,
             fonts,
-            widgets: vec![Box::new(SwatchWidget::default())],
+            widgets: button_gallery(),
             window: None,
             surface: None,
             cursor: (0.0, 0.0),
@@ -282,6 +290,20 @@ impl ApplicationHandler for App {
                     &font,
                     &text_paint,
                 );
+
+                let caption = self.fonts.sized("noto_sans", 13.0);
+                for (label, row) in [
+                    ("Variants", VARIANTS),
+                    ("Sizes", SIZES),
+                    ("Disabled", DISABLED),
+                ] {
+                    canvas.draw_str(
+                        label,
+                        Point::new(24.0, row - CAPTION_OFFSET),
+                        &caption,
+                        &text_paint,
+                    );
+                }
 
                 // draw widgets
                 for widget in &mut self.widgets {

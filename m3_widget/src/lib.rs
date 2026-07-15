@@ -1,5 +1,9 @@
 //! Material 3 widget crate — presentation-only, built on ui_core.
 
+pub mod button;
+
+pub use button::{Button, ButtonSize, ButtonVariant};
+
 use ui_core::pointer::PointerEvent;
 
 pub trait Widget {

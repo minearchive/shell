@@ -10,6 +10,17 @@ pub struct Color {
     pub a: f32,
 }
 
+impl Color {
+    /// Scales alpha, keeping the channels intact. State layers and disabled
+    /// treatments are defined this way.
+    pub fn with_alpha(self, alpha: f32) -> Self {
+        Self {
+            a: self.a * alpha,
+            ..self
+        }
+    }
+}
+
 impl PartialEq for Color {
     fn eq(&self, other: &Self) -> bool {
         self.r == other.r && self.g == other.g && self.b == other.b && self.a == other.a
@@ -94,5 +105,24 @@ mod tests {
     fn test_color_default_is_transparent() {
         let c = Color::default();
         assert_eq!(c.a, 0.0);
+    }
+
+    #[test]
+    fn test_with_alpha_scales_alpha_and_keeps_channels() {
+        let c = Color::try_from("#6750A4".to_string())
+            .unwrap()
+            .with_alpha(0.12);
+        assert!((c.a - 0.12).abs() < 1e-4);
+        assert!((c.r - 103.0 / 255.0).abs() < 1e-4);
+        assert!((c.g - 80.0 / 255.0).abs() < 1e-4);
+        assert!((c.b - 164.0 / 255.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_with_alpha_is_relative_to_existing_alpha() {
+        let c = Color::try_from("#6750A480".to_string())
+            .unwrap()
+            .with_alpha(0.5);
+        assert!((c.a - 128.0 / 255.0 * 0.5).abs() < 1e-4);
     }
 }
