@@ -1,5 +1,7 @@
 [workspace]
 members = [
+    "m3_test",
+    "m3_widget",
     "macros",
     "ui_core"
 ]
@@ -14,11 +16,14 @@ edition = "2021"
 skia-safe = "0.97.2"
 skia-bindings = "0.97.2"
 serde = { version = "1.0.228", features = ["derive"] }
+winit = "0.30"
+softbuffer = "0.4"
 toml = "1.1.2"
 # internal crates
 macros = { path = "./macros" }
 ui_core = { path = "./ui_core" }
 m3_widget = { path = "./m3_widget" }
+m3_test = { path = "./m3_test" }
 
 [package]
 name = "my_shell"
