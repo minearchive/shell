@@ -36,3 +36,9 @@
   - [ ] Textbox
   - [ ] DatePicker
   - [ ] Chips
+
+# Setting GUI
+- [ ] Itegrate with main
+  - [ ] realtime mapping with config
+  - [ ] event separate from bar
+  - [ ]

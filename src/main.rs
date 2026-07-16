@@ -98,7 +98,6 @@ pub struct Shell {
     keyboard: Option<WlKeyboard>,
     pointer: Option<WlPointer>,
     screen: Vec<Screen>,
-    shift: Option<u32>,
     shm: Shm,
     registry_state: RegistryState,
     ipc: WindowManagerIPC,
@@ -289,7 +288,6 @@ fn main() {
         keyboard: None,
         pointer: None,
         screen: Vec::new(),
-        shift: None,
         shm,
         registry_state: RegistryState::new(&globals),
         ipc,
@@ -640,7 +638,6 @@ impl PointerHandler for Shell {
                     Motion { .. } => {}
                     Press { button, .. } => {
                         info!("Press {:x} @ {:?}", button, event.position);
-                        self.shift = self.shift.xor(Some(0));
                     }
                     Release { button, .. } => {
                         info!("Release {:x} @ {:?}", button, event.position);
