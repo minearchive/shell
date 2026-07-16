@@ -1,8 +1,10 @@
 //! Material 3 widget crate — presentation-only, built on ui_core.
 
 pub mod button;
+pub mod slider;
 
 pub use button::{Button, ButtonSize, ButtonVariant};
+pub use slider::{Slider, SliderSize};
 
 use ui_core::pointer::PointerEvent;
 

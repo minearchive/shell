@@ -149,12 +149,21 @@ impl Button {
     }
 
     pub fn on_click(mut self, callback: impl FnMut() + 'static) -> Self {
-        self.on_click = Some(Box::new(callback));
+        self.set_on_click(callback);
         self
     }
 
     pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
+    }
+
+    /// Replaces the click callback, dropping any previous one.
+    pub fn set_on_click(&mut self, callback: impl FnMut() + 'static) {
+        self.on_click = Some(Box::new(callback));
+    }
+
+    pub fn clear_on_click(&mut self) {
+        self.on_click = None;
     }
 
     pub fn set_label(&mut self, label: impl Into<String>) {

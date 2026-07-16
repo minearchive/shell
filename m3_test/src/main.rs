@@ -13,7 +13,7 @@ use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
-use m3_widget::{Button, ButtonSize, ButtonVariant, Widget};
+use m3_widget::{Button, ButtonSize, ButtonVariant, Slider, SliderSize, Widget};
 
 fn button_code(button: MouseButton) -> Option<u32> {
     match button {
@@ -80,6 +80,8 @@ struct App {
 const VARIANTS: f32 = 100.0;
 const SIZES: f32 = 180.0;
 const DISABLED: f32 = 280.0;
+const SLIDERS: f32 = 380.0;
+const SLIDER_SIZES: f32 = 450.0;
 
 /// Baseline offset from a row's top to its caption.
 const CAPTION_OFFSET: f32 = 8.0;
@@ -144,12 +146,60 @@ fn button_gallery() -> Vec<Box<dyn Widget>> {
     widgets
 }
 
+/// Continuous, discrete and disabled sliders, then one per size.
+fn slider_gallery() -> Vec<Box<dyn Widget>> {
+    let mut widgets: Vec<Box<dyn Widget>> = Vec::new();
+
+    widgets.push(Box::new(
+        Slider::new(0.0, 100.0, 40.0)
+            .position(24.0, SLIDERS)
+            .width(200.0)
+            .labeled(true)
+            .on_change(|v| println!("continuous: {v:.1}")),
+    ));
+    widgets.push(Box::new(
+        Slider::new(0.0, 10.0, 3.0)
+            .step(1.0)
+            .position(256.0, SLIDERS)
+            .width(200.0)
+            .labeled(true)
+            .on_change(|v| println!("discrete: {v}")),
+    ));
+    widgets.push(Box::new(
+        Slider::new(0.0, 100.0, 60.0)
+            .position(488.0, SLIDERS)
+            .width(200.0)
+            .enabled(false),
+    ));
+
+    let sizes = [
+        (SliderSize::ExtraSmall, 24.0),
+        (SliderSize::Small, 24.0),
+        (SliderSize::Medium, 24.0),
+    ];
+    let mut y = SLIDER_SIZES;
+    for (size, x) in sizes {
+        widgets.push(Box::new(
+            Slider::new(0.0, 100.0, 50.0)
+                .size(size)
+                .position(x, y)
+                .width(280.0),
+        ));
+        y += size.handle_height() + 8.0;
+    }
+
+    widgets
+}
+
 impl App {
     fn new(theme: ColorTheme, fonts: FontBook) -> Self {
         Self {
             theme,
             fonts,
-            widgets: button_gallery(),
+            widgets: button_gallery()
+                .into_iter()
+                .chain(slider_gallery())
+                .collect(),
             window: None,
             surface: None,
             cursor: (0.0, 0.0),
@@ -177,7 +227,7 @@ impl ApplicationHandler for App {
                 .create_window(
                     Window::default_attributes()
                         .with_title("m3_test")
-                        .with_inner_size(LogicalSize::new(800.0_f64, 600.0_f64)),
+                        .with_inner_size(LogicalSize::new(800.0_f64, 720.0_f64)),
                 )
                 .expect("failed to create window"),
         );
@@ -296,6 +346,8 @@ impl ApplicationHandler for App {
                     ("Variants", VARIANTS),
                     ("Sizes", SIZES),
                     ("Disabled", DISABLED),
+                    ("Sliders", SLIDERS),
+                    ("Slider sizes", SLIDER_SIZES),
                 ] {
                     canvas.draw_str(
                         label,
