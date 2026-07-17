@@ -186,11 +186,6 @@ impl Slider {
         self.value
     }
 
-    /// The widget rect: as tall as the handle, so it spans the track overhang.
-    pub fn bounds(&self) -> Rect {
-        self.bounds
-    }
-
     fn quantize(&self, value: f32) -> f32 {
         let value = value.clamp(self.min, self.max);
         match self.step {
@@ -528,5 +523,10 @@ impl Widget for Slider {
             }
             _ => false,
         }
+    }
+
+    /// The widget rect: as tall as the handle, so it spans the track overhang.
+    fn bounds(&self) -> Rect {
+        self.bounds
     }
 }

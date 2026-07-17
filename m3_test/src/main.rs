@@ -2,24 +2,45 @@ use std::num::NonZeroU32;
 use std::rc::Rc;
 
 use serde::Deserialize;
-use skia_safe::{surfaces, Color4f, ImageInfo, Paint, Point};
+use skia_safe::{surfaces, Color4f, Contains, ImageInfo, Paint, Point};
 use softbuffer::{Context, Surface};
 use ui_core::font::FontBook;
+use ui_core::keyboard::{self, KeyboardEvent, KeyboardEventKind};
 use ui_core::pointer::{self, AxisScroll, PointerEvent, PointerEventKind};
 use ui_core::scheme::ColorTheme;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
-use m3_widget::{Button, ButtonSize, ButtonVariant, Slider, SliderSize, Widget};
+use m3_widget::{Button, ButtonSize, ButtonVariant, Slider, SliderSize, TextField, Widget};
 
 fn button_code(button: MouseButton) -> Option<u32> {
     match button {
         MouseButton::Left => Some(pointer::button::LEFT),
         MouseButton::Right => Some(pointer::button::RIGHT),
         MouseButton::Middle => Some(pointer::button::MIDDLE),
+        _ => None,
+    }
+}
+
+/// Editing keys only — everything else (letters, digits, ...) arrives as text
+/// via `KeyEvent::text` and is routed through `Commit` instead.
+fn keysym_from_named(key: &NamedKey) -> Option<u32> {
+    match key {
+        NamedKey::Backspace => Some(keyboard::key::BACKSPACE),
+        NamedKey::Tab => Some(keyboard::key::TAB),
+        NamedKey::Enter => Some(keyboard::key::RETURN),
+        NamedKey::Escape => Some(keyboard::key::ESCAPE),
+        NamedKey::Home => Some(keyboard::key::HOME),
+        NamedKey::ArrowLeft => Some(keyboard::key::LEFT),
+        NamedKey::ArrowUp => Some(keyboard::key::UP),
+        NamedKey::ArrowRight => Some(keyboard::key::RIGHT),
+        NamedKey::ArrowDown => Some(keyboard::key::DOWN),
+        NamedKey::End => Some(keyboard::key::END),
+        NamedKey::Delete => Some(keyboard::key::DELETE),
         _ => None,
     }
 }
@@ -73,6 +94,8 @@ struct App {
     window: Option<Rc<Window>>,
     surface: Option<Surface<Rc<Window>, Rc<Window>>>,
     cursor: pointer::Point,
+    modifiers: keyboard::Modifiers,
+    focus: Option<usize>,
 }
 
 /// Top of each gallery row. The section captions are drawn just above these,
@@ -82,6 +105,7 @@ const SIZES: f32 = 180.0;
 const DISABLED: f32 = 280.0;
 const SLIDERS: f32 = 380.0;
 const SLIDER_SIZES: f32 = 450.0;
+const TEXT_FIELDS: f32 = 620.0;
 
 /// Baseline offset from a row's top to its caption.
 const CAPTION_OFFSET: f32 = 8.0;
@@ -191,6 +215,32 @@ fn slider_gallery() -> Vec<Box<dyn Widget>> {
     widgets
 }
 
+/// One plain field, one pre-filled field, one disabled field.
+fn text_field_gallery() -> Vec<Box<dyn Widget>> {
+    vec![
+        Box::new(
+            TextField::new()
+                .position(24.0, TEXT_FIELDS)
+                .width(220.0)
+                .on_change(|text| println!("text: {text}")),
+        ),
+        Box::new(
+            TextField::new()
+                .position(268.0, TEXT_FIELDS)
+                .width(220.0)
+                .text("フォント入力テスト")
+                .on_change(|text| println!("text: {text}")),
+        ),
+        Box::new(
+            TextField::new()
+                .position(512.0, TEXT_FIELDS)
+                .width(220.0)
+                .text("disabled")
+                .enabled(false),
+        ),
+    ]
+}
+
 impl App {
     fn new(theme: ColorTheme, fonts: FontBook) -> Self {
         Self {
@@ -199,10 +249,13 @@ impl App {
             widgets: button_gallery()
                 .into_iter()
                 .chain(slider_gallery())
+                .chain(text_field_gallery())
                 .collect(),
             window: None,
             surface: None,
             cursor: (0.0, 0.0),
+            modifiers: keyboard::Modifiers::default(),
+            focus: None,
         }
     }
 
@@ -212,7 +265,92 @@ impl App {
         for widget in &mut self.widgets {
             redraw |= widget.on_pointer(&event);
         }
+        if let PointerEventKind::Press { button } = kind {
+            if button == pointer::button::LEFT {
+                redraw |= self.update_focus_from_click();
+            }
+        }
         if redraw {
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+        }
+    }
+
+    /// Topmost (last-drawn) focusable widget under the cursor gets focus;
+    /// clicking empty space or a non-focusable widget clears it.
+    fn update_focus_from_click(&mut self) -> bool {
+        let point = Point::new(self.cursor.0 as f32, self.cursor.1 as f32);
+        let hit = self
+            .widgets
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, w)| w.focusable() && w.bounds().contains(point))
+            .map(|(i, _)| i);
+        self.set_focus(hit)
+    }
+
+    fn set_focus(&mut self, new_focus: Option<usize>) -> bool {
+        if new_focus == self.focus {
+            return false;
+        }
+        if let Some(old) = self.focus.and_then(|i| self.widgets.get_mut(i)) {
+            old.set_focused(false);
+            old.on_keyboard(&KeyboardEvent::new(KeyboardEventKind::Blur, self.modifiers));
+        }
+        self.focus = new_focus;
+        if let Some(new) = self.focus.and_then(|i| self.widgets.get_mut(i)) {
+            new.set_focused(true);
+            new.on_keyboard(&KeyboardEvent::new(KeyboardEventKind::Focus, self.modifiers));
+        }
+        true
+    }
+
+    /// Delivers only to the focused widget — keyboard events have no
+    /// coordinates, so broadcasting would type into every field at once.
+    fn dispatch_keyboard(&mut self, kind: KeyboardEventKind) {
+        let Some(idx) = self.focus else {
+            return;
+        };
+        let event = KeyboardEvent::new(kind, self.modifiers);
+        let redraw = self
+            .widgets
+            .get_mut(idx)
+            .map(|w| w.on_keyboard(&event))
+            .unwrap_or(false);
+        if redraw {
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+        }
+    }
+
+    /// Tab / Shift+Tab move focus to the next/previous focusable widget,
+    /// wrapping around. Does nothing if there are no focusable widgets.
+    fn cycle_focus(&mut self, backward: bool) {
+        let count = self.widgets.len();
+        if count == 0 {
+            return;
+        }
+        let start = self.focus.map(|i| i as isize).unwrap_or(-1);
+        let mut i = start;
+        for _ in 0..count {
+            i = if backward {
+                (i - 1).rem_euclid(count as isize)
+            } else {
+                (i + 1).rem_euclid(count as isize)
+            };
+            if self.widgets[i as usize].focusable() {
+                self.set_focus(Some(i as usize));
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+                return;
+            }
+        }
+        // No focusable widget found; clear focus if one was set.
+        if self.set_focus(None) {
             if let Some(w) = &self.window {
                 w.request_redraw();
             }
@@ -296,6 +434,43 @@ impl ApplicationHandler for App {
                     vertical,
                 });
             }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                let state = modifiers.state();
+                self.modifiers = keyboard::Modifiers {
+                    ctrl: state.control_key(),
+                    alt: state.alt_key(),
+                    shift: state.shift_key(),
+                    logo: state.super_key(),
+                    ..Default::default()
+                };
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                let is_tab_press = event.state == ElementState::Pressed
+                    && matches!(&event.logical_key, Key::Named(NamedKey::Tab));
+
+                if is_tab_press {
+                    self.cycle_focus(self.modifiers.shift);
+                } else {
+                    if let Key::Named(named) = &event.logical_key {
+                        if let Some(keysym) = keysym_from_named(named) {
+                            let kind = match event.state {
+                                ElementState::Pressed => KeyboardEventKind::Press {
+                                    keysym,
+                                    repeat: event.repeat,
+                                },
+                                ElementState::Released => KeyboardEventKind::Release { keysym },
+                            };
+                            self.dispatch_keyboard(kind);
+                        }
+                    }
+                    if event.state == ElementState::Pressed {
+                        if let Some(text) = event.text.as_deref().and_then(keyboard::insertable_text)
+                        {
+                            self.dispatch_keyboard(KeyboardEventKind::Commit(text));
+                        }
+                    }
+                }
+            }
             WindowEvent::RedrawRequested => {
                 let (Some(window), Some(surface)) = (self.window.as_ref(), self.surface.as_mut())
                 else {
@@ -348,6 +523,7 @@ impl ApplicationHandler for App {
                     ("Disabled", DISABLED),
                     ("Sliders", SLIDERS),
                     ("Slider sizes", SLIDER_SIZES),
+                    ("Text fields", TEXT_FIELDS),
                 ] {
                     canvas.draw_str(
                         label,

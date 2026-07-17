@@ -170,10 +170,6 @@ impl Button {
         self.label = label.into();
     }
 
-    pub fn bounds(&self) -> Rect {
-        self.bounds
-    }
-
     fn layout(&self, fonts: &FontBook) -> Rect {
         let font = fonts.sized(&self.font_key, self.size.label_size());
         let text_width = font.measure_str(&self.label, None).0;
@@ -361,5 +357,9 @@ impl Widget for Button {
             }
             _ => false,
         }
+    }
+
+    fn bounds(&self) -> Rect {
+        self.bounds
     }
 }
