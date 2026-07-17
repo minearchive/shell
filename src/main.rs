@@ -393,6 +393,8 @@ impl OutputHandler for Shell {
         layer.set_anchor(Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
         layer.set_size(0, 60);
         layer.set_exclusive_zone(60);
+        // Dropped to None on pointer Enter, so the bar never actually takes
+        // keyboard focus — see `pointer_frame`.
         layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
         layer.commit();
 
@@ -523,6 +525,8 @@ impl SeatHandler for Shell {
     }
 }
 
+/// The bar does not take keyboard focus (see `new_output`), so these are not
+/// expected to fire; `delegate_keyboard!` requires the impl regardless.
 impl KeyboardHandler for Shell {
     fn enter(
         &mut self,
@@ -623,6 +627,15 @@ impl PointerHandler for Shell {
                 match event.kind {
                     Enter { .. } => {
                         info!("Pointer entered @{:?}", event.position);
+                        // The bar must never steal keyboard focus from the
+                        // user's window, so it gives up interactivity here.
+                        // Enter always precedes a click, which leaves the
+                        // OnDemand set in `new_output` unreachable: deliberate,
+                        // not a `Leave` restore that was forgotten.
+                        //
+                        // Reverse both (and create the keyboard with
+                        // `get_keyboard_with_repeat`, so key repeat works) if
+                        // the bar ever needs text input.
                         if let Some(screen) = self
                             .screen
                             .iter()
