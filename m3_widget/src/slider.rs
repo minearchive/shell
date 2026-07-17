@@ -362,8 +362,40 @@ impl Slider {
         }
     }
 
-    fn draw_value_indicator(&self, test: &String) {
-        draw_str_align(
+    /// A pill above the handle, centred on it and as wide as its label needs.
+    fn draw_value_indicator(
+        &self,
+        canvas: &Canvas,
+        theme: &ColorTheme,
+        fonts: &FontBook,
+        handle_x: f32,
+    ) {
+        let text = self.format_value();
+        let font = fonts.sized(&self.font_key, VALUE_INDICATOR_TEXT_SIZE);
+        let text_width = font.measure_str(&text, None).0;
+
+        let width = (text_width + VALUE_INDICATOR_PADDING * 2.0).max(VALUE_INDICATOR_HEIGHT);
+        let bottom = self.bounds.top - VALUE_INDICATOR_BOTTOM_SPACE;
+        let rect = Rect::from_xywh(
+            handle_x - width / 2.0,
+            bottom - VALUE_INDICATOR_HEIGHT,
+            width,
+            VALUE_INDICATOR_HEIGHT,
+        );
+
+        let radius = VALUE_INDICATOR_HEIGHT / 2.0;
+        Self::fill_rrect(
+            canvas,
+            RRect::new_rect_xy(rect, radius, radius),
+            theme.inverse_surface,
+        );
+
+        let metrics = font.metrics().1;
+        let baseline = rect.center_y() - (metrics.ascent + metrics.descent) / 2.0;
+        let mut paint = Paint::default();
+        paint.set_anti_alias(true);
+        paint.set_color4f(Color4f::from(theme.inverse_on_surface), None);
+        canvas.draw_str_align(
             &text,
             Point::new(rect.center_x(), baseline),
             &font,
