@@ -96,6 +96,9 @@ struct App {
     cursor: pointer::Point,
     modifiers: keyboard::Modifiers,
     focus: Option<usize>,
+    /// `None` if the platform has no clipboard we can reach; paste is then a
+    /// no-op rather than a hard failure.
+    clipboard: Option<arboard::Clipboard>,
 }
 
 /// Top of each gallery row. The section captions are drawn just above these,
@@ -256,6 +259,25 @@ impl App {
             cursor: (0.0, 0.0),
             modifiers: keyboard::Modifiers::default(),
             focus: None,
+            clipboard: arboard::Clipboard::new()
+                .map_err(|e| eprintln!("m3_test: clipboard unavailable, paste disabled: {e}"))
+                .ok(),
+        }
+    }
+
+    /// Paste routes through `Commit`, the one text-insertion path, so widgets
+    /// never learn what a clipboard is.
+    fn paste(&mut self) {
+        let Some(clipboard) = self.clipboard.as_mut() else {
+            return;
+        };
+        match clipboard.get_text() {
+            Ok(text) => {
+                if let Some(text) = keyboard::insertable_text(&text) {
+                    self.dispatch_keyboard(KeyboardEventKind::Commit(text));
+                }
+            }
+            Err(e) => eprintln!("m3_test: clipboard read failed: {e}"),
         }
     }
 
@@ -302,7 +324,10 @@ impl App {
         self.focus = new_focus;
         if let Some(new) = self.focus.and_then(|i| self.widgets.get_mut(i)) {
             new.set_focused(true);
-            new.on_keyboard(&KeyboardEvent::new(KeyboardEventKind::Focus, self.modifiers));
+            new.on_keyboard(&KeyboardEvent::new(
+                KeyboardEventKind::Focus,
+                self.modifiers,
+            ));
         }
         true
     }
@@ -445,11 +470,17 @@ impl ApplicationHandler for App {
                 };
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                let is_tab_press = event.state == ElementState::Pressed
-                    && matches!(&event.logical_key, Key::Named(NamedKey::Tab));
+                let pressed = event.state == ElementState::Pressed;
+                let is_tab_press =
+                    pressed && matches!(&event.logical_key, Key::Named(NamedKey::Tab));
+                let is_paste = pressed
+                    && self.modifiers.ctrl
+                    && matches!(&event.logical_key, Key::Character(c) if c.eq_ignore_ascii_case("v"));
 
                 if is_tab_press {
                     self.cycle_focus(self.modifiers.shift);
+                } else if is_paste {
+                    self.paste();
                 } else {
                     if let Key::Named(named) = &event.logical_key {
                         if let Some(keysym) = keysym_from_named(named) {
@@ -463,8 +494,14 @@ impl ApplicationHandler for App {
                             self.dispatch_keyboard(kind);
                         }
                     }
-                    if event.state == ElementState::Pressed {
-                        if let Some(text) = event.text.as_deref().and_then(keyboard::insertable_text)
+                    // `KeyEvent::text` is not affected by Ctrl — winit hands
+                    // back "v" for Ctrl+V — so without this a shortcut would
+                    // type its own letter. Shift and Caps Lock are what produce
+                    // the character in the first place, so they must not count.
+                    let shortcut = self.modifiers.ctrl || self.modifiers.alt || self.modifiers.logo;
+                    if pressed && !shortcut {
+                        if let Some(text) =
+                            event.text.as_deref().and_then(keyboard::insertable_text)
                         {
                             self.dispatch_keyboard(KeyboardEventKind::Commit(text));
                         }
