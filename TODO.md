@@ -1,15 +1,28 @@
 # TODO
 
 ## Rendering
-- [ ] Redraw Only updated Area
+- [ ] Optimized rendering
 
 ## Audio
 - [ ] status provider
+- [ ] setting for each process
+- [ ] EQ
 - [ ] OSD
 
 ## Battery
 - [ ] status provider
 - [ ] alert
+
+## Monitor
+- [ ] light level
+- [ ] mirroring in niri
+
+## LocalSend & Quickshare
+- [ ] support
+- [ ] custom widget
+- [ ] drag and drop
+
+
 
 ## IPC
 - [ ] mapping all niri events
@@ -32,6 +45,7 @@
 ## Shell
 - [ ] set keyboard interactivity to None at creation, drop the pointer Enter hack
 - [ ] keyboard input, only if the bar ever needs it (needs get_keyboard_with_repeat)
+- [ ] make design.
 
 # Component
 - [ ] Material3 Main Component
