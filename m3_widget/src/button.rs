@@ -1,20 +1,21 @@
 //! Material 3 button: five variants ordered by emphasis, five sizes.
 
-use std::{sync::Arc, time::Duration};
-
 use skia_safe::{
     utils::text_utils::Align, BlurStyle, Canvas, Color4f, Contains, MaskFilter, Paint, Point,
     RRect, Rect,
 };
 
 use ui_core::{
-    animation::animation::{easing::ease_out_cubic, Animation},
+    animation::animation::Animation,
     font::FontBook,
     pointer::{self, PointerEvent, PointerEventKind},
     scheme::{color::Color, ColorTheme},
 };
 
-use crate::Widget;
+use crate::{
+    animation::{duration, easing},
+    Widget,
+};
 
 /// State layer opacities.
 const HOVER_OPACITY: f32 = 0.08;
@@ -146,7 +147,7 @@ impl Animations {
     pub fn new() -> Self {
         Self {
             // Starts at rest (round); `set_target(1.0)` on press morphs it in.
-            shape: Animation::new(0., 0., Duration::from_millis(200), Arc::new(ease_out_cubic)),
+            shape: Animation::new(0., 0., duration::SHORT4, easing::standard()),
         }
     }
 }

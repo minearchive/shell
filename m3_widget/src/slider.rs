@@ -1,19 +1,20 @@
 //! Material 3 slider: continuous or discrete, five sizes.
 
-use std::{sync::Arc, time::Duration};
-
 use skia_safe::{
     utils::text_utils::Align, Canvas, Color4f, Contains, Paint, Point, RRect, Rect, Vector,
 };
 
 use ui_core::{
-    animation::animation::{easing::ease_out_cubic, Animation},
+    animation::animation::Animation,
     font::FontBook,
     pointer::{self, PointerEvent, PointerEventKind},
     scheme::{color::Color, ColorTheme},
 };
 
-use crate::Widget;
+use crate::{
+    animation::{duration, easing},
+    Widget,
+};
 
 /// Disabled treatments.
 const DISABLED_TRACK_OPACITY: f32 = 0.12;
@@ -111,13 +112,8 @@ pub struct Animations {
 impl Animations {
     pub fn new() -> Self {
         Self {
-            handle_width: Animation::new(
-                0.,
-                0.,
-                Duration::from_millis(200),
-                Arc::new(ease_out_cubic),
-            ),
-            indicator: Animation::new(0., 0., Duration::from_millis(200), Arc::new(ease_out_cubic)),
+            handle_width: Animation::new(0., 0., duration::SHORT4, easing::standard()),
+            indicator: Animation::new(0., 0., duration::SHORT4, easing::standard()),
         }
     }
 }
