@@ -15,7 +15,9 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
-use m3_widget::{Button, ButtonSize, ButtonVariant, Slider, SliderSize, TextField, Widget};
+use m3_widget::{
+    Button, ButtonSize, ButtonVariant, Slider, SliderSize, Switch, SwitchIcons, TextField, Widget,
+};
 
 fn button_code(button: MouseButton) -> Option<u32> {
     match button {
@@ -109,6 +111,7 @@ const DISABLED: f32 = 280.0;
 const SLIDERS: f32 = 380.0;
 const SLIDER_SIZES: f32 = 450.0;
 const TEXT_FIELDS: f32 = 620.0;
+const SWITCHES: f32 = 710.0;
 
 /// Baseline offset from a row's top to its caption.
 const CAPTION_OFFSET: f32 = 8.0;
@@ -244,6 +247,43 @@ fn text_field_gallery() -> Vec<Box<dyn Widget>> {
     ]
 }
 
+/// The three icon treatments in both states, then the disabled pair.
+fn switch_gallery() -> Vec<Box<dyn Widget>> {
+    let variants = [
+        ("plain", SwitchIcons::None),
+        ("selected-icon", SwitchIcons::Selected),
+        ("both-icons", SwitchIcons::Both),
+    ];
+
+    let mut widgets: Vec<Box<dyn Widget>> = Vec::new();
+    let mut x = 24.0;
+
+    for (label, icons) in variants {
+        for checked in [false, true] {
+            widgets.push(Box::new(
+                Switch::new(checked)
+                    .icons(icons)
+                    .position(x, SWITCHES)
+                    .on_change(move |v| println!("{label}: {v}")),
+            ));
+            x += 68.0;
+        }
+        x += 24.0;
+    }
+
+    for checked in [false, true] {
+        widgets.push(Box::new(
+            Switch::new(checked)
+                .icons(SwitchIcons::Both)
+                .position(x, SWITCHES)
+                .enabled(false),
+        ));
+        x += 68.0;
+    }
+
+    widgets
+}
+
 impl App {
     fn new(theme: ColorTheme, fonts: FontBook) -> Self {
         Self {
@@ -253,6 +293,7 @@ impl App {
                 .into_iter()
                 .chain(slider_gallery())
                 .chain(text_field_gallery())
+                .chain(switch_gallery())
                 .collect(),
             window: None,
             surface: None,
@@ -390,7 +431,7 @@ impl ApplicationHandler for App {
                 .create_window(
                     Window::default_attributes()
                         .with_title("m3_test")
-                        .with_inner_size(LogicalSize::new(800.0_f64, 720.0_f64)),
+                        .with_inner_size(LogicalSize::new(800.0_f64, 780.0_f64)),
                 )
                 .expect("failed to create window"),
         );
@@ -561,6 +602,7 @@ impl ApplicationHandler for App {
                     ("Sliders", SLIDERS),
                     ("Slider sizes", SLIDER_SIZES),
                     ("Text fields", TEXT_FIELDS),
+                    ("Switches", SWITCHES),
                 ] {
                     canvas.draw_str(
                         label,

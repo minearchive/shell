@@ -3,10 +3,12 @@
 pub mod animation;
 pub mod button;
 pub mod slider;
+pub mod switch;
 pub mod text_field;
 
 pub use button::{Button, ButtonSize, ButtonVariant};
 pub use slider::{Slider, SliderSize};
+pub use switch::{Switch, SwitchIcons};
 pub use text_field::TextField;
 
 use ui_core::keyboard::KeyboardEvent;
