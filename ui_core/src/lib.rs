@@ -3,6 +3,7 @@
 
 pub mod animation;
 pub mod font;
+pub mod geometry;
 pub mod keyboard;
 pub mod pointer;
 pub mod scheme;

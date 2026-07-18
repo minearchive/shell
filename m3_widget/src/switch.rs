@@ -1,12 +1,11 @@
 //! Material 3 switch: a two-state toggle, optionally carrying icons.
 
-use skia_safe::{
-    Canvas, Color4f, Contains, Paint, PaintCap, PaintJoin, PathBuilder, Point, RRect, Rect,
-};
+use skia_safe::{Canvas, Color4f, Paint, PaintCap, PaintJoin, PathBuilder, Point, RRect, Rect};
 
 use ui_core::{
     animation::animation::Animation,
     font::FontBook,
+    geometry::LayoutRect,
     keyboard::{self, KeyboardEvent, KeyboardEventKind},
     pointer::{self, PointerEvent, PointerEventKind},
     scheme::{color::Color, ColorTheme},
@@ -77,7 +76,9 @@ impl SwitchIcons {
 pub struct Switch {
     checked: bool,
     icons: SwitchIcons,
-    origin: (f32, f32),
+    /// Assigned by the layout system via [`Widget::set_layout_rect`]; zero
+    /// until then.
+    layout_rect: LayoutRect,
     enabled: bool,
     hovered: bool,
     pressed: bool,
@@ -111,7 +112,7 @@ impl Switch {
         Self {
             checked,
             icons: SwitchIcons::default(),
-            origin: (0.0, 0.0),
+            layout_rect: LayoutRect::empty(),
             enabled: true,
             hovered: false,
             pressed: false,
@@ -123,11 +124,6 @@ impl Switch {
 
     pub fn icons(mut self, icons: SwitchIcons) -> Self {
         self.icons = icons;
-        self
-    }
-
-    pub fn position(mut self, x: f32, y: f32) -> Self {
-        self.origin = (x, y);
         self
     }
 
@@ -181,17 +177,11 @@ impl Switch {
         }
     }
 
-    /// The switch is font-independent, so its geometry is derived on demand
-    /// rather than cached by `draw` — hit testing works before the first frame.
+    /// The track rect, as a Skia rect for drawing/geometry math. Hit testing
+    /// works before the first frame since it reads the assigned layout rect
+    /// rather than anything computed by `draw`.
     fn track_rect(&self) -> Rect {
-        Rect::from_xywh(self.origin.0, self.origin.1, TRACK_WIDTH, TRACK_HEIGHT)
-    }
-
-    /// Padded bounds; the pointer target, not the paint area.
-    fn hit_rect(&self) -> Rect {
-        let track = self.track_rect();
-        let pad = ((MIN_TOUCH_HEIGHT - track.height()) / 2.0).max(0.0);
-        track.with_outset((0.0, pad))
+        self.layout_rect.to_skia()
     }
 
     fn handle_diameter(&self, selection: f32, press: f32) -> f32 {
@@ -413,9 +403,7 @@ impl Widget for Switch {
             return dirty;
         }
 
-        let inside = self
-            .hit_rect()
-            .contains(Point::new(event.x() as f32, event.y() as f32));
+        let inside = self.hit_rect().contains(event.x() as f32, event.y() as f32);
 
         match event.kind {
             PointerEventKind::Enter | PointerEventKind::Motion => {
@@ -493,8 +481,19 @@ impl Widget for Switch {
         }
     }
 
-    fn bounds(&self) -> Rect {
-        self.track_rect()
+    fn set_layout_rect(&mut self, rect: LayoutRect) {
+        self.layout_rect = rect;
+    }
+
+    fn layout_rect(&self) -> LayoutRect {
+        self.layout_rect
+    }
+
+    /// Expands the track vertically to the 48px minimum touch target; the
+    /// pointer target, not the paint area.
+    fn hit_rect(&self) -> LayoutRect {
+        let pad = ((MIN_TOUCH_HEIGHT - self.layout_rect.height) / 2.0).max(0.0);
+        self.layout_rect.outset(0.0, pad)
     }
 
     fn focusable(&self) -> bool {
@@ -515,6 +514,14 @@ mod tests {
 
     fn pointer_at(switch: &mut Switch, x: f32, y: f32, kind: PointerEventKind) -> bool {
         switch.on_pointer(&PointerEvent::new((x as f64, y as f64), kind))
+    }
+
+    /// A switch laid out at the origin with its real track footprint, as a
+    /// layout system would assign before the first draw.
+    fn placed_switch(checked: bool) -> Switch {
+        let mut switch = Switch::new(checked);
+        switch.set_layout_rect(LayoutRect::new(0.0, 0.0, TRACK_WIDTH, TRACK_HEIGHT));
+        switch
     }
 
     /// A press/release pair at the centre of the track.
@@ -547,7 +554,7 @@ mod tests {
     fn click_toggles_and_reports() {
         let seen = Rc::new(RefCell::new(Vec::new()));
         let sink = seen.clone();
-        let mut switch = Switch::new(false).on_change(move |v| sink.borrow_mut().push(v));
+        let mut switch = placed_switch(false).on_change(move |v| sink.borrow_mut().push(v));
 
         click(&mut switch);
         assert!(switch.checked());
@@ -560,7 +567,7 @@ mod tests {
     /// The press must land inside too, so a drag off the track cancels.
     #[test]
     fn release_outside_does_not_toggle() {
-        let mut switch = Switch::new(false);
+        let mut switch = placed_switch(false);
         let center = switch.track_rect().center();
 
         pointer_at(
@@ -585,7 +592,7 @@ mod tests {
 
     #[test]
     fn disabled_switch_ignores_input() {
-        let mut switch = Switch::new(false).enabled(false);
+        let mut switch = placed_switch(false).enabled(false);
         click(&mut switch);
         assert!(!switch.checked());
         assert!(!press_key(&mut switch, keyboard::key::SPACE));
@@ -623,7 +630,7 @@ mod tests {
     /// around the small handle, 4dp around the large one.
     #[test]
     fn handle_stays_within_the_track() {
-        let switch = Switch::new(false);
+        let switch = placed_switch(false);
         let track = switch.track_rect();
 
         for selection in [0.0, 0.5, 1.0] {
@@ -632,5 +639,59 @@ mod tests {
             assert!(center.x - radius >= track.left);
             assert!(center.x + radius <= track.right);
         }
+    }
+
+    /// The assigned rect must be readable before the first `draw`.
+    #[test]
+    fn layout_rect_is_returned_before_first_draw() {
+        let mut switch = Switch::new(false);
+        assert_eq!(switch.layout_rect(), LayoutRect::empty());
+
+        let rect = LayoutRect::new(5.0, 6.0, TRACK_WIDTH, TRACK_HEIGHT);
+        switch.set_layout_rect(rect);
+        assert_eq!(switch.layout_rect(), rect);
+    }
+
+    /// The 32px track is shorter than the 48px minimum touch target, so
+    /// `hit_rect` must pad it out vertically without changing its width.
+    #[test]
+    fn hit_rect_expands_track_to_minimum_touch_target() {
+        let switch = placed_switch(false);
+        let hit = switch.hit_rect();
+
+        assert_eq!(hit.width, TRACK_WIDTH);
+        assert_eq!(hit.height, MIN_TOUCH_HEIGHT);
+        assert!(hit.contains(
+            TRACK_WIDTH / 2.0,
+            -((MIN_TOUCH_HEIGHT - TRACK_HEIGHT) / 2.0) + 1.0
+        ));
+    }
+
+    /// A click just above the visual track, but inside the padded touch
+    /// target, still toggles the switch.
+    #[test]
+    fn click_within_padded_touch_target_toggles() {
+        let mut switch = placed_switch(false);
+        let track = switch.track_rect();
+        let just_above_track = track.top - 2.0;
+
+        pointer_at(
+            &mut switch,
+            track.center_x(),
+            just_above_track,
+            PointerEventKind::Press {
+                button: pointer::button::LEFT,
+            },
+        );
+        pointer_at(
+            &mut switch,
+            track.center_x(),
+            just_above_track,
+            PointerEventKind::Release {
+                button: pointer::button::LEFT,
+            },
+        );
+
+        assert!(switch.checked());
     }
 }

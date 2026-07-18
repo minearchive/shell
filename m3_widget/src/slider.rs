@@ -1,12 +1,11 @@
 //! Material 3 slider: continuous or discrete, five sizes.
 
-use skia_safe::{
-    utils::text_utils::Align, Canvas, Color4f, Contains, Paint, Point, RRect, Rect, Vector,
-};
+use skia_safe::{utils::text_utils::Align, Canvas, Color4f, Paint, Point, RRect, Rect, Vector};
 
 use ui_core::{
     animation::animation::Animation,
     font::FontBook,
+    geometry::LayoutRect,
     pointer::{self, PointerEvent, PointerEventKind},
     scheme::{color::Color, ColorTheme},
 };
@@ -88,16 +87,15 @@ pub struct Slider {
     /// `Some` makes the slider discrete: values snap and tick marks are drawn.
     step: Option<f32>,
     size: SliderSize,
-    origin: (f32, f32),
-    width: f32,
     font_key: String,
     labeled: bool,
     enabled: bool,
     hovered: bool,
     pressed: bool,
-    /// Widget rect (handle height, not track height), recomputed every `draw`.
-    /// Hit testing uses it, so it only works once the slider has been laid out.
-    bounds: Rect,
+    /// Widget rect (handle height, not track height), assigned by the layout
+    /// system via [`Widget::set_layout_rect`]. Hit testing uses it, so it
+    /// only works once the slider has been laid out.
+    layout_rect: LayoutRect,
     on_change: Option<Box<dyn FnMut(f32)>>,
     animations: Animations,
 }
@@ -126,14 +124,12 @@ impl Slider {
             max,
             step: None,
             size: SliderSize::default(),
-            origin: (0.0, 0.0),
-            width: 200.0,
             font_key: "noto_sans".to_string(),
             labeled: false,
             enabled: true,
             hovered: false,
             pressed: false,
-            bounds: Rect::new_empty(),
+            layout_rect: LayoutRect::empty(),
             on_change: None,
             animations: Animations::new(),
         };
@@ -143,16 +139,6 @@ impl Slider {
 
     pub fn size(mut self, size: SliderSize) -> Self {
         self.size = size;
-        self
-    }
-
-    pub fn position(mut self, x: f32, y: f32) -> Self {
-        self.origin = (x, y);
-        self
-    }
-
-    pub fn width(mut self, width: f32) -> Self {
-        self.width = width;
         self
     }
 
@@ -228,30 +214,22 @@ impl Slider {
         }
     }
 
-    fn layout(&self) -> Rect {
-        Rect::from_xywh(
-            self.origin.0,
-            self.origin.1,
-            self.width.max(self.size.track_height()),
-            self.size.handle_height(),
-        )
+    /// The widget rect assigned by the layout system, as a Skia rect for
+    /// drawing and geometry math.
+    fn rect(&self) -> Rect {
+        self.layout_rect.to_skia()
     }
 
     /// The track is centred in the bounds; the handle overhangs it either side.
     fn track_rect(&self) -> Rect {
+        let bounds = self.rect();
         let height = self.size.track_height();
         Rect::from_xywh(
-            self.bounds.left,
-            self.bounds.center_y() - height / 2.0,
-            self.bounds.width(),
+            bounds.left,
+            bounds.center_y() - height / 2.0,
+            bounds.width(),
             height,
         )
-    }
-
-    /// Padded bounds; the pointer target, not the paint area.
-    fn hit_rect(&self) -> Rect {
-        let pad = ((MIN_TOUCH_HEIGHT - self.bounds.height()) / 2.0).max(0.0);
-        self.bounds.with_outset((0.0, pad))
     }
 
     /// Travel is inset by half a handle so the handle stays inside the bounds.
@@ -262,24 +240,27 @@ impl Slider {
         if self.step.is_some() && fraction > 0.0 && fraction < 1.0 {
             return self.mark_x(fraction);
         }
-        let left = self.bounds.left + HANDLE_WIDTH / 2.0;
-        let right = self.bounds.right - HANDLE_WIDTH / 2.0;
+        let bounds = self.rect();
+        let left = bounds.left + HANDLE_WIDTH / 2.0;
+        let right = bounds.right - HANDLE_WIDTH / 2.0;
         left + (right - left) * fraction
     }
 
     /// Marks are laid out over the track inset by a corner on each side, so the
     /// outermost ones sit inside the rounded caps rather than on them.
     fn mark_x(&self, fraction: f32) -> f32 {
+        let bounds = self.rect();
         let corner = self.size.corner_radius();
-        let left = self.bounds.left + corner;
-        let right = self.bounds.right - corner;
+        let left = bounds.left + corner;
+        let right = bounds.right - corner;
         left + (right - left) * fraction
     }
 
     /// Inverse of [`Self::handle_center_x`]: pointer x to a quantized value.
     fn value_at(&self, x: f32) -> f32 {
-        let left = self.bounds.left + HANDLE_WIDTH / 2.0;
-        let right = self.bounds.right - HANDLE_WIDTH / 2.0;
+        let bounds = self.rect();
+        let left = bounds.left + HANDLE_WIDTH / 2.0;
+        let right = bounds.right - HANDLE_WIDTH / 2.0;
         let span = right - left;
         let fraction = if span <= 0.0 {
             0.0
@@ -366,7 +347,7 @@ impl Slider {
         let on_active = self.inactive_track_color(theme);
         let on_inactive = self.active_track_color(theme);
         let radius = STOP_INDICATOR_DIAMETER / 2.0;
-        let y = self.bounds.center_y();
+        let y = self.rect().center_y();
         let gap = handle_width / 2.0 + HANDLE_GAP;
 
         for fraction in self.mark_fractions() {
@@ -394,7 +375,7 @@ impl Slider {
         let text_width = font.measure_str(&text, None).0;
 
         let width = (text_width + VALUE_INDICATOR_PADDING * 2.0).max(VALUE_INDICATOR_HEIGHT);
-        let bottom = self.bounds.top - VALUE_INDICATOR_BOTTOM_SPACE;
+        let bottom = self.rect().top - VALUE_INDICATOR_BOTTOM_SPACE;
         let rect = Rect::from_xywh(
             handle_x - width / 2.0,
             bottom - VALUE_INDICATOR_HEIGHT,
@@ -460,7 +441,6 @@ enum Side {
 
 impl Widget for Slider {
     fn draw(&mut self, canvas: &Canvas, theme: &ColorTheme, fonts: &FontBook) -> bool {
-        self.bounds = self.layout();
         let track = self.track_rect();
 
         let radius = self.size.corner_radius();
@@ -498,11 +478,12 @@ impl Widget for Slider {
 
         self.draw_marks(canvas, theme, handle_x, handle_width);
 
+        let bounds = self.rect();
         let handle = Rect::from_xywh(
             handle_x - handle_width / 2.0,
-            self.bounds.top,
+            bounds.top,
             handle_width,
-            self.bounds.height(),
+            bounds.height(),
         );
         let handle_radius = handle_width / 2.0;
         Self::fill_rrect(
@@ -542,7 +523,7 @@ impl Widget for Slider {
         }
 
         let x = event.x() as f32;
-        let inside = self.hit_rect().contains(Point::new(x, event.y() as f32));
+        let inside = self.hit_rect().contains(x, event.y() as f32);
 
         match event.kind {
             PointerEventKind::Enter | PointerEventKind::Motion => {
@@ -586,8 +567,69 @@ impl Widget for Slider {
         }
     }
 
+    fn set_layout_rect(&mut self, rect: LayoutRect) {
+        self.layout_rect = rect;
+    }
+
     /// The widget rect: as tall as the handle, so it spans the track overhang.
-    fn bounds(&self) -> Rect {
-        self.bounds
+    fn layout_rect(&self) -> LayoutRect {
+        self.layout_rect
+    }
+
+    /// Padded vertically to the minimum comfortable touch target; the
+    /// pointer target, not the paint area. Does not include the temporary
+    /// value-indicator pill, which is visual overflow, not a new hit target.
+    fn hit_rect(&self) -> LayoutRect {
+        let pad = ((MIN_TOUCH_HEIGHT - self.layout_rect.height) / 2.0).max(0.0);
+        self.layout_rect.outset(0.0, pad)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The assigned rect must be readable before the first `draw`.
+    #[test]
+    fn layout_rect_is_returned_before_first_draw() {
+        let mut slider = Slider::new(0.0, 100.0, 50.0);
+        assert_eq!(slider.layout_rect(), LayoutRect::empty());
+
+        let rect = LayoutRect::new(10.0, 20.0, 200.0, SliderSize::ExtraSmall.handle_height());
+        slider.set_layout_rect(rect);
+        assert_eq!(slider.layout_rect(), rect);
+    }
+
+    /// `ExtraSmall` slider handles (44dp) are already close to the 48dp
+    /// minimum, so `hit_rect` should still pad them out a little.
+    #[test]
+    fn hit_rect_expands_to_minimum_touch_target() {
+        let mut slider = Slider::new(0.0, 100.0, 50.0).size(SliderSize::ExtraSmall);
+        let rect = LayoutRect::new(10.0, 20.0, 200.0, SliderSize::ExtraSmall.handle_height());
+        slider.set_layout_rect(rect);
+
+        let hit = slider.hit_rect();
+        assert!(hit.height >= MIN_TOUCH_HEIGHT);
+        assert_eq!(hit.width, rect.width);
+        // A point just above the visual rect, but within the padded target,
+        // must register as a hit.
+        let just_above = rect.y - 1.0;
+        assert!(hit.contains(rect.x + 1.0, just_above));
+        assert!(!rect.contains(rect.x + 1.0, just_above));
+    }
+
+    /// The value indicator paints above the handle but must not be reachable
+    /// as a hit target — only the padded track/handle area is.
+    #[test]
+    fn hit_rect_excludes_value_indicator_overflow() {
+        let mut slider = Slider::new(0.0, 100.0, 50.0).labeled(true);
+        let rect = LayoutRect::new(10.0, 100.0, 200.0, SliderSize::default().handle_height());
+        slider.set_layout_rect(rect);
+
+        // The value indicator paints well above the top of the rect
+        // (VALUE_INDICATOR_HEIGHT + VALUE_INDICATOR_BOTTOM_SPACE), which is
+        // farther up than the touch-target padding reaches.
+        let indicator_y = rect.y - VALUE_INDICATOR_HEIGHT - VALUE_INDICATOR_BOTTOM_SPACE;
+        assert!(!slider.hit_rect().contains(rect.x + 10.0, indicator_y));
     }
 }

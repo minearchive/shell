@@ -1,9 +1,10 @@
 //! Material 3 filled text field: single line, cursor only (no selection).
 
-use skia_safe::{Canvas, ClipOp, Color4f, Contains, Paint, Point, RRect, Rect, Vector};
+use skia_safe::{Canvas, ClipOp, Color4f, Paint, Point, RRect, Rect, Vector};
 
 use ui_core::{
     font::FontBook,
+    geometry::LayoutRect,
     keyboard::{self, KeyboardEvent, KeyboardEventKind},
     pointer::{self, PointerEvent, PointerEventKind},
     scheme::{color::Color, ColorTheme},
@@ -35,16 +36,15 @@ pub struct TextField {
     text: String,
     /// Byte offset into `text`. Always on a char boundary.
     cursor: usize,
-    origin: (f32, f32),
-    width: f32,
     font_key: String,
     enabled: bool,
     hovered: bool,
     focused: bool,
     /// Horizontal scroll so the cursor stays visible when text overflows.
     scroll_offset: f32,
-    /// Filled in by `draw`; zero until the first frame.
-    bounds: Rect,
+    /// Assigned by the layout system via [`Widget::set_layout_rect`]; zero
+    /// until then.
+    layout_rect: LayoutRect,
     on_change: Option<Box<dyn FnMut(String)>>,
 }
 
@@ -53,26 +53,14 @@ impl TextField {
         Self {
             text: String::new(),
             cursor: 0,
-            origin: (0.0, 0.0),
-            width: 200.0,
             font_key: "noto_sans".to_string(),
             enabled: true,
             hovered: false,
             focused: false,
             scroll_offset: 0.0,
-            bounds: Rect::new_empty(),
+            layout_rect: LayoutRect::empty(),
             on_change: None,
         }
-    }
-
-    pub fn position(mut self, x: f32, y: f32) -> Self {
-        self.origin = (x, y);
-        self
-    }
-
-    pub fn width(mut self, width: f32) -> Self {
-        self.width = width;
-        self
     }
 
     /// Key of a font registered in the [`FontBook`]; defaults to `noto_sans`.
@@ -116,8 +104,10 @@ impl TextField {
         &self.text
     }
 
-    fn layout(&self) -> Rect {
-        Rect::from_xywh(self.origin.0, self.origin.1, self.width, HEIGHT)
+    /// The widget rect assigned by the layout system, as a Skia rect for
+    /// drawing/geometry math.
+    fn rect(&self) -> Rect {
+        self.layout_rect.to_skia()
     }
 
     fn container_color(&self, theme: &ColorTheme) -> Color {
@@ -155,11 +145,12 @@ impl TextField {
 
     /// Content area inside the horizontal padding, excluding the indicator.
     fn content_rect(&self) -> Rect {
+        let bounds = self.rect();
         Rect::from_ltrb(
-            self.bounds.left + HORIZONTAL_PADDING,
-            self.bounds.top,
-            self.bounds.right - HORIZONTAL_PADDING,
-            self.bounds.bottom - INDICATOR_HEIGHT_FOCUSED,
+            bounds.left + HORIZONTAL_PADDING,
+            bounds.top,
+            bounds.right - HORIZONTAL_PADDING,
+            bounds.bottom - INDICATOR_HEIGHT_FOCUSED,
         )
     }
 
@@ -275,8 +266,8 @@ impl Default for TextField {
 
 impl Widget for TextField {
     fn draw(&mut self, canvas: &Canvas, theme: &ColorTheme, fonts: &FontBook) -> bool {
-        self.bounds = self.layout();
-        let rrect = Self::container_rrect(self.bounds);
+        let bounds = self.rect();
+        let rrect = Self::container_rrect(bounds);
 
         let mut paint = Paint::default();
         paint.set_anti_alias(true);
@@ -289,10 +280,10 @@ impl Widget for TextField {
             INDICATOR_HEIGHT
         };
         let indicator = Rect::from_ltrb(
-            self.bounds.left,
-            self.bounds.bottom - indicator_height,
-            self.bounds.right,
-            self.bounds.bottom,
+            bounds.left,
+            bounds.bottom - indicator_height,
+            bounds.right,
+            bounds.bottom,
         );
         let mut indicator_paint = Paint::default();
         indicator_paint.set_anti_alias(true);
@@ -341,9 +332,7 @@ impl Widget for TextField {
             return dirty;
         }
 
-        let inside = self
-            .bounds
-            .contains(Point::new(event.x() as f32, event.y() as f32));
+        let inside = self.hit_rect().contains(event.x() as f32, event.y() as f32);
 
         match event.kind {
             PointerEventKind::Enter | PointerEventKind::Motion => {
@@ -389,8 +378,12 @@ impl Widget for TextField {
         }
     }
 
-    fn bounds(&self) -> Rect {
-        self.bounds
+    fn set_layout_rect(&mut self, rect: LayoutRect) {
+        self.layout_rect = rect;
+    }
+
+    fn layout_rect(&self) -> LayoutRect {
+        self.layout_rect
     }
 
     fn focusable(&self) -> bool {
@@ -546,6 +539,42 @@ mod tests {
         field.on_keyboard(&KeyboardEvent::new(
             KeyboardEventKind::Commit(text.to_string()),
             keyboard::Modifiers::default(),
+        ))
+    }
+
+    /// The assigned rect must be readable before the first `draw`.
+    #[test]
+    fn layout_rect_is_returned_before_first_draw() {
+        let mut field = TextField::new();
+        assert_eq!(field.layout_rect(), LayoutRect::empty());
+
+        let rect = LayoutRect::new(10.0, 20.0, 220.0, HEIGHT);
+        field.set_layout_rect(rect);
+        assert_eq!(field.layout_rect(), rect);
+    }
+
+    /// Hit testing uses the assigned layout rect, not any internally
+    /// computed geometry, and works before the first draw.
+    #[test]
+    fn hit_testing_uses_assigned_layout_rect() {
+        let mut field = TextField::new();
+        field.set_layout_rect(LayoutRect::new(10.0, 20.0, 220.0, HEIGHT));
+
+        let inside = pointer_event_at(&mut field, 50.0, 40.0);
+        assert!(inside);
+
+        let mut elsewhere = TextField::new();
+        elsewhere.set_layout_rect(LayoutRect::new(10.0, 20.0, 220.0, HEIGHT));
+        let outside = pointer_event_at(&mut elsewhere, 500.0, 500.0);
+        assert!(!outside);
+    }
+
+    fn pointer_event_at(field: &mut TextField, x: f64, y: f64) -> bool {
+        field.on_pointer(&PointerEvent::new(
+            (x, y),
+            PointerEventKind::Press {
+                button: pointer::button::LEFT,
+            },
         ))
     }
 }
