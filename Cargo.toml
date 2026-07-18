@@ -19,6 +19,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 winit = "0.30"
 softbuffer = "0.4"
 toml = "1.1.2"
+taffy = "0.12.2"
 # internal crates
 macros = { path = "./macros" }
 ui_core = { path = "./ui_core" }
