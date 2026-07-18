@@ -159,9 +159,7 @@ fn button_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>
     for (title, variant) in all {
         let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
         for (label, size, variant, enabled, width) in variant {
-            let leaf = tree
-                .new_leaf(item_style(width, ButtonSize::default().height()))
-                .unwrap();
+            let leaf = tree.new_leaf(item_style(width, size.height())).unwrap();
             tree.add_child(row, leaf).unwrap();
             pending.push(PendingWidget {
                 node: leaf,

@@ -178,6 +178,8 @@ impl Button {
         self
     }
 
+    /// Visual styling only — the layout system decides the actual rect, so
+    /// callers must size the node from [`ButtonSize::height`] themselves.
     pub fn size(mut self, size: ButtonSize) -> Self {
         self.size = size;
         self
@@ -436,6 +438,19 @@ mod tests {
 
         let rect = LayoutRect::new(10.0, 20.0, 100.0, 40.0);
         button.set_layout_rect(rect);
+        assert_eq!(button.layout_rect(), rect);
+    }
+
+    /// `size` is a visual token, not geometry: it must never write back into
+    /// the layout rect, or the widget becomes a second source of truth that
+    /// silently fights whatever the layout system assigned.
+    #[test]
+    fn size_does_not_mutate_the_layout_rect() {
+        let rect = LayoutRect::new(10.0, 20.0, 100.0, ButtonSize::ExtraLarge.height());
+        let mut button = Button::new("Click me");
+        button.set_layout_rect(rect);
+
+        let button = button.size(ButtonSize::ExtraSmall);
         assert_eq!(button.layout_rect(), rect);
     }
 
