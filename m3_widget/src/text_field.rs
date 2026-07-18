@@ -11,8 +11,9 @@ use ui_core::{
 
 use crate::Widget;
 
-/// M3 filled text field default height.
-const HEIGHT: f32 = 56.0;
+/// M3 filled text field default height. Public so callers can size layout
+/// around a text field without hardcoding its footprint.
+pub const HEIGHT: f32 = 56.0;
 const HORIZONTAL_PADDING: f32 = 16.0;
 const TEXT_SIZE: f32 = 16.0;
 

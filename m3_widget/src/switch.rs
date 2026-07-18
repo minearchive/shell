@@ -27,9 +27,10 @@ const DISABLED_CONTAINER_OPACITY: f32 = 0.12;
 const DISABLED_CONTENT_OPACITY: f32 = 0.38;
 
 /// Track geometry. The track uses the `full` shape token, so its radius is half
-/// its height.
-const TRACK_WIDTH: f32 = 52.0;
-const TRACK_HEIGHT: f32 = 32.0;
+/// its height. Public so callers can size layout around a switch without
+/// hardcoding its footprint.
+pub const TRACK_WIDTH: f32 = 52.0;
+pub const TRACK_HEIGHT: f32 = 32.0;
 const TRACK_OUTLINE_WIDTH: f32 = 2.0;
 
 /// Handle diameters. The unselected handle grows when it has to hold an icon.

@@ -1,9 +1,11 @@
+use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::rc::Rc;
 
 use serde::Deserialize;
 use skia_safe::{surfaces, Color4f, Contains, ImageInfo, Paint, Point};
 use softbuffer::{Context, Surface};
+use taffy::prelude::*;
 use ui_core::font::FontBook;
 use ui_core::keyboard::{self, KeyboardEvent, KeyboardEventKind};
 use ui_core::pointer::{self, AxisScroll, PointerEvent, PointerEventKind};
@@ -16,7 +18,8 @@ use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
 use m3_widget::{
-    Button, ButtonSize, ButtonVariant, Slider, SliderSize, Switch, SwitchIcons, TextField, Widget,
+    switch, text_field, Button, ButtonSize, ButtonVariant, Slider, SliderSize, Switch, SwitchIcons,
+    TextField, Widget,
 };
 
 fn button_code(button: MouseButton) -> Option<u32> {
@@ -87,12 +90,489 @@ fn load_theme(path: &str) -> ColorTheme {
     }
 }
 
+// ---- gallery layout (taffy) ----
+
+/// Left/right/top/bottom breathing room around the whole gallery. Top clears
+/// the two header lines drawn separately in `RedrawRequested`.
+const ROOT_PADDING_X: f32 = 24.0;
+const ROOT_PADDING_TOP: f32 = 90.0;
+const ROOT_PADDING_BOTTOM: f32 = 24.0;
+/// Gap between gallery sections (rows/columns), stacked in a column.
+const SECTION_GAP: f32 = 32.0;
+/// Gap between items within one row.
+const ITEM_GAP: f32 = 16.0;
+/// Gap between switch variant groups.
+const GROUP_GAP: f32 = 24.0;
+/// Gap between stacked items in the slider-sizes column.
+const COLUMN_ITEM_GAP: f32 = 8.0;
+/// Baseline offset from a section's top to its caption, drawn just above it.
+const CAPTION_OFFSET: f32 = 8.0;
+
+/// A gallery row/column, captioned just above its resolved top edge.
+struct Section {
+    caption: &'static str,
+    node: NodeId,
+}
+
+/// A widget whose exact screen position is only known once taffy has resolved
+/// its node's layout; `build` finishes construction with that position.
+struct PendingWidget {
+    node: NodeId,
+    build: Box<dyn FnOnce(f32, f32) -> Box<dyn Widget>>,
+}
+
+fn root_style() -> Style {
+    Style {
+        display: Display::Flex,
+        flex_direction: FlexDirection::Column,
+        padding: Rect {
+            left: length(ROOT_PADDING_X),
+            right: length(ROOT_PADDING_X),
+            top: length(ROOT_PADDING_TOP),
+            bottom: length(ROOT_PADDING_BOTTOM),
+        },
+        gap: Size {
+            width: length(0.0),
+            height: length(SECTION_GAP),
+        },
+        ..Default::default()
+    }
+}
+
+fn row_style(gap: f32) -> Style {
+    Style {
+        display: Display::Flex,
+        flex_direction: FlexDirection::Row,
+        align_items: Some(AlignItems::FLEX_START),
+        gap: Size {
+            width: length(gap),
+            height: length(0.0),
+        },
+        ..Default::default()
+    }
+}
+
+fn column_style(gap: f32) -> Style {
+    Style {
+        display: Display::Flex,
+        flex_direction: FlexDirection::Column,
+        gap: Size {
+            width: length(0.0),
+            height: length(gap),
+        },
+        ..Default::default()
+    }
+}
+
+fn item_style(width: f32, height: f32) -> Style {
+    Style {
+        size: Size {
+            width: length(width),
+            height: length(height),
+        },
+        ..Default::default()
+    }
+}
+
+/// One button per variant, then one per size, then the disabled treatments.
+fn button_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
+    let variants = [
+        ("Filled", ButtonVariant::Filled, 100.0),
+        ("Tonal", ButtonVariant::FilledTonal, 100.0),
+        ("Elevated", ButtonVariant::Elevated, 110.0),
+        ("Outlined", ButtonVariant::Outlined, 110.0),
+        ("Text", ButtonVariant::Text, 90.0),
+    ];
+
+    let sizes = [
+        ("XS", ButtonSize::ExtraSmall, 90.0),
+        ("S", ButtonSize::Small, 90.0),
+        ("M", ButtonSize::Medium, 100.0),
+        ("L", ButtonSize::Large, 110.0),
+        ("XL", ButtonSize::ExtraLarge, 120.0),
+    ];
+
+    let disabled = [
+        ("Filled", ButtonVariant::Filled, 100.0),
+        ("Tonal", ButtonVariant::FilledTonal, 100.0),
+        ("Outlined", ButtonVariant::Outlined, 110.0),
+        ("Text", ButtonVariant::Text, 90.0),
+    ];
+
+    let mut sections = Vec::new();
+    let mut pending = Vec::new();
+
+    let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
+    for (label, variant, width) in variants {
+        let leaf = tree
+            .new_leaf(item_style(width, ButtonSize::default().height()))
+            .unwrap();
+        tree.add_child(row, leaf).unwrap();
+        pending.push(PendingWidget {
+            node: leaf,
+            build: Box::new(move |x, y| {
+                Box::new(
+                    Button::new(label)
+                        .variant(variant)
+                        .position(x, y)
+                        .width(width)
+                        .on_click(move || println!("clicked: {label}")),
+                )
+            }),
+        });
+    }
+    sections.push(Section {
+        caption: "Variants",
+        node: row,
+    });
+
+    let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
+    for (label, size, width) in sizes {
+        let leaf = tree.new_leaf(item_style(width, size.height())).unwrap();
+        tree.add_child(row, leaf).unwrap();
+        pending.push(PendingWidget {
+            node: leaf,
+            build: Box::new(move |x, y| {
+                Box::new(
+                    Button::new(label)
+                        .size(size)
+                        .position(x, y)
+                        .width(width)
+                        .on_click(move || println!("clicked: size {label}")),
+                )
+            }),
+        });
+    }
+    sections.push(Section {
+        caption: "Sizes",
+        node: row,
+    });
+
+    let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
+    for (label, variant, width) in disabled {
+        let leaf = tree
+            .new_leaf(item_style(width, ButtonSize::default().height()))
+            .unwrap();
+        tree.add_child(row, leaf).unwrap();
+        pending.push(PendingWidget {
+            node: leaf,
+            build: Box::new(move |x, y| {
+                Box::new(
+                    Button::new(label)
+                        .variant(variant)
+                        .position(x, y)
+                        .width(width)
+                        .enabled(false),
+                )
+            }),
+        });
+    }
+    sections.push(Section {
+        caption: "Disabled",
+        node: row,
+    });
+
+    (sections, pending)
+}
+
+/// Continuous, discrete and disabled sliders, then one per size.
+fn slider_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
+    let mut sections = Vec::new();
+    let mut pending = Vec::new();
+
+    let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
+
+    let leaf = tree
+        .new_leaf(item_style(200.0, SliderSize::default().handle_height()))
+        .unwrap();
+    tree.add_child(row, leaf).unwrap();
+    pending.push(PendingWidget {
+        node: leaf,
+        build: Box::new(move |x, y| {
+            Box::new(
+                Slider::new(0.0, 100.0, 40.0)
+                    .position(x, y)
+                    .width(200.0)
+                    .labeled(true)
+                    .on_change(|v| println!("continuous: {v:.1}")),
+            )
+        }),
+    });
+
+    let leaf = tree
+        .new_leaf(item_style(200.0, SliderSize::default().handle_height()))
+        .unwrap();
+    tree.add_child(row, leaf).unwrap();
+    pending.push(PendingWidget {
+        node: leaf,
+        build: Box::new(move |x, y| {
+            Box::new(
+                Slider::new(0.0, 10.0, 3.0)
+                    .step(1.0)
+                    .position(x, y)
+                    .width(200.0)
+                    .labeled(true)
+                    .on_change(|v| println!("discrete: {v}")),
+            )
+        }),
+    });
+
+    let leaf = tree
+        .new_leaf(item_style(200.0, SliderSize::default().handle_height()))
+        .unwrap();
+    tree.add_child(row, leaf).unwrap();
+    pending.push(PendingWidget {
+        node: leaf,
+        build: Box::new(move |x, y| {
+            Box::new(
+                Slider::new(0.0, 100.0, 60.0)
+                    .position(x, y)
+                    .width(200.0)
+                    .enabled(false),
+            )
+        }),
+    });
+
+    sections.push(Section {
+        caption: "Sliders",
+        node: row,
+    });
+
+    let sizes = [
+        SliderSize::ExtraSmall,
+        SliderSize::Small,
+        SliderSize::Medium,
+    ];
+    let column = tree.new_leaf(column_style(COLUMN_ITEM_GAP)).unwrap();
+    for size in sizes {
+        let leaf = tree
+            .new_leaf(item_style(280.0, size.handle_height()))
+            .unwrap();
+        tree.add_child(column, leaf).unwrap();
+        pending.push(PendingWidget {
+            node: leaf,
+            build: Box::new(move |x, y| {
+                Box::new(
+                    Slider::new(0.0, 100.0, 50.0)
+                        .size(size)
+                        .position(x, y)
+                        .width(280.0),
+                )
+            }),
+        });
+    }
+    sections.push(Section {
+        caption: "Slider sizes",
+        node: column,
+    });
+
+    (sections, pending)
+}
+
+/// One plain field, one pre-filled field, one disabled field.
+fn text_field_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
+    let mut pending = Vec::new();
+    let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
+
+    let leaf = tree
+        .new_leaf(item_style(220.0, text_field::HEIGHT))
+        .unwrap();
+    tree.add_child(row, leaf).unwrap();
+    pending.push(PendingWidget {
+        node: leaf,
+        build: Box::new(move |x, y| {
+            Box::new(
+                TextField::new()
+                    .position(x, y)
+                    .width(220.0)
+                    .on_change(|text| println!("text: {text}")),
+            )
+        }),
+    });
+
+    let leaf = tree
+        .new_leaf(item_style(220.0, text_field::HEIGHT))
+        .unwrap();
+    tree.add_child(row, leaf).unwrap();
+    pending.push(PendingWidget {
+        node: leaf,
+        build: Box::new(move |x, y| {
+            Box::new(
+                TextField::new()
+                    .position(x, y)
+                    .width(220.0)
+                    .text("フォント入力テスト")
+                    .on_change(|text| println!("text: {text}")),
+            )
+        }),
+    });
+
+    let leaf = tree
+        .new_leaf(item_style(220.0, text_field::HEIGHT))
+        .unwrap();
+    tree.add_child(row, leaf).unwrap();
+    pending.push(PendingWidget {
+        node: leaf,
+        build: Box::new(move |x, y| {
+            Box::new(
+                TextField::new()
+                    .position(x, y)
+                    .width(220.0)
+                    .text("disabled")
+                    .enabled(false),
+            )
+        }),
+    });
+
+    (
+        vec![Section {
+            caption: "Text fields",
+            node: row,
+        }],
+        pending,
+    )
+}
+
+/// The three icon treatments in both states, then the disabled pair.
+fn switch_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
+    let variants = [
+        ("plain", SwitchIcons::None),
+        ("selected-icon", SwitchIcons::Selected),
+        ("both-icons", SwitchIcons::Both),
+    ];
+
+    let mut pending = Vec::new();
+    let outer = tree.new_leaf(row_style(GROUP_GAP)).unwrap();
+
+    for (label, icons) in variants {
+        let group = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
+        tree.add_child(outer, group).unwrap();
+        for checked in [false, true] {
+            let leaf = tree
+                .new_leaf(item_style(switch::TRACK_WIDTH, switch::TRACK_HEIGHT))
+                .unwrap();
+            tree.add_child(group, leaf).unwrap();
+            pending.push(PendingWidget {
+                node: leaf,
+                build: Box::new(move |x, y| {
+                    Box::new(
+                        Switch::new(checked)
+                            .icons(icons)
+                            .position(x, y)
+                            .on_change(move |v| println!("{label}: {v}")),
+                    )
+                }),
+            });
+        }
+    }
+
+    let disabled_group = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
+    tree.add_child(outer, disabled_group).unwrap();
+    for checked in [false, true] {
+        let leaf = tree
+            .new_leaf(item_style(switch::TRACK_WIDTH, switch::TRACK_HEIGHT))
+            .unwrap();
+        tree.add_child(disabled_group, leaf).unwrap();
+        pending.push(PendingWidget {
+            node: leaf,
+            build: Box::new(move |x, y| {
+                Box::new(
+                    Switch::new(checked)
+                        .icons(SwitchIcons::Both)
+                        .position(x, y)
+                        .enabled(false),
+                )
+            }),
+        });
+    }
+
+    (
+        vec![Section {
+            caption: "Switches",
+            node: outer,
+        }],
+        pending,
+    )
+}
+
+/// Accumulates absolute screen coordinates for every node, since
+/// `Layout::location` is relative to the immediate parent.
+fn resolve_absolute(
+    tree: &TaffyTree<()>,
+    node: NodeId,
+    origin: (f32, f32),
+    out: &mut HashMap<NodeId, (f32, f32)>,
+) {
+    let location = tree.layout(node).unwrap().location;
+    let absolute = (origin.0 + location.x, origin.1 + location.y);
+    out.insert(node, absolute);
+    for child in tree.children(node).unwrap() {
+        resolve_absolute(tree, child, absolute, out);
+    }
+}
+
+/// Builds every gallery widget positioned by a taffy layout tree instead of
+/// hand-tuned pixel constants, and the section captions that go with it.
+fn build_gallery() -> (Vec<Box<dyn Widget>>, Vec<(&'static str, f32)>) {
+    let mut tree: TaffyTree<()> = TaffyTree::new();
+    let root = tree.new_leaf(root_style()).unwrap();
+
+    let mut sections = Vec::new();
+    let mut pending = Vec::new();
+
+    let (s, p) = button_gallery(&mut tree);
+    sections.extend(s);
+    pending.extend(p);
+    let (s, p) = slider_gallery(&mut tree);
+    sections.extend(s);
+    pending.extend(p);
+    let (s, p) = text_field_gallery(&mut tree);
+    sections.extend(s);
+    pending.extend(p);
+    let (s, p) = switch_gallery(&mut tree);
+    sections.extend(s);
+    pending.extend(p);
+
+    for section in &sections {
+        tree.add_child(root, section.node).unwrap();
+    }
+
+    tree.compute_layout(
+        root,
+        Size {
+            width: AvailableSpace::MaxContent,
+            height: AvailableSpace::MaxContent,
+        },
+    )
+    .unwrap();
+
+    let mut positions = HashMap::new();
+    resolve_absolute(&tree, root, (0.0, 0.0), &mut positions);
+
+    let widgets = pending
+        .into_iter()
+        .map(|p| {
+            let (x, y) = positions[&p.node];
+            (p.build)(x, y)
+        })
+        .collect();
+
+    let captions = sections
+        .into_iter()
+        .map(|s| (s.caption, positions[&s.node].1))
+        .collect();
+
+    (widgets, captions)
+}
+
 // ---- winit app ----
 
 struct App {
     theme: ColorTheme,
     fonts: FontBook,
     widgets: Vec<Box<dyn Widget>>,
+    /// Section captions with their taffy-resolved top-of-row y.
+    captions: Vec<(&'static str, f32)>,
     window: Option<Rc<Window>>,
     surface: Option<Surface<Rc<Window>, Rc<Window>>>,
     cursor: pointer::Point,
@@ -103,198 +583,14 @@ struct App {
     clipboard: Option<arboard::Clipboard>,
 }
 
-/// Top of each gallery row. The section captions are drawn just above these,
-/// so keep the two in step.
-const VARIANTS: f32 = 100.0;
-const SIZES: f32 = 180.0;
-const DISABLED: f32 = 280.0;
-const SLIDERS: f32 = 380.0;
-const SLIDER_SIZES: f32 = 450.0;
-const TEXT_FIELDS: f32 = 620.0;
-const SWITCHES: f32 = 710.0;
-
-/// Baseline offset from a row's top to its caption.
-const CAPTION_OFFSET: f32 = 8.0;
-
-/// One button per variant, then one per size, then the disabled treatments.
-fn button_gallery() -> Vec<Box<dyn Widget>> {
-    let variants = [
-        ("Filled", ButtonVariant::Filled, 24.0, 100.0),
-        ("Tonal", ButtonVariant::FilledTonal, 136.0, 100.0),
-        ("Elevated", ButtonVariant::Elevated, 248.0, 110.0),
-        ("Outlined", ButtonVariant::Outlined, 370.0, 110.0),
-        ("Text", ButtonVariant::Text, 492.0, 90.0),
-    ];
-
-    let sizes = [
-        ("XS", ButtonSize::ExtraSmall, 24.0, 90.0),
-        ("S", ButtonSize::Small, 126.0, 90.0),
-        ("M", ButtonSize::Medium, 228.0, 100.0),
-        ("L", ButtonSize::Large, 340.0, 110.0),
-        ("XL", ButtonSize::ExtraLarge, 462.0, 120.0),
-    ];
-
-    let disabled = [
-        ("Filled", ButtonVariant::Filled, 24.0, 100.0),
-        ("Tonal", ButtonVariant::FilledTonal, 136.0, 100.0),
-        ("Outlined", ButtonVariant::Outlined, 248.0, 110.0),
-        ("Text", ButtonVariant::Text, 370.0, 90.0),
-    ];
-
-    let mut widgets: Vec<Box<dyn Widget>> = Vec::new();
-
-    for (label, variant, x, width) in variants {
-        widgets.push(Box::new(
-            Button::new(label)
-                .variant(variant)
-                .position(x, VARIANTS)
-                .width(width)
-                .on_click(move || println!("clicked: {label}")),
-        ));
-    }
-
-    for (label, size, x, width) in sizes {
-        widgets.push(Box::new(
-            Button::new(label)
-                .size(size)
-                .position(x, SIZES)
-                .width(width)
-                .on_click(move || println!("clicked: size {label}")),
-        ));
-    }
-
-    for (label, variant, x, width) in disabled {
-        widgets.push(Box::new(
-            Button::new(label)
-                .variant(variant)
-                .position(x, DISABLED)
-                .width(width)
-                .enabled(false),
-        ));
-    }
-
-    widgets
-}
-
-/// Continuous, discrete and disabled sliders, then one per size.
-fn slider_gallery() -> Vec<Box<dyn Widget>> {
-    let mut widgets: Vec<Box<dyn Widget>> = Vec::new();
-
-    widgets.push(Box::new(
-        Slider::new(0.0, 100.0, 40.0)
-            .position(24.0, SLIDERS)
-            .width(200.0)
-            .labeled(true)
-            .on_change(|v| println!("continuous: {v:.1}")),
-    ));
-    widgets.push(Box::new(
-        Slider::new(0.0, 10.0, 3.0)
-            .step(1.0)
-            .position(256.0, SLIDERS)
-            .width(200.0)
-            .labeled(true)
-            .on_change(|v| println!("discrete: {v}")),
-    ));
-    widgets.push(Box::new(
-        Slider::new(0.0, 100.0, 60.0)
-            .position(488.0, SLIDERS)
-            .width(200.0)
-            .enabled(false),
-    ));
-
-    let sizes = [
-        (SliderSize::ExtraSmall, 24.0),
-        (SliderSize::Small, 24.0),
-        (SliderSize::Medium, 24.0),
-    ];
-    let mut y = SLIDER_SIZES;
-    for (size, x) in sizes {
-        widgets.push(Box::new(
-            Slider::new(0.0, 100.0, 50.0)
-                .size(size)
-                .position(x, y)
-                .width(280.0),
-        ));
-        y += size.handle_height() + 8.0;
-    }
-
-    widgets
-}
-
-/// One plain field, one pre-filled field, one disabled field.
-fn text_field_gallery() -> Vec<Box<dyn Widget>> {
-    vec![
-        Box::new(
-            TextField::new()
-                .position(24.0, TEXT_FIELDS)
-                .width(220.0)
-                .on_change(|text| println!("text: {text}")),
-        ),
-        Box::new(
-            TextField::new()
-                .position(268.0, TEXT_FIELDS)
-                .width(220.0)
-                .text("フォント入力テスト")
-                .on_change(|text| println!("text: {text}")),
-        ),
-        Box::new(
-            TextField::new()
-                .position(512.0, TEXT_FIELDS)
-                .width(220.0)
-                .text("disabled")
-                .enabled(false),
-        ),
-    ]
-}
-
-/// The three icon treatments in both states, then the disabled pair.
-fn switch_gallery() -> Vec<Box<dyn Widget>> {
-    let variants = [
-        ("plain", SwitchIcons::None),
-        ("selected-icon", SwitchIcons::Selected),
-        ("both-icons", SwitchIcons::Both),
-    ];
-
-    let mut widgets: Vec<Box<dyn Widget>> = Vec::new();
-    let mut x = 24.0;
-
-    for (label, icons) in variants {
-        for checked in [false, true] {
-            widgets.push(Box::new(
-                Switch::new(checked)
-                    .icons(icons)
-                    .position(x, SWITCHES)
-                    .on_change(move |v| println!("{label}: {v}")),
-            ));
-            x += 68.0;
-        }
-        x += 24.0;
-    }
-
-    for checked in [false, true] {
-        widgets.push(Box::new(
-            Switch::new(checked)
-                .icons(SwitchIcons::Both)
-                .position(x, SWITCHES)
-                .enabled(false),
-        ));
-        x += 68.0;
-    }
-
-    widgets
-}
-
 impl App {
     fn new(theme: ColorTheme, fonts: FontBook) -> Self {
+        let (widgets, captions) = build_gallery();
         Self {
             theme,
             fonts,
-            widgets: button_gallery()
-                .into_iter()
-                .chain(slider_gallery())
-                .chain(text_field_gallery())
-                .chain(switch_gallery())
-                .collect(),
+            widgets,
+            captions,
             window: None,
             surface: None,
             cursor: (0.0, 0.0),
@@ -595,18 +891,10 @@ impl ApplicationHandler for App {
                 );
 
                 let caption = self.fonts.sized("noto_sans", 13.0);
-                for (label, row) in [
-                    ("Variants", VARIANTS),
-                    ("Sizes", SIZES),
-                    ("Disabled", DISABLED),
-                    ("Sliders", SLIDERS),
-                    ("Slider sizes", SLIDER_SIZES),
-                    ("Text fields", TEXT_FIELDS),
-                    ("Switches", SWITCHES),
-                ] {
+                for (label, row) in &self.captions {
                     canvas.draw_str(
-                        label,
-                        Point::new(24.0, row - CAPTION_OFFSET),
+                        *label,
+                        Point::new(ROOT_PADDING_X, row - CAPTION_OFFSET),
                         &caption,
                         &text_paint,
                     );
