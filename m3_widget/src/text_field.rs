@@ -273,7 +273,7 @@ impl Default for TextField {
 }
 
 impl Widget for TextField {
-    fn draw(&mut self, canvas: &Canvas, theme: &ColorTheme, fonts: &FontBook) {
+    fn draw(&mut self, canvas: &Canvas, theme: &ColorTheme, fonts: &FontBook) -> bool {
         self.bounds = self.layout();
         let rrect = Self::container_rrect(self.bounds);
 
@@ -329,6 +329,8 @@ impl Widget for TextField {
         }
 
         canvas.restore();
+
+        false
     }
 
     fn on_pointer(&mut self, event: &PointerEvent) -> bool {

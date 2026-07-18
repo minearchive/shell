@@ -1,5 +1,6 @@
 //! Material 3 widget crate — presentation-only, built on ui_core.
 
+pub mod animation;
 pub mod button;
 pub mod slider;
 pub mod text_field;
@@ -17,7 +18,7 @@ pub trait Widget {
         canvas: &skia_safe::Canvas,
         theme: &ui_core::scheme::ColorTheme,
         fonts: &ui_core::font::FontBook,
-    );
+    ) -> bool;
 
     fn on_pointer(&mut self, _event: &PointerEvent) -> bool {
         false

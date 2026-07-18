@@ -570,9 +570,15 @@ impl ApplicationHandler for App {
                     );
                 }
 
+                let mut redraw = false;
+
                 // draw widgets
                 for widget in &mut self.widgets {
-                    widget.draw(canvas, &self.theme, &self.fonts);
+                    redraw |= widget.draw(canvas, &self.theme, &self.fonts);
+                }
+
+                if redraw {
+                    window.request_redraw();
                 }
 
                 // drop skia surface to release the bytes borrow before presenting

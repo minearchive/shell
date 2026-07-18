@@ -1,11 +1,14 @@
 //! Material 3 button: five variants ordered by emphasis, five sizes.
 
+use std::{sync::Arc, time::Duration};
+
 use skia_safe::{
     utils::text_utils::Align, BlurStyle, Canvas, Color4f, Contains, MaskFilter, Paint, Point,
     RRect, Rect,
 };
 
 use ui_core::{
+    animation::animation::{easing::ease_out_cubic, Animation},
     font::FontBook,
     pointer::{self, PointerEvent, PointerEventKind},
     scheme::{color::Color, ColorTheme},
@@ -36,6 +39,30 @@ pub enum ButtonVariant {
     Outlined,
     /// Lowest emphasis.
     Text,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ButtonShape {
+    // Rounded Type, full corder radius
+    #[default]
+    Round,
+    // Squared type, less corder radius
+    Square,
+}
+
+impl ButtonShape {
+    pub fn corder_radius(self, size: ButtonSize, pressed: bool) -> f32 {
+        match self {
+            ButtonShape::Round => size.corner_radius(pressed),
+            ButtonShape::Square => match size {
+                ButtonSize::ExtraSmall => 12.0,
+                ButtonSize::Small => 12.0,
+                ButtonSize::Medium => 16.0,
+                ButtonSize::Large => 28.0,
+                ButtonSize::ExtraLarge => 28.0,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -78,14 +105,25 @@ impl ButtonSize {
     }
 
     /// Buttons use the `full` shape token, so the radius tracks the height.
-    pub fn corner_radius(self) -> f32 {
-        self.height() / 2.0
+    pub fn corner_radius(self, pressed: bool) -> f32 {
+        if pressed {
+            match self {
+                ButtonSize::ExtraSmall => 8.0,
+                ButtonSize::Small => 8.0,
+                ButtonSize::Medium => 12.0,
+                ButtonSize::Large => 16.0,
+                ButtonSize::ExtraLarge => 16.0,
+            }
+        } else {
+            self.height() / 2.0
+        }
     }
 }
 
 pub struct Button {
     label: String,
     variant: ButtonVariant,
+    shape: ButtonShape,
     size: ButtonSize,
     origin: (f32, f32),
     width: Option<f32>,
@@ -97,6 +135,20 @@ pub struct Button {
     /// works once the button has been laid out against a real font.
     bounds: Rect,
     on_click: Option<Box<dyn FnMut()>>,
+    animations: Animations,
+}
+
+pub struct Animations {
+    shape: Animation<f32>,
+}
+
+impl Animations {
+    pub fn new() -> Self {
+        Self {
+            // Starts at rest (round); `set_target(1.0)` on press morphs it in.
+            shape: Animation::new(0., 0., Duration::from_millis(200), Arc::new(ease_out_cubic)),
+        }
+    }
 }
 
 impl Button {
@@ -104,6 +156,7 @@ impl Button {
         Self {
             label: label.into(),
             variant: ButtonVariant::default(),
+            shape: ButtonShape::default(),
             size: ButtonSize::default(),
             origin: (0.0, 0.0),
             width: None,
@@ -113,11 +166,17 @@ impl Button {
             pressed: false,
             bounds: Rect::new_empty(),
             on_click: None,
+            animations: Animations::new(),
         }
     }
 
     pub fn variant(mut self, variant: ButtonVariant) -> Self {
         self.variant = variant;
+        self
+    }
+
+    pub fn shape(mut self, shape: ButtonShape) -> Self {
+        self.shape = shape;
         self
     }
 
@@ -251,11 +310,22 @@ impl Button {
 }
 
 impl Widget for Button {
-    fn draw(&mut self, canvas: &Canvas, theme: &ColorTheme, fonts: &FontBook) {
+    fn draw(&mut self, canvas: &Canvas, theme: &ColorTheme, fonts: &FontBook) -> bool {
         let rect = self.layout(fonts);
+        let mut redraw = false;
         self.bounds = rect;
 
-        let radius = self.size.corner_radius();
+        let radius = self.shape.corder_radius(self.size, false)
+            + (self.shape.corder_radius(self.size, true)
+                - self.shape.corder_radius(self.size, false))
+                * self.animations.shape.value();
+
+        if !self.animations.shape.is_done()
+            && self.animations.shape.from() != self.animations.shape.to()
+        {
+            redraw = true;
+        }
+
         let rrect = RRect::new_rect_xy(rect, radius, radius);
 
         if self.enabled && self.variant == ButtonVariant::Elevated {
@@ -309,11 +379,16 @@ impl Widget for Button {
             &paint,
             Align::Center,
         );
+
+        redraw
     }
 
     fn on_pointer(&mut self, event: &PointerEvent) -> bool {
         if !self.enabled {
             let dirty = self.hovered || self.pressed;
+            if self.pressed {
+                self.animations.shape.set_target(0.0);
+            }
             self.hovered = false;
             self.pressed = false;
             return dirty;
@@ -331,12 +406,16 @@ impl Widget for Button {
             }
             PointerEventKind::Leave => {
                 let dirty = self.hovered || self.pressed;
+                if self.pressed {
+                    self.animations.shape.set_target(0.0);
+                }
                 self.hovered = false;
                 self.pressed = false;
                 dirty
             }
             PointerEventKind::Press { button } if button == pointer::button::LEFT => {
                 if inside {
+                    self.animations.shape.set_target(1.0);
                     self.hovered = true;
                     self.pressed = true;
                     true
@@ -347,6 +426,9 @@ impl Widget for Button {
             PointerEventKind::Release { button } if button == pointer::button::LEFT => {
                 let was_pressed = self.pressed;
                 self.pressed = false;
+                if was_pressed {
+                    self.animations.shape.set_target(0.0);
+                }
                 // Activates only when press and release both land inside.
                 if was_pressed && inside {
                     if let Some(callback) = self.on_click.as_mut() {

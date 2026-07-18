@@ -1,10 +1,13 @@
 //! Material 3 slider: continuous or discrete, five sizes.
 
+use std::{sync::Arc, time::Duration};
+
 use skia_safe::{
     utils::text_utils::Align, Canvas, Color4f, Contains, Paint, Point, RRect, Rect, Vector,
 };
 
 use ui_core::{
+    animation::animation::{easing::ease_out_cubic, Animation},
     font::FontBook,
     pointer::{self, PointerEvent, PointerEventKind},
     scheme::{color::Color, ColorTheme},
@@ -95,6 +98,28 @@ pub struct Slider {
     /// Hit testing uses it, so it only works once the slider has been laid out.
     bounds: Rect,
     on_change: Option<Box<dyn FnMut(f32)>>,
+    animations: Animations,
+}
+
+pub struct Animations {
+    /// 0 at rest (`HANDLE_WIDTH`), 1 pressed (`HANDLE_WIDTH_PRESSED`).
+    handle_width: Animation<f32>,
+    /// 0 hidden, 1 fully shown; drives the value indicator's fade.
+    indicator: Animation<f32>,
+}
+
+impl Animations {
+    pub fn new() -> Self {
+        Self {
+            handle_width: Animation::new(
+                0.,
+                0.,
+                Duration::from_millis(200),
+                Arc::new(ease_out_cubic),
+            ),
+            indicator: Animation::new(0., 0., Duration::from_millis(200), Arc::new(ease_out_cubic)),
+        }
+    }
 }
 
 impl Slider {
@@ -114,6 +139,7 @@ impl Slider {
             pressed: false,
             bounds: Rect::new_empty(),
             on_change: None,
+            animations: Animations::new(),
         };
         slider.value = slider.quantize(value);
         slider
@@ -358,12 +384,14 @@ impl Slider {
     }
 
     /// A pill above the handle, centred on it and as wide as its label needs.
+    /// `progress` is the indicator animation's value: 0 invisible, 1 opaque.
     fn draw_value_indicator(
         &self,
         canvas: &Canvas,
         theme: &ColorTheme,
         fonts: &FontBook,
         handle_x: f32,
+        progress: f32,
     ) {
         let text = self.format_value();
         let font = fonts.sized(&self.font_key, VALUE_INDICATOR_TEXT_SIZE);
@@ -382,14 +410,17 @@ impl Slider {
         Self::fill_rrect(
             canvas,
             RRect::new_rect_xy(rect, radius, radius),
-            theme.inverse_surface,
+            theme.inverse_surface.with_alpha(progress),
         );
 
         let metrics = font.metrics().1;
         let baseline = rect.center_y() - (metrics.ascent + metrics.descent) / 2.0;
         let mut paint = Paint::default();
         paint.set_anti_alias(true);
-        paint.set_color4f(Color4f::from(theme.inverse_on_surface), None);
+        paint.set_color4f(
+            Color4f::from(theme.inverse_on_surface.with_alpha(progress)),
+            None,
+        );
         canvas.draw_str_align(
             &text,
             Point::new(rect.center_x(), baseline),
@@ -397,6 +428,19 @@ impl Slider {
             &paint,
             Align::Center,
         );
+    }
+
+    /// Retargets the indicator fade toward its current visibility, without
+    /// restarting an already-running animation that's headed the same way.
+    fn sync_indicator_target(&mut self) {
+        let target = if self.hovered || self.pressed {
+            1.0
+        } else {
+            0.0
+        };
+        if self.animations.indicator.to() != target {
+            self.animations.indicator.set_target(target);
+        }
     }
 
     /// Applies a pointer position, reporting whether the value moved.
@@ -419,17 +463,14 @@ enum Side {
 }
 
 impl Widget for Slider {
-    fn draw(&mut self, canvas: &Canvas, theme: &ColorTheme, fonts: &FontBook) {
+    fn draw(&mut self, canvas: &Canvas, theme: &ColorTheme, fonts: &FontBook) -> bool {
         self.bounds = self.layout();
         let track = self.track_rect();
 
         let radius = self.size.corner_radius();
         let handle_x = self.handle_center_x();
-        let handle_width = if self.pressed {
-            HANDLE_WIDTH_PRESSED
-        } else {
-            HANDLE_WIDTH
-        };
+        let handle_width = HANDLE_WIDTH
+            + (HANDLE_WIDTH_PRESSED - HANDLE_WIDTH) * self.animations.handle_width.value();
 
         let active = Rect::new(
             track.left,
@@ -474,16 +515,33 @@ impl Widget for Slider {
             self.handle_color(theme),
         );
 
-        if self.labeled && self.enabled && (self.pressed || self.hovered) {
-            self.draw_value_indicator(canvas, theme, fonts, handle_x);
+        let indicator_progress = self.animations.indicator.value();
+        if self.labeled && self.enabled && indicator_progress > 0.0 {
+            self.draw_value_indicator(canvas, theme, fonts, handle_x, indicator_progress);
         }
+
+        let mut redraw = false;
+        if !self.animations.handle_width.is_done()
+            && self.animations.handle_width.from() != self.animations.handle_width.to()
+        {
+            redraw = true;
+        }
+        if !self.animations.indicator.is_done()
+            && self.animations.indicator.from() != self.animations.indicator.to()
+        {
+            redraw = true;
+        }
+
+        redraw
     }
 
     fn on_pointer(&mut self, event: &PointerEvent) -> bool {
         if !self.enabled {
             let dirty = self.hovered || self.pressed;
+            self.animations.handle_width.set_target(0.0);
             self.hovered = false;
             self.pressed = false;
+            self.sync_indicator_target();
             return dirty;
         }
 
@@ -494,6 +552,7 @@ impl Widget for Slider {
             PointerEventKind::Enter | PointerEventKind::Motion => {
                 let changed = self.hovered != inside;
                 self.hovered = inside;
+                self.sync_indicator_target();
                 // A drag keeps tracking the pointer once it leaves the track.
                 if self.pressed {
                     return self.drag_to(x) || changed;
@@ -502,14 +561,18 @@ impl Widget for Slider {
             }
             PointerEventKind::Leave => {
                 let dirty = self.hovered || self.pressed;
+                self.animations.handle_width.set_target(0.0);
                 self.hovered = false;
                 self.pressed = false;
+                self.sync_indicator_target();
                 dirty
             }
             PointerEventKind::Press { button } if button == pointer::button::LEFT => {
                 if inside {
+                    self.animations.handle_width.set_target(1.0);
                     self.hovered = true;
                     self.pressed = true;
+                    self.sync_indicator_target();
                     self.drag_to(x);
                     true
                 } else {
@@ -518,7 +581,9 @@ impl Widget for Slider {
             }
             PointerEventKind::Release { button } if button == pointer::button::LEFT => {
                 let was_pressed = self.pressed;
+                self.animations.handle_width.set_target(0.0);
                 self.pressed = false;
+                self.sync_indicator_target();
                 was_pressed
             }
             _ => false,
