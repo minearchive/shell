@@ -1,13 +1,13 @@
 //! Material 3 button: five variants ordered by emphasis, five sizes.
 
 use skia_safe::{
-    utils::text_utils::Align, BlurStyle, Canvas, Color4f, Contains, MaskFilter, Paint, Point,
-    RRect, Rect,
+    utils::text_utils::Align, BlurStyle, Canvas, Color4f, MaskFilter, Paint, Point, RRect,
 };
 
 use ui_core::{
     animation::animation::Animation,
     font::FontBook,
+    geometry::LayoutRect,
     pointer::{self, PointerEvent, PointerEventKind},
     scheme::{color::Color, ColorTheme},
 };
@@ -126,15 +126,14 @@ pub struct Button {
     variant: ButtonVariant,
     shape: ButtonShape,
     size: ButtonSize,
-    origin: (f32, f32),
-    width: Option<f32>,
     font_key: String,
     enabled: bool,
     hovered: bool,
     pressed: bool,
-    /// Filled in by `draw`; zero until the first frame, so hit testing only
-    /// works once the button has been laid out against a real font.
-    bounds: Rect,
+    /// Assigned by the layout system via [`Widget::set_layout_rect`]; zero
+    /// until then, so hit testing only works once the button has been laid
+    /// out.
+    layout_rect: LayoutRect,
     on_click: Option<Box<dyn FnMut()>>,
     animations: Animations,
 }
@@ -159,13 +158,11 @@ impl Button {
             variant: ButtonVariant::default(),
             shape: ButtonShape::default(),
             size: ButtonSize::default(),
-            origin: (0.0, 0.0),
-            width: None,
             font_key: "noto_sans".to_string(),
             enabled: true,
             hovered: false,
             pressed: false,
-            bounds: Rect::new_empty(),
+            layout_rect: LayoutRect::empty(),
             on_click: None,
             animations: Animations::new(),
         }
@@ -181,19 +178,10 @@ impl Button {
         self
     }
 
+    /// Visual styling only — the layout system decides the actual rect, so
+    /// callers must size the node from [`ButtonSize::height`] themselves.
     pub fn size(mut self, size: ButtonSize) -> Self {
         self.size = size;
-        self
-    }
-
-    pub fn position(mut self, x: f32, y: f32) -> Self {
-        self.origin = (x, y);
-        self
-    }
-
-    /// Fixes the width instead of sizing to the label.
-    pub fn width(mut self, width: f32) -> Self {
-        self.width = Some(width);
         self
     }
 
@@ -228,17 +216,6 @@ impl Button {
 
     pub fn set_label(&mut self, label: impl Into<String>) {
         self.label = label.into();
-    }
-
-    fn layout(&self, fonts: &FontBook) -> Rect {
-        let font = fonts.sized(&self.font_key, self.size.label_size());
-        let text_width = font.measure_str(&self.label, None).0;
-        let height = self.size.height();
-        let width = self
-            .width
-            .unwrap_or(text_width + self.size.horizontal_padding() * 2.0)
-            .max(height);
-        Rect::from_xywh(self.origin.0, self.origin.1, width, height)
     }
 
     fn container_color(&self, theme: &ColorTheme) -> Color {
@@ -312,9 +289,8 @@ impl Button {
 
 impl Widget for Button {
     fn draw(&mut self, canvas: &Canvas, theme: &ColorTheme, fonts: &FontBook) -> bool {
-        let rect = self.layout(fonts);
+        let rect = self.layout_rect.to_skia();
         let mut redraw = false;
-        self.bounds = rect;
 
         let radius = self.shape.corder_radius(self.size, false)
             + (self.shape.corder_radius(self.size, true)
@@ -395,9 +371,7 @@ impl Widget for Button {
             return dirty;
         }
 
-        let inside = self
-            .bounds
-            .contains(Point::new(event.x() as f32, event.y() as f32));
+        let inside = self.hit_rect().contains(event.x() as f32, event.y() as f32);
 
         match event.kind {
             PointerEventKind::Enter | PointerEventKind::Motion => {
@@ -442,7 +416,70 @@ impl Widget for Button {
         }
     }
 
-    fn bounds(&self) -> Rect {
-        self.bounds
+    fn set_layout_rect(&mut self, rect: LayoutRect) {
+        self.layout_rect = rect;
+    }
+
+    fn layout_rect(&self) -> LayoutRect {
+        self.layout_rect
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The assigned rect must be readable before the first `draw`, since
+    /// hit testing and layout queries can happen before then.
+    #[test]
+    fn layout_rect_is_returned_before_first_draw() {
+        let mut button = Button::new("Click me");
+        assert_eq!(button.layout_rect(), LayoutRect::empty());
+
+        let rect = LayoutRect::new(10.0, 20.0, 100.0, 40.0);
+        button.set_layout_rect(rect);
+        assert_eq!(button.layout_rect(), rect);
+    }
+
+    /// `size` is a visual token, not geometry: it must never write back into
+    /// the layout rect, or the widget becomes a second source of truth that
+    /// silently fights whatever the layout system assigned.
+    #[test]
+    fn size_does_not_mutate_the_layout_rect() {
+        let rect = LayoutRect::new(10.0, 20.0, 100.0, ButtonSize::ExtraLarge.height());
+        let mut button = Button::new("Click me");
+        button.set_layout_rect(rect);
+
+        let button = button.size(ButtonSize::ExtraSmall);
+        assert_eq!(button.layout_rect(), rect);
+    }
+
+    /// Hit testing uses the assigned layout rect, not any internally
+    /// computed geometry.
+    #[test]
+    fn hit_testing_uses_assigned_layout_rect() {
+        let mut button = Button::new("Click me").on_click(|| {});
+        button.set_layout_rect(LayoutRect::new(10.0, 20.0, 100.0, 40.0));
+
+        // Inside the assigned rect: pressing then releasing should register
+        // as "was pressed".
+        let was_pressed = button.on_pointer(&PointerEvent::new(
+            (50.0, 40.0),
+            PointerEventKind::Press {
+                button: pointer::button::LEFT,
+            },
+        ));
+        assert!(was_pressed);
+
+        // Outside the assigned rect: no hit.
+        let mut other = Button::new("Elsewhere");
+        other.set_layout_rect(LayoutRect::new(10.0, 20.0, 100.0, 40.0));
+        let hit = other.on_pointer(&PointerEvent::new(
+            (500.0, 500.0),
+            PointerEventKind::Press {
+                button: pointer::button::LEFT,
+            },
+        ));
+        assert!(!hit);
     }
 }

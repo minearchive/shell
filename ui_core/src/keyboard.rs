@@ -39,8 +39,13 @@ pub struct Modifiers {
 pub enum KeyboardEventKind {
     Focus,
     Blur,
-    Press { keysym: u32, repeat: bool },
-    Release { keysym: u32 },
+    Press {
+        keysym: u32,
+        repeat: bool,
+    },
+    Release {
+        keysym: u32,
+    },
     /// IME composition, not yet committed.
     Preedit {
         text: String,

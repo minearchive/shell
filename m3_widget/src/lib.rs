@@ -11,6 +11,7 @@ pub use slider::{Slider, SliderSize};
 pub use switch::{Switch, SwitchIcons};
 pub use text_field::TextField;
 
+use ui_core::geometry::LayoutRect;
 use ui_core::keyboard::KeyboardEvent;
 use ui_core::pointer::PointerEvent;
 
@@ -31,8 +32,20 @@ pub trait Widget {
         false
     }
 
-    fn bounds(&self) -> skia_safe::Rect {
-        skia_safe::Rect::new_empty()
+    /// Assigns the rect a layout system (e.g. Taffy) allocated to this
+    /// widget. The single source of truth for the widget's placement and
+    /// size — widgets must not independently own position or width.
+    fn set_layout_rect(&mut self, rect: LayoutRect);
+
+    /// The rect last assigned via [`Self::set_layout_rect`].
+    fn layout_rect(&self) -> LayoutRect;
+
+    /// The rect used for pointer hit testing. Defaults to [`Self::layout_rect`];
+    /// widgets whose visual footprint is smaller than the minimum comfortable
+    /// touch target (e.g. `Switch`, `Slider`) override this to expand it,
+    /// without treating the expansion as part of paint or layout bounds.
+    fn hit_rect(&self) -> LayoutRect {
+        self.layout_rect()
     }
 
     fn focusable(&self) -> bool {

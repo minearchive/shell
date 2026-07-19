@@ -3,6 +3,9 @@
 ## Rendering
 - [ ] Optimized rendering
 
+## Fonts
+- [ ] Font fallback: Roboto as primary + Noto Sans CJK JP as fallback for CJK glyphs (currently `FontBook` only holds one typeface per key; needs per-char `unichar_to_glyph` check + `match_family_style_character`, with the fallback typeface resolution cached, not called per-draw)
+
 ## Audio
 - [ ] status provider
 - [ ] setting for each process

@@ -1,98 +1,447 @@
+mod util;
+
+use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::rc::Rc;
 
-use serde::Deserialize;
-use skia_safe::{surfaces, Color4f, Contains, ImageInfo, Paint, Point};
+use skia_safe::{surfaces, Color4f, ImageInfo, Paint, Point};
 use softbuffer::{Context, Surface};
+use taffy::prelude::*;
 use ui_core::font::FontBook;
+use ui_core::geometry::LayoutRect;
 use ui_core::keyboard::{self, KeyboardEvent, KeyboardEventKind};
 use ui_core::pointer::{self, AxisScroll, PointerEvent, PointerEventKind};
 use ui_core::scheme::ColorTheme;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
 use m3_widget::{
-    Button, ButtonSize, ButtonVariant, Slider, SliderSize, Switch, SwitchIcons, TextField, Widget,
+    switch, text_field, Button, ButtonSize, ButtonVariant, Slider, SliderSize, Switch, SwitchIcons,
+    TextField, Widget,
+};
+use util::{
+    button_code, column_style, item_style, keysym_from_named, load_theme, resolve_layout_rects,
+    row_style, PendingWidget, Section,
 };
 
-fn button_code(button: MouseButton) -> Option<u32> {
-    match button {
-        MouseButton::Left => Some(pointer::button::LEFT),
-        MouseButton::Right => Some(pointer::button::RIGHT),
-        MouseButton::Middle => Some(pointer::button::MIDDLE),
-        _ => None,
-    }
-}
+/// Left/right/top/bottom breathing room around the whole gallery. Top clears
+/// the two header lines drawn separately in `RedrawRequested`.
+const ROOT_PADDING_X: f32 = 24.0;
+const ROOT_PADDING_TOP: f32 = 90.0;
+const ROOT_PADDING_BOTTOM: f32 = 24.0;
+/// Gap between gallery sections (rows/columns), stacked in a column.
+const SECTION_GAP: f32 = 32.0;
+/// Gap between items within one row.
+const ITEM_GAP: f32 = 16.0;
+/// Gap between switch variant groups.
+const GROUP_GAP: f32 = 24.0;
+/// Gap between stacked items in the slider-sizes column.
+const COLUMN_ITEM_GAP: f32 = 8.0;
+/// Baseline offset from a section's top to its caption, drawn just above it.
+const CAPTION_OFFSET: f32 = 8.0;
 
-/// Editing keys only — everything else (letters, digits, ...) arrives as text
-/// via `KeyEvent::text` and is routed through `Commit` instead.
-fn keysym_from_named(key: &NamedKey) -> Option<u32> {
-    match key {
-        NamedKey::Backspace => Some(keyboard::key::BACKSPACE),
-        NamedKey::Tab => Some(keyboard::key::TAB),
-        NamedKey::Enter => Some(keyboard::key::RETURN),
-        NamedKey::Escape => Some(keyboard::key::ESCAPE),
-        NamedKey::Home => Some(keyboard::key::HOME),
-        NamedKey::ArrowLeft => Some(keyboard::key::LEFT),
-        NamedKey::ArrowUp => Some(keyboard::key::UP),
-        NamedKey::ArrowRight => Some(keyboard::key::RIGHT),
-        NamedKey::ArrowDown => Some(keyboard::key::DOWN),
-        NamedKey::End => Some(keyboard::key::END),
-        NamedKey::Delete => Some(keyboard::key::DELETE),
-        _ => None,
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(default)]
-struct ThemeFile {
-    is_dark: bool,
-    dark: ColorTheme,
-    light: ColorTheme,
-}
-
-impl Default for ThemeFile {
-    fn default() -> Self {
-        Self {
-            is_dark: true,
-            dark: ColorTheme::default(),
-            light: ColorTheme::default(),
-        }
-    }
-}
-
-fn load_theme(path: &str) -> ColorTheme {
-    match std::fs::read_to_string(path) {
-        Ok(contents) => match toml::from_str::<ThemeFile>(&contents) {
-            Ok(tf) => {
-                if tf.is_dark {
-                    tf.dark
-                } else {
-                    tf.light
-                }
-            }
-            Err(e) => {
-                eprintln!("m3_test: failed to parse {path}: {e}; using default theme");
-                ColorTheme::default()
-            }
+fn root_style() -> Style {
+    Style {
+        display: Display::Flex,
+        flex_direction: FlexDirection::Column,
+        padding: Rect {
+            left: length(ROOT_PADDING_X),
+            right: length(ROOT_PADDING_X),
+            top: length(ROOT_PADDING_TOP),
+            bottom: length(ROOT_PADDING_BOTTOM),
         },
-        Err(e) => {
-            eprintln!("m3_test: failed to read {path}: {e}; using default theme");
-            ColorTheme::default()
-        }
+        gap: Size {
+            width: length(0.0),
+            height: length(SECTION_GAP),
+        },
+        ..Default::default()
     }
 }
 
-// ---- winit app ----
+fn button_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
+    let variants = [
+        (
+            "Filled",
+            ButtonSize::Medium,
+            ButtonVariant::Filled,
+            true,
+            100.0,
+        ),
+        (
+            "Tonal",
+            ButtonSize::Medium,
+            ButtonVariant::FilledTonal,
+            true,
+            100.0,
+        ),
+        (
+            "Elevated",
+            ButtonSize::Medium,
+            ButtonVariant::Elevated,
+            true,
+            110.0,
+        ),
+        (
+            "Outlined",
+            ButtonSize::Medium,
+            ButtonVariant::Outlined,
+            true,
+            110.0,
+        ),
+        ("Text", ButtonSize::Medium, ButtonVariant::Text, true, 90.0),
+    ];
+
+    let sizes = [
+        (
+            "XS",
+            ButtonSize::ExtraSmall,
+            ButtonVariant::Filled,
+            true,
+            90.0,
+        ),
+        ("S", ButtonSize::Small, ButtonVariant::Filled, true, 90.0),
+        ("M", ButtonSize::Medium, ButtonVariant::Filled, true, 100.0),
+        ("L", ButtonSize::Large, ButtonVariant::Filled, true, 110.0),
+        (
+            "XL",
+            ButtonSize::ExtraLarge,
+            ButtonVariant::Filled,
+            true,
+            120.0,
+        ),
+    ];
+
+    let disabled = [
+        (
+            "Filled",
+            ButtonSize::Medium,
+            ButtonVariant::Filled,
+            false,
+            100.0,
+        ),
+        (
+            "Tonal",
+            ButtonSize::Medium,
+            ButtonVariant::FilledTonal,
+            false,
+            100.0,
+        ),
+        (
+            "Elevated",
+            Default::default(),
+            ButtonVariant::Elevated,
+            false,
+            110.0,
+        ),
+        (
+            "Outlined",
+            ButtonSize::Medium,
+            ButtonVariant::Outlined,
+            false,
+            110.0,
+        ),
+        ("Text", ButtonSize::Medium, ButtonVariant::Text, false, 90.0),
+    ];
+
+    let mut sections = Vec::new();
+    let mut pending = Vec::new();
+
+    let all = [
+        ("Variants", variants),
+        ("Sizes", sizes),
+        ("Disabled", disabled),
+    ];
+
+    for (title, variant) in all {
+        let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
+        for (label, size, variant, enabled, width) in variant {
+            let leaf = tree.new_leaf(item_style(width, size.height())).unwrap();
+            tree.add_child(row, leaf).unwrap();
+            pending.push(PendingWidget {
+                node: leaf,
+                build: Box::new(move |rect| {
+                    let mut widget = Button::new(label)
+                        .size(size)
+                        .variant(variant)
+                        .enabled(enabled)
+                        .on_click(move || println!("clicked: {label}"));
+                    widget.set_layout_rect(rect);
+                    Box::new(widget)
+                }),
+            });
+        }
+        sections.push(Section {
+            caption: title,
+            node: row,
+        });
+    }
+
+    (sections, pending)
+}
+
+fn slider_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
+    let mut sections = Vec::new();
+    let mut pending = Vec::new();
+
+    let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
+
+    let types = [(true, 0.), (true, 10.), (false, 0.)];
+
+    for (enabled, step) in types {
+        let leaf = tree
+            .new_leaf(item_style(200.0, SliderSize::default().handle_height()))
+            .unwrap();
+        tree.add_child(row, leaf).unwrap();
+        pending.push(PendingWidget {
+            node: leaf,
+            build: Box::new(move |rect| {
+                let mut widget = Slider::new(0.0, 100.0, 40.0)
+                    .labeled(true)
+                    .enabled(enabled)
+                    .step(step)
+                    .on_change(|v| println!("continuous: {v:.1}"));
+                widget.set_layout_rect(rect);
+                Box::new(widget)
+            }),
+        });
+    }
+
+    sections.push(Section {
+        caption: "Sliders",
+        node: row,
+    });
+
+    let sizes = [
+        SliderSize::ExtraSmall,
+        SliderSize::Small,
+        SliderSize::Medium,
+    ];
+    let column = tree.new_leaf(column_style(COLUMN_ITEM_GAP)).unwrap();
+    for size in sizes {
+        let leaf = tree
+            .new_leaf(item_style(280.0, size.handle_height()))
+            .unwrap();
+        tree.add_child(column, leaf).unwrap();
+        pending.push(PendingWidget {
+            node: leaf,
+            build: Box::new(move |rect| {
+                let mut widget = Slider::new(0.0, 100.0, 50.0).size(size);
+                widget.set_layout_rect(rect);
+                Box::new(widget)
+            }),
+        });
+    }
+    sections.push(Section {
+        caption: "Slider sizes",
+        node: column,
+    });
+
+    (sections, pending)
+}
+
+fn text_field_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
+    let mut pending = Vec::new();
+    let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
+
+    let leaf = tree
+        .new_leaf(item_style(220.0, text_field::HEIGHT))
+        .unwrap();
+    tree.add_child(row, leaf).unwrap();
+    pending.push(PendingWidget {
+        node: leaf,
+        build: Box::new(move |rect| {
+            let mut widget = TextField::new().on_change(|text| println!("text: {text}"));
+            widget.set_layout_rect(rect);
+            Box::new(widget)
+        }),
+    });
+
+    let leaf = tree
+        .new_leaf(item_style(220.0, text_field::HEIGHT))
+        .unwrap();
+    tree.add_child(row, leaf).unwrap();
+    pending.push(PendingWidget {
+        node: leaf,
+        build: Box::new(move |rect| {
+            let mut widget = TextField::new()
+                .text("フォント入力テスト")
+                .on_change(|text| println!("text: {text}"));
+            widget.set_layout_rect(rect);
+            Box::new(widget)
+        }),
+    });
+
+    let leaf = tree
+        .new_leaf(item_style(220.0, text_field::HEIGHT))
+        .unwrap();
+    tree.add_child(row, leaf).unwrap();
+    pending.push(PendingWidget {
+        node: leaf,
+        build: Box::new(move |rect| {
+            let mut widget = TextField::new().text("disabled").enabled(false);
+            widget.set_layout_rect(rect);
+            Box::new(widget)
+        }),
+    });
+
+    (
+        vec![Section {
+            caption: "Text fields",
+            node: row,
+        }],
+        pending,
+    )
+}
+
+fn switch_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
+    let variants = [
+        ("plain", SwitchIcons::None),
+        ("selected-icon", SwitchIcons::Selected),
+        ("both-icons", SwitchIcons::Both),
+    ];
+
+    let mut pending = Vec::new();
+    let outer = tree.new_leaf(row_style(GROUP_GAP)).unwrap();
+
+    for (label, icons) in variants {
+        let group = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
+        tree.add_child(outer, group).unwrap();
+        for checked in [false, true] {
+            let leaf = tree
+                .new_leaf(item_style(switch::TRACK_WIDTH, switch::TRACK_HEIGHT))
+                .unwrap();
+            tree.add_child(group, leaf).unwrap();
+            pending.push(PendingWidget {
+                node: leaf,
+                build: Box::new(move |rect| {
+                    let mut widget = Switch::new(checked)
+                        .icons(icons)
+                        .on_change(move |v| println!("{label}: {v}"));
+                    widget.set_layout_rect(rect);
+                    Box::new(widget)
+                }),
+            });
+        }
+    }
+
+    let disabled_group = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
+    tree.add_child(outer, disabled_group).unwrap();
+    for checked in [false, true] {
+        let leaf = tree
+            .new_leaf(item_style(switch::TRACK_WIDTH, switch::TRACK_HEIGHT))
+            .unwrap();
+        tree.add_child(disabled_group, leaf).unwrap();
+        pending.push(PendingWidget {
+            node: leaf,
+            build: Box::new(move |rect| {
+                let mut widget = Switch::new(checked).icons(SwitchIcons::Both).enabled(false);
+                widget.set_layout_rect(rect);
+                Box::new(widget)
+            }),
+        });
+    }
+
+    (
+        vec![Section {
+            caption: "Switches",
+            node: outer,
+        }],
+        pending,
+    )
+}
+
+/// A widget paired with the taffy node driving its layout, so a resize can
+/// push fresh geometry into existing widget state (text, value, focus,
+/// callbacks, animations, ...) instead of rebuilding it.
+struct PositionedWidget {
+    node: NodeId,
+    widget: Box<dyn Widget>,
+}
+
+/// A section caption; its screen position is re-derived from its node's
+/// current layout on every relayout, including resize.
+struct Caption {
+    label: &'static str,
+    node: NodeId,
+}
+
+/// Builds every gallery widget positioned by a taffy layout tree instead of
+/// hand-tuned pixel constants, and the section captions that go with it.
+fn build_gallery() -> (
+    Vec<PositionedWidget>,
+    Vec<Caption>,
+    HashMap<NodeId, LayoutRect>,
+    TaffyTree,
+    NodeId,
+) {
+    let mut tree: TaffyTree<()> = TaffyTree::new();
+    let root = tree.new_leaf(root_style()).unwrap();
+
+    let mut sections = Vec::new();
+    let mut pending = Vec::new();
+
+    for (s, p) in [
+        button_gallery(&mut tree),
+        slider_gallery(&mut tree),
+        text_field_gallery(&mut tree),
+        switch_gallery(&mut tree),
+    ] {
+        sections.extend(s);
+        pending.extend(p);
+    }
+
+    for section in &sections {
+        tree.add_child(root, section.node).unwrap();
+    }
+
+    tree.compute_layout(
+        root,
+        Size {
+            width: AvailableSpace::MaxContent,
+            height: AvailableSpace::MaxContent,
+        },
+    )
+    .unwrap();
+
+    let mut rects = HashMap::new();
+    resolve_layout_rects(&tree, root, (0.0, 0.0), &mut rects);
+
+    let widgets = pending
+        .into_iter()
+        .map(|p| {
+            let rect = rects[&p.node];
+            PositionedWidget {
+                node: p.node,
+                widget: (p.build)(rect),
+            }
+        })
+        .collect();
+
+    let captions = sections
+        .into_iter()
+        .map(|s| Caption {
+            label: s.caption,
+            node: s.node,
+        })
+        .collect();
+
+    (widgets, captions, rects, tree, root)
+}
 
 struct App {
     theme: ColorTheme,
     fonts: FontBook,
-    widgets: Vec<Box<dyn Widget>>,
+    widgets: Vec<PositionedWidget>,
+    /// Section captions, paired with the taffy node their position is
+    /// re-derived from on every relayout.
+    captions: Vec<Caption>,
+    /// Every node's taffy-resolved rect, refreshed by `relayout` after
+    /// initial construction and after every resize.
+    layout_rects: HashMap<NodeId, LayoutRect>,
     window: Option<Rc<Window>>,
     surface: Option<Surface<Rc<Window>, Rc<Window>>>,
     cursor: pointer::Point,
@@ -101,200 +450,20 @@ struct App {
     /// `None` if the platform has no clipboard we can reach; paste is then a
     /// no-op rather than a hard failure.
     clipboard: Option<arboard::Clipboard>,
-}
-
-/// Top of each gallery row. The section captions are drawn just above these,
-/// so keep the two in step.
-const VARIANTS: f32 = 100.0;
-const SIZES: f32 = 180.0;
-const DISABLED: f32 = 280.0;
-const SLIDERS: f32 = 380.0;
-const SLIDER_SIZES: f32 = 450.0;
-const TEXT_FIELDS: f32 = 620.0;
-const SWITCHES: f32 = 710.0;
-
-/// Baseline offset from a row's top to its caption.
-const CAPTION_OFFSET: f32 = 8.0;
-
-/// One button per variant, then one per size, then the disabled treatments.
-fn button_gallery() -> Vec<Box<dyn Widget>> {
-    let variants = [
-        ("Filled", ButtonVariant::Filled, 24.0, 100.0),
-        ("Tonal", ButtonVariant::FilledTonal, 136.0, 100.0),
-        ("Elevated", ButtonVariant::Elevated, 248.0, 110.0),
-        ("Outlined", ButtonVariant::Outlined, 370.0, 110.0),
-        ("Text", ButtonVariant::Text, 492.0, 90.0),
-    ];
-
-    let sizes = [
-        ("XS", ButtonSize::ExtraSmall, 24.0, 90.0),
-        ("S", ButtonSize::Small, 126.0, 90.0),
-        ("M", ButtonSize::Medium, 228.0, 100.0),
-        ("L", ButtonSize::Large, 340.0, 110.0),
-        ("XL", ButtonSize::ExtraLarge, 462.0, 120.0),
-    ];
-
-    let disabled = [
-        ("Filled", ButtonVariant::Filled, 24.0, 100.0),
-        ("Tonal", ButtonVariant::FilledTonal, 136.0, 100.0),
-        ("Outlined", ButtonVariant::Outlined, 248.0, 110.0),
-        ("Text", ButtonVariant::Text, 370.0, 90.0),
-    ];
-
-    let mut widgets: Vec<Box<dyn Widget>> = Vec::new();
-
-    for (label, variant, x, width) in variants {
-        widgets.push(Box::new(
-            Button::new(label)
-                .variant(variant)
-                .position(x, VARIANTS)
-                .width(width)
-                .on_click(move || println!("clicked: {label}")),
-        ));
-    }
-
-    for (label, size, x, width) in sizes {
-        widgets.push(Box::new(
-            Button::new(label)
-                .size(size)
-                .position(x, SIZES)
-                .width(width)
-                .on_click(move || println!("clicked: size {label}")),
-        ));
-    }
-
-    for (label, variant, x, width) in disabled {
-        widgets.push(Box::new(
-            Button::new(label)
-                .variant(variant)
-                .position(x, DISABLED)
-                .width(width)
-                .enabled(false),
-        ));
-    }
-
-    widgets
-}
-
-/// Continuous, discrete and disabled sliders, then one per size.
-fn slider_gallery() -> Vec<Box<dyn Widget>> {
-    let mut widgets: Vec<Box<dyn Widget>> = Vec::new();
-
-    widgets.push(Box::new(
-        Slider::new(0.0, 100.0, 40.0)
-            .position(24.0, SLIDERS)
-            .width(200.0)
-            .labeled(true)
-            .on_change(|v| println!("continuous: {v:.1}")),
-    ));
-    widgets.push(Box::new(
-        Slider::new(0.0, 10.0, 3.0)
-            .step(1.0)
-            .position(256.0, SLIDERS)
-            .width(200.0)
-            .labeled(true)
-            .on_change(|v| println!("discrete: {v}")),
-    ));
-    widgets.push(Box::new(
-        Slider::new(0.0, 100.0, 60.0)
-            .position(488.0, SLIDERS)
-            .width(200.0)
-            .enabled(false),
-    ));
-
-    let sizes = [
-        (SliderSize::ExtraSmall, 24.0),
-        (SliderSize::Small, 24.0),
-        (SliderSize::Medium, 24.0),
-    ];
-    let mut y = SLIDER_SIZES;
-    for (size, x) in sizes {
-        widgets.push(Box::new(
-            Slider::new(0.0, 100.0, 50.0)
-                .size(size)
-                .position(x, y)
-                .width(280.0),
-        ));
-        y += size.handle_height() + 8.0;
-    }
-
-    widgets
-}
-
-/// One plain field, one pre-filled field, one disabled field.
-fn text_field_gallery() -> Vec<Box<dyn Widget>> {
-    vec![
-        Box::new(
-            TextField::new()
-                .position(24.0, TEXT_FIELDS)
-                .width(220.0)
-                .on_change(|text| println!("text: {text}")),
-        ),
-        Box::new(
-            TextField::new()
-                .position(268.0, TEXT_FIELDS)
-                .width(220.0)
-                .text("フォント入力テスト")
-                .on_change(|text| println!("text: {text}")),
-        ),
-        Box::new(
-            TextField::new()
-                .position(512.0, TEXT_FIELDS)
-                .width(220.0)
-                .text("disabled")
-                .enabled(false),
-        ),
-    ]
-}
-
-/// The three icon treatments in both states, then the disabled pair.
-fn switch_gallery() -> Vec<Box<dyn Widget>> {
-    let variants = [
-        ("plain", SwitchIcons::None),
-        ("selected-icon", SwitchIcons::Selected),
-        ("both-icons", SwitchIcons::Both),
-    ];
-
-    let mut widgets: Vec<Box<dyn Widget>> = Vec::new();
-    let mut x = 24.0;
-
-    for (label, icons) in variants {
-        for checked in [false, true] {
-            widgets.push(Box::new(
-                Switch::new(checked)
-                    .icons(icons)
-                    .position(x, SWITCHES)
-                    .on_change(move |v| println!("{label}: {v}")),
-            ));
-            x += 68.0;
-        }
-        x += 24.0;
-    }
-
-    for checked in [false, true] {
-        widgets.push(Box::new(
-            Switch::new(checked)
-                .icons(SwitchIcons::Both)
-                .position(x, SWITCHES)
-                .enabled(false),
-        ));
-        x += 68.0;
-    }
-
-    widgets
+    tree: TaffyTree,
+    /// root node of tree
+    root: NodeId,
 }
 
 impl App {
     fn new(theme: ColorTheme, fonts: FontBook) -> Self {
+        let (widgets, captions, layout_rects, tree, root) = build_gallery();
         Self {
             theme,
             fonts,
-            widgets: button_gallery()
-                .into_iter()
-                .chain(slider_gallery())
-                .chain(text_field_gallery())
-                .chain(switch_gallery())
-                .collect(),
+            widgets,
+            captions,
+            layout_rects,
             window: None,
             surface: None,
             cursor: (0.0, 0.0),
@@ -303,11 +472,27 @@ impl App {
             clipboard: arboard::Clipboard::new()
                 .map_err(|e| eprintln!("m3_test: clipboard unavailable, paste disabled: {e}"))
                 .ok(),
+            tree,
+            root,
         }
     }
 
-    /// Paste routes through `Commit`, the one text-insertion path, so widgets
-    /// never learn what a clipboard is.
+    /// Resolves every node's current rect from the taffy tree and pushes it
+    /// into its widget via `set_layout_rect`, without touching any other
+    /// widget state (text, value, focus, callbacks, animations, ...).
+    /// Captions read their position out of `layout_rects` lazily at draw
+    /// time, so refreshing it here is enough to move them too.
+    fn relayout(&mut self) {
+        let mut rects = HashMap::new();
+        resolve_layout_rects(&self.tree, self.root, (0.0, 0.0), &mut rects);
+        for positioned in &mut self.widgets {
+            if let Some(rect) = rects.get(&positioned.node) {
+                positioned.widget.set_layout_rect(*rect);
+            }
+        }
+        self.layout_rects = rects;
+    }
+
     fn paste(&mut self) {
         let Some(clipboard) = self.clipboard.as_mut() else {
             return;
@@ -325,8 +510,8 @@ impl App {
     fn dispatch_pointer(&mut self, kind: PointerEventKind) {
         let event = PointerEvent::new(self.cursor, kind);
         let mut redraw = false;
-        for widget in &mut self.widgets {
-            redraw |= widget.on_pointer(&event);
+        for positioned in &mut self.widgets {
+            redraw |= positioned.widget.on_pointer(&event);
         }
         if let PointerEventKind::Press { button } = kind {
             if button == pointer::button::LEFT {
@@ -343,13 +528,18 @@ impl App {
     /// Topmost (last-drawn) focusable widget under the cursor gets focus;
     /// clicking empty space or a non-focusable widget clears it.
     fn update_focus_from_click(&mut self) -> bool {
-        let point = Point::new(self.cursor.0 as f32, self.cursor.1 as f32);
         let hit = self
             .widgets
             .iter()
             .enumerate()
             .rev()
-            .find(|(_, w)| w.focusable() && w.bounds().contains(point))
+            .find(|(_, positioned)| {
+                let widget = &positioned.widget;
+                widget.focusable()
+                    && widget
+                        .hit_rect()
+                        .contains(self.cursor.0 as f32, self.cursor.1 as f32)
+            })
             .map(|(i, _)| i);
         self.set_focus(hit)
     }
@@ -359,13 +549,14 @@ impl App {
             return false;
         }
         if let Some(old) = self.focus.and_then(|i| self.widgets.get_mut(i)) {
-            old.set_focused(false);
-            old.on_keyboard(&KeyboardEvent::new(KeyboardEventKind::Blur, self.modifiers));
+            old.widget.set_focused(false);
+            old.widget
+                .on_keyboard(&KeyboardEvent::new(KeyboardEventKind::Blur, self.modifiers));
         }
         self.focus = new_focus;
         if let Some(new) = self.focus.and_then(|i| self.widgets.get_mut(i)) {
-            new.set_focused(true);
-            new.on_keyboard(&KeyboardEvent::new(
+            new.widget.set_focused(true);
+            new.widget.on_keyboard(&KeyboardEvent::new(
                 KeyboardEventKind::Focus,
                 self.modifiers,
             ));
@@ -383,7 +574,7 @@ impl App {
         let redraw = self
             .widgets
             .get_mut(idx)
-            .map(|w| w.on_keyboard(&event))
+            .map(|positioned| positioned.widget.on_keyboard(&event))
             .unwrap_or(false);
         if redraw {
             if let Some(w) = &self.window {
@@ -407,7 +598,7 @@ impl App {
             } else {
                 (i + 1).rem_euclid(count as isize)
             };
-            if self.widgets[i as usize].focusable() {
+            if self.widgets[i as usize].widget.focusable() {
                 self.set_focus(Some(i as usize));
                 if let Some(w) = &self.window {
                     w.request_redraw();
@@ -421,6 +612,20 @@ impl App {
                 w.request_redraw();
             }
         }
+    }
+
+    fn layout_for_viewport(&mut self, width: f32, height: f32) {
+        self.tree
+            .compute_layout(
+                self.root,
+                Size {
+                    width: AvailableSpace::Definite(width),
+                    height: AvailableSpace::Definite(height),
+                },
+            )
+            .expect("Failed to recalculate layout");
+
+        self.relayout();
     }
 }
 
@@ -438,6 +643,12 @@ impl ApplicationHandler for App {
         let context = Context::new(window.clone()).expect("failed to create softbuffer context");
         let surface =
             Surface::new(&context, window.clone()).expect("failed to create softbuffer surface");
+
+        self.layout_for_viewport(
+            window.inner_size().width as f32,
+            window.inner_size().height as f32,
+        );
+
         window.request_redraw();
         self.window = Some(window);
         self.surface = Some(surface);
@@ -448,7 +659,9 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
             }
-            WindowEvent::Resized(_) => {
+            WindowEvent::Resized(physical_size) => {
+                self.layout_for_viewport(physical_size.width as f32, physical_size.height as f32);
+
                 if let Some(w) = &self.window {
                     w.request_redraw();
                 }
@@ -595,18 +808,13 @@ impl ApplicationHandler for App {
                 );
 
                 let caption = self.fonts.sized("noto_sans", 13.0);
-                for (label, row) in [
-                    ("Variants", VARIANTS),
-                    ("Sizes", SIZES),
-                    ("Disabled", DISABLED),
-                    ("Sliders", SLIDERS),
-                    ("Slider sizes", SLIDER_SIZES),
-                    ("Text fields", TEXT_FIELDS),
-                    ("Switches", SWITCHES),
-                ] {
+                for entry in &self.captions {
+                    let Some(rect) = self.layout_rects.get(&entry.node) else {
+                        continue;
+                    };
                     canvas.draw_str(
-                        label,
-                        Point::new(24.0, row - CAPTION_OFFSET),
+                        entry.label,
+                        Point::new(ROOT_PADDING_X, rect.y - CAPTION_OFFSET),
                         &caption,
                         &text_paint,
                     );
@@ -615,8 +823,8 @@ impl ApplicationHandler for App {
                 let mut redraw = false;
 
                 // draw widgets
-                for widget in &mut self.widgets {
-                    redraw |= widget.draw(canvas, &self.theme, &self.fonts);
+                for positioned in &mut self.widgets {
+                    redraw |= positioned.widget.draw(canvas, &self.theme, &self.fonts);
                 }
 
                 if redraw {
