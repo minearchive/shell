@@ -613,6 +613,20 @@ impl App {
             }
         }
     }
+
+    fn layout_for_viewport(&mut self, width: f32, height: f32) {
+        self.tree
+            .compute_layout(
+                self.root,
+                Size {
+                    width: AvailableSpace::Definite(width),
+                    height: AvailableSpace::Definite(height),
+                },
+            )
+            .expect("Failed to recalculate layout");
+
+        self.relayout();
+    }
 }
 
 impl ApplicationHandler for App {
@@ -630,17 +644,10 @@ impl ApplicationHandler for App {
         let surface =
             Surface::new(&context, window.clone()).expect("failed to create softbuffer surface");
 
-        self.tree
-            .compute_layout(
-                self.root,
-                Size {
-                    width: AvailableSpace::Definite(window.inner_size().width as f32),
-                    height: AvailableSpace::Definite(window.inner_size().height as f32),
-                },
-            )
-            .expect("Failed to recalculate layout");
-
-        self.relayout();
+        self.layout_for_viewport(
+            window.inner_size().width as f32,
+            window.inner_size().height as f32,
+        );
 
         window.request_redraw();
         self.window = Some(window);
@@ -653,17 +660,7 @@ impl ApplicationHandler for App {
                 event_loop.exit();
             }
             WindowEvent::Resized(physical_size) => {
-                self.tree
-                    .compute_layout(
-                        self.root,
-                        Size {
-                            width: AvailableSpace::Definite(physical_size.width as f32),
-                            height: AvailableSpace::Definite(physical_size.height as f32),
-                        },
-                    )
-                    .expect("Failed to recalculate layout");
-
-                self.relayout();
+                self.layout_for_viewport(physical_size.width as f32, physical_size.height as f32);
 
                 if let Some(w) = &self.window {
                     w.request_redraw();

@@ -37,7 +37,7 @@ impl LayoutRect {
     }
 
     pub fn contains(self, x: f32, y: f32) -> bool {
-        self.x <= x && x <= self.x + self.width && self.y <= y && y <= self.y + self.height
+        self.x <= x && x < self.x + self.width && self.y <= y && y < self.y + self.height
     }
 
     /// Shrinks the rect toward its center by `horizontal` on each side and
