@@ -629,6 +629,19 @@ impl ApplicationHandler for App {
         let context = Context::new(window.clone()).expect("failed to create softbuffer context");
         let surface =
             Surface::new(&context, window.clone()).expect("failed to create softbuffer surface");
+
+        self.tree
+            .compute_layout(
+                self.root,
+                Size {
+                    width: AvailableSpace::Definite(window.inner_size().width as f32),
+                    height: AvailableSpace::Definite(window.inner_size().height as f32),
+                },
+            )
+            .expect("Failed to recalculate layout");
+
+        self.relayout();
+
         window.request_redraw();
         self.window = Some(window);
         self.surface = Some(surface);
