@@ -2,11 +2,13 @@
 
 pub mod animation;
 pub mod button;
+pub mod list_item;
 pub mod slider;
 pub mod switch;
 pub mod text_field;
 
 pub use button::{Button, ButtonSize, ButtonVariant};
+pub use list_item::ListItem;
 pub use slider::{Slider, SliderSize};
 pub use switch::{Switch, SwitchIcons};
 pub use text_field::TextField;
