@@ -60,7 +60,11 @@ impl Animations {
     pub fn new(selected: bool) -> Self {
         let value = if selected { 1.0 } else { 0.0 };
         Self {
-            selection: Animation::new(value, value, duration::MEDIUM1, easing::emphasized()),
+            // A small in-place selection micro-interaction (dot scale + ring
+            // recolor), not a large spatial travel — so it takes the standard
+            // curve, matching checkbox. `switch.rs` keeps emphasized because its
+            // handle physically travels the track.
+            selection: Animation::new(value, value, duration::SHORT4, easing::standard()),
         }
     }
 }

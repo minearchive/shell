@@ -62,7 +62,11 @@ impl Animations {
     pub fn new(selected: bool) -> Self {
         let value = if selected { 1.0 } else { 0.0 };
         Self {
-            selection: Animation::new(value, value, duration::MEDIUM1, easing::emphasized()),
+            // Unlike the switch's handle travel, this is a small alpha/color
+            // fade over an 18dp box — a toggle micro-interaction, not a
+            // large expressive transition, so it takes the standard curve
+            // at a short duration (matching the button family's press morph).
+            selection: Animation::new(value, value, duration::SHORT4, easing::standard()),
         }
     }
 }
