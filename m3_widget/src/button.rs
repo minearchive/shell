@@ -39,15 +39,15 @@ pub enum ButtonVariant {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ButtonShape {
-    // Rounded Type, full corder radius
+    // Rounded Type, full corner radius
     #[default]
     Round,
-    // Squared type, less corder radius
+    // Squared type, less corner radius
     Square,
 }
 
 impl ButtonShape {
-    pub fn corder_radius(self, size: ButtonSize, pressed: bool) -> f32 {
+    pub fn corner_radius(self, size: ButtonSize, pressed: bool) -> f32 {
         match self {
             ButtonShape::Round => size.corner_radius(pressed),
             ButtonShape::Square => match size {
@@ -287,9 +287,9 @@ impl Widget for Button {
         let rect = self.layout_rect.to_skia();
         let mut redraw = false;
 
-        let radius = self.shape.corder_radius(self.size, false)
-            + (self.shape.corder_radius(self.size, true)
-                - self.shape.corder_radius(self.size, false))
+        let radius = self.shape.corner_radius(self.size, false)
+            + (self.shape.corner_radius(self.size, true)
+                - self.shape.corner_radius(self.size, false))
                 * self.animations.shape.value();
 
         if self.animations.shape.is_traveling() {
