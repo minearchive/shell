@@ -20,8 +20,9 @@ use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
 use m3_widget::{
-    switch, text_field, Button, ButtonSize, ButtonVariant, Slider, SliderSize, Switch, SwitchIcons,
-    TextField, Widget,
+    checkbox, icon_button, radio_button, switch, text_field, Button, ButtonSize, ButtonVariant,
+    CheckBox, Divider, Icon, IconButton, IconButtonVariant, ListItem, RadioButton, Slider,
+    SliderSize, Switch, SwitchIcons, TextField, Widget,
 };
 use util::{
     button_code, column_style, item_style, keysym_from_named, load_theme, resolve_layout_rects,
@@ -354,6 +355,280 @@ fn switch_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>
     )
 }
 
+fn checkbox_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
+    let variants = [
+        ("unchecked", false, false, true),
+        ("checked", true, false, true),
+        ("indeterminate", false, true, true),
+        ("disabled-unchecked", false, false, false),
+        ("disabled-checked", true, false, false),
+    ];
+
+    let mut pending = Vec::new();
+    let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
+
+    for (label, checked, indeterminate, enabled) in variants {
+        let leaf = tree
+            .new_leaf(item_style(checkbox::SIZE, checkbox::SIZE))
+            .unwrap();
+        tree.add_child(row, leaf).unwrap();
+        pending.push(PendingWidget {
+            node: leaf,
+            build: Box::new(move |rect| {
+                let mut widget = CheckBox::new(checked)
+                    .indeterminate(indeterminate)
+                    .enabled(enabled)
+                    .on_change(move |v| println!("{label}: {v}"));
+                widget.set_layout_rect(rect);
+                Box::new(widget)
+            }),
+        });
+    }
+
+    (
+        vec![Section {
+            caption: "Checkboxes",
+            node: row,
+        }],
+        pending,
+    )
+}
+
+fn radio_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
+    // One radio group: only "Option A" starts selected. Real deselection of
+    // the previously selected sibling when another option is picked (via
+    // `RadioButton::set_selected`) is the app's job, not wired up here.
+    let variants = [
+        ("Option A", true, true),
+        ("Option B", false, true),
+        ("Option C", false, true),
+        ("Disabled", false, false),
+    ];
+
+    let mut pending = Vec::new();
+    let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
+
+    for (label, selected, enabled) in variants {
+        let leaf = tree
+            .new_leaf(item_style(radio_button::SIZE, radio_button::SIZE))
+            .unwrap();
+        tree.add_child(row, leaf).unwrap();
+        pending.push(PendingWidget {
+            node: leaf,
+            build: Box::new(move |rect| {
+                let mut widget = RadioButton::new(selected)
+                    .enabled(enabled)
+                    .on_change(move |v| println!("{label}: {v}"));
+                widget.set_layout_rect(rect);
+                Box::new(widget)
+            }),
+        });
+    }
+
+    (
+        vec![Section {
+            caption: "Radio buttons",
+            node: row,
+        }],
+        pending,
+    )
+}
+
+fn icon_button_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
+    let icons = [
+        ("favorite", Icon::Favorite),
+        ("add", Icon::Add),
+        ("settings", Icon::Settings),
+        ("menu", Icon::Menu),
+    ];
+
+    let variants = [
+        ("Standard", IconButtonVariant::Standard),
+        ("Filled", IconButtonVariant::Filled),
+        ("Tonal", IconButtonVariant::FilledTonal),
+        ("Outlined", IconButtonVariant::Outlined),
+    ];
+
+    let mut pending = Vec::new();
+    let outer = tree.new_leaf(row_style(GROUP_GAP)).unwrap();
+
+    for (variant_label, variant) in variants {
+        let group = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
+        tree.add_child(outer, group).unwrap();
+        for (icon_label, icon) in icons {
+            let leaf = tree
+                .new_leaf(item_style(icon_button::SIZE, icon_button::SIZE))
+                .unwrap();
+            tree.add_child(group, leaf).unwrap();
+            pending.push(PendingWidget {
+                node: leaf,
+                build: Box::new(move |rect| {
+                    let mut widget = IconButton::new()
+                        .variant(variant)
+                        .icon(icon)
+                        .on_click(move || println!("clicked: {variant_label} {icon_label}"));
+                    widget.set_layout_rect(rect);
+                    Box::new(widget)
+                }),
+            });
+        }
+    }
+
+    // Disabled and toggle examples share a final group.
+    let extra_group = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
+    tree.add_child(outer, extra_group).unwrap();
+
+    let leaf = tree
+        .new_leaf(item_style(icon_button::SIZE, icon_button::SIZE))
+        .unwrap();
+    tree.add_child(extra_group, leaf).unwrap();
+    pending.push(PendingWidget {
+        node: leaf,
+        build: Box::new(move |rect| {
+            let mut widget = IconButton::new()
+                .variant(IconButtonVariant::Filled)
+                .icon(Icon::Close)
+                .enabled(false);
+            widget.set_layout_rect(rect);
+            Box::new(widget)
+        }),
+    });
+
+    let leaf = tree
+        .new_leaf(item_style(icon_button::SIZE, icon_button::SIZE))
+        .unwrap();
+    tree.add_child(extra_group, leaf).unwrap();
+    pending.push(PendingWidget {
+        node: leaf,
+        build: Box::new(move |rect| {
+            let mut widget = IconButton::new()
+                .variant(IconButtonVariant::Standard)
+                .icon(Icon::Favorite)
+                .toggle(true)
+                .selected(true)
+                .on_change(|v| println!("toggle favorite: {v}"));
+            widget.set_layout_rect(rect);
+            Box::new(widget)
+        }),
+    });
+
+    (
+        vec![Section {
+            caption: "Icon buttons",
+            node: outer,
+        }],
+        pending,
+    )
+}
+
+fn list_item_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
+    let mut pending = Vec::new();
+    let column = tree.new_leaf(column_style(COLUMN_ITEM_GAP)).unwrap();
+
+    let leaf = tree.new_leaf(item_style(320.0, 56.0)).unwrap();
+    tree.add_child(column, leaf).unwrap();
+    pending.push(PendingWidget {
+        node: leaf,
+        build: Box::new(move |rect| {
+            let mut widget = ListItem::new("Headline only");
+            widget.set_layout_rect(rect);
+            Box::new(widget)
+        }),
+    });
+
+    let leaf = tree.new_leaf(item_style(320.0, 72.0)).unwrap();
+    tree.add_child(column, leaf).unwrap();
+    pending.push(PendingWidget {
+        node: leaf,
+        build: Box::new(move |rect| {
+            let mut widget = ListItem::new("Headline").supporting("Supporting text");
+            widget.set_layout_rect(rect);
+            Box::new(widget)
+        }),
+    });
+
+    let leaf = tree.new_leaf(item_style(320.0, 72.0)).unwrap();
+    tree.add_child(column, leaf).unwrap();
+    pending.push(PendingWidget {
+        node: leaf,
+        build: Box::new(move |rect| {
+            let mut widget = ListItem::new("Headline")
+                .supporting("Supporting text")
+                .trailing_text("12:34");
+            widget.set_layout_rect(rect);
+            Box::new(widget)
+        }),
+    });
+
+    let leaf = tree.new_leaf(item_style(320.0, 56.0)).unwrap();
+    tree.add_child(column, leaf).unwrap();
+    pending.push(PendingWidget {
+        node: leaf,
+        build: Box::new(move |rect| {
+            let mut widget = ListItem::new("Tap me").on_click(|| println!("list item clicked"));
+            widget.set_layout_rect(rect);
+            Box::new(widget)
+        }),
+    });
+
+    let leaf = tree.new_leaf(item_style(320.0, 72.0)).unwrap();
+    tree.add_child(column, leaf).unwrap();
+    pending.push(PendingWidget {
+        node: leaf,
+        build: Box::new(move |rect| {
+            let mut widget = ListItem::new("Favorite item")
+                .supporting("With leading/trailing icons")
+                .leading(|canvas, rect, color| Icon::Favorite.draw(canvas, rect, color))
+                .trailing(|canvas, rect, color| Icon::Close.draw(canvas, rect, color));
+            widget.set_layout_rect(rect);
+            Box::new(widget)
+        }),
+    });
+
+    (
+        vec![Section {
+            caption: "List items",
+            node: column,
+        }],
+        pending,
+    )
+}
+
+fn divider_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
+    let mut pending = Vec::new();
+    let column = tree.new_leaf(column_style(COLUMN_ITEM_GAP)).unwrap();
+
+    let leaf = tree.new_leaf(item_style(320.0, 16.0)).unwrap();
+    tree.add_child(column, leaf).unwrap();
+    pending.push(PendingWidget {
+        node: leaf,
+        build: Box::new(move |rect| {
+            let mut widget = Divider::new();
+            widget.set_layout_rect(rect);
+            Box::new(widget)
+        }),
+    });
+
+    let leaf = tree.new_leaf(item_style(320.0, 16.0)).unwrap();
+    tree.add_child(column, leaf).unwrap();
+    pending.push(PendingWidget {
+        node: leaf,
+        build: Box::new(move |rect| {
+            let mut widget = Divider::new().leading_inset(16.0);
+            widget.set_layout_rect(rect);
+            Box::new(widget)
+        }),
+    });
+
+    (
+        vec![Section {
+            caption: "Dividers",
+            node: column,
+        }],
+        pending,
+    )
+}
+
 /// A widget paired with the taffy node driving its layout, so a resize can
 /// push fresh geometry into existing widget state (text, value, focus,
 /// callbacks, animations, ...) instead of rebuilding it.
@@ -389,6 +664,11 @@ fn build_gallery() -> (
         slider_gallery(&mut tree),
         text_field_gallery(&mut tree),
         switch_gallery(&mut tree),
+        checkbox_gallery(&mut tree),
+        radio_gallery(&mut tree),
+        icon_button_gallery(&mut tree),
+        list_item_gallery(&mut tree),
+        divider_gallery(&mut tree),
     ] {
         sections.extend(s);
         pending.extend(p);
