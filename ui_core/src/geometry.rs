@@ -78,14 +78,24 @@ impl From<LayoutRect> for skia_safe::Rect {
 mod tests {
     use super::*;
 
+    /// `contains` treats the rect as half-open: the left/top edges are inside,
+    /// the right/bottom edges are not. Two rects sharing an edge therefore
+    /// never both claim a point on it.
     #[test]
-    fn contains_is_inclusive_of_edges() {
+    fn contains_is_half_open() {
         let rect = LayoutRect::new(10.0, 20.0, 100.0, 50.0);
+        // Left/top edges and the interior are inside.
         assert!(rect.contains(10.0, 20.0));
-        assert!(rect.contains(110.0, 70.0));
         assert!(rect.contains(60.0, 45.0));
+        // Just inside the far edges.
+        assert!(rect.contains(109.9, 69.9));
+        // Right/bottom edges (x == x+w, y == y+h) are outside.
+        assert!(!rect.contains(110.0, 70.0));
+        assert!(!rect.contains(110.0, 45.0));
+        assert!(!rect.contains(60.0, 70.0));
+        // Just outside the left/top edges.
         assert!(!rect.contains(9.9, 45.0));
-        assert!(!rect.contains(60.0, 70.1));
+        assert!(!rect.contains(60.0, 19.9));
     }
 
     #[test]
