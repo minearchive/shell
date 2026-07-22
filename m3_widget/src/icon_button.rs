@@ -9,6 +9,7 @@
 use skia_safe::{Canvas, Color4f, Paint, PaintCap, PaintJoin, PathBuilder, Point, RRect, Rect};
 
 use ui_core::{
+    animation::animation::Animation,
     font::FontBook,
     geometry::LayoutRect,
     keyboard::{self, KeyboardEvent, KeyboardEventKind},
@@ -17,6 +18,7 @@ use ui_core::{
 };
 
 use crate::{
+    animation::{duration, easing},
     tokens::{
         DISABLED_CONTAINER_OPACITY, DISABLED_CONTENT_OPACITY, FOCUS_OPACITY, HOVER_OPACITY,
         PRESSED_OPACITY,
@@ -35,6 +37,13 @@ pub const SIZE: f32 = 40.0;
 /// Icons are drawn centered in a 24dp box within the container, per MD3.
 const ICON_BOX_SIZE: f32 = 24.0;
 const ICON_STROKE_WIDTH: f32 = 2.0;
+
+/// The pressed-state container corner radius, per MD3's press shape-morph
+/// (round -> squarer). `IconButton`'s default `SIZE` (40dp) matches
+/// `button.rs`'s `ButtonSize::Small::height()`, whose pressed corner token
+/// (`ButtonSize::Small.corner_radius(pressed: true)`) is `8.0` — reused here
+/// so the icon button morphs by the same amount as a same-sized button.
+const PRESSED_CORNER_RADIUS: f32 = 8.0;
 
 /// Emphasis order roughly follows `ButtonVariant`, minus `Elevated`/`Text`
 /// (icon buttons have no elevated tier, and "no container, primary-colored
@@ -240,6 +249,20 @@ pub struct IconButton {
     layout_rect: LayoutRect,
     on_click: Option<Box<dyn FnMut()>>,
     on_change: Option<Box<dyn FnMut(bool)>>,
+    animations: Animations,
+}
+
+pub struct Animations {
+    shape: Animation<f32>,
+}
+
+impl Animations {
+    pub fn new() -> Self {
+        Self {
+            // Starts at rest (round); `set_target(1.0)` on press morphs it in.
+            shape: Animation::new(0., 0., duration::SHORT4, easing::standard()),
+        }
+    }
 }
 
 impl IconButton {
@@ -260,6 +283,7 @@ impl IconButton {
             layout_rect: LayoutRect::empty(),
             on_click: None,
             on_change: None,
+            animations: Animations::new(),
         }
     }
 
@@ -455,7 +479,18 @@ impl Widget for IconButton {
         let rect = self.layout_rect.to_skia();
         // The smaller dimension, so a non-square layout rect still yields a
         // circle inscribed within it rather than an ellipse.
-        let radius = rect.width().min(rect.height()) / 2.0;
+        let resting_radius = rect.width().min(rect.height()) / 2.0;
+        // MD3 Expressive press shape-morph: interpolate from the resting
+        // circle toward the squarer `PRESSED_CORNER_RADIUS`, mirroring
+        // `button.rs`'s `Widget::draw`.
+        let radius = resting_radius
+            + (PRESSED_CORNER_RADIUS - resting_radius) * self.animations.shape.value();
+
+        let mut redraw = false;
+        if self.animations.shape.is_traveling() {
+            redraw = true;
+        }
+
         let rrect = RRect::new_rect_xy(rect, radius, radius);
 
         let container = self.container_color(theme);
@@ -506,14 +541,18 @@ impl Widget for IconButton {
             icon.draw(canvas, icon_box, icon_color);
         }
 
-        // No animation: state layer and container colors switch instantly on
-        // state change, so there is never anything left to animate.
-        false
+        // The state layer and container colors switch instantly on state
+        // change (per house convention, only the press shape-morph
+        // animates), so `redraw` here reflects only the shape animation.
+        redraw
     }
 
     fn on_pointer(&mut self, event: &PointerEvent) -> bool {
         if !self.enabled {
             let dirty = self.hovered || self.pressed;
+            if self.pressed {
+                self.animations.shape.set_target(0.0);
+            }
             self.hovered = false;
             self.pressed = false;
             return dirty;
@@ -529,12 +568,16 @@ impl Widget for IconButton {
             }
             PointerEventKind::Leave => {
                 let dirty = self.hovered || self.pressed;
+                if self.pressed {
+                    self.animations.shape.set_target(0.0);
+                }
                 self.hovered = false;
                 self.pressed = false;
                 dirty
             }
             PointerEventKind::Press { button } if button == pointer::button::LEFT => {
                 if inside {
+                    self.animations.shape.set_target(1.0);
                     self.hovered = true;
                     self.pressed = true;
                     true
@@ -545,6 +588,9 @@ impl Widget for IconButton {
             PointerEventKind::Release { button } if button == pointer::button::LEFT => {
                 let was_pressed = self.pressed;
                 self.pressed = false;
+                if was_pressed {
+                    self.animations.shape.set_target(0.0);
+                }
                 // Activates only when press and release both land inside.
                 if was_pressed && inside {
                     self.activate();
