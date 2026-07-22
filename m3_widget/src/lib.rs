@@ -2,6 +2,7 @@
 
 pub mod animation;
 pub mod button;
+pub mod checkbox;
 pub mod divider;
 pub mod list_item;
 pub mod slider;
@@ -9,6 +10,7 @@ pub mod switch;
 pub mod text_field;
 
 pub use button::{Button, ButtonSize, ButtonVariant};
+pub use checkbox::CheckBox;
 pub use divider::{Divider, Orientation};
 pub use list_item::ListItem;
 pub use slider::{Slider, SliderSize};
