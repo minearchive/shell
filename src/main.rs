@@ -12,8 +12,12 @@ use log::{debug, info};
 use skia_safe::{surfaces, ImageInfo};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
-    delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
-    delegate_registry, delegate_seat, delegate_shm,
+    data_device_manager::{
+        data_device::DataDeviceHandler, data_offer::DataOfferHandler,
+        data_source::DataSourceHandler,
+    },
+    delegate_compositor, delegate_data_device, delegate_keyboard, delegate_layer, delegate_output,
+    delegate_pointer, delegate_registry, delegate_seat, delegate_shm,
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
@@ -655,6 +659,140 @@ impl PointerHandler for Shell {
     }
 }
 
+impl DataDeviceHandler for Shell {
+    fn enter(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _data_device: &wayland_client::protocol::wl_data_device::WlDataDevice,
+        _x: f64,
+        _y: f64,
+        _wl_surface: &WlSurface,
+    ) {
+        todo!()
+    }
+
+    fn leave(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _data_device: &wayland_client::protocol::wl_data_device::WlDataDevice,
+    ) {
+        todo!()
+    }
+
+    fn motion(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _data_device: &wayland_client::protocol::wl_data_device::WlDataDevice,
+        _x: f64,
+        _y: f64,
+    ) {
+        todo!()
+    }
+
+    fn selection(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _data_device: &wayland_client::protocol::wl_data_device::WlDataDevice,
+    ) {
+        todo!()
+    }
+
+    fn drop_performed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _data_device: &wayland_client::protocol::wl_data_device::WlDataDevice,
+    ) {
+        todo!()
+    }
+}
+
+impl DataOfferHandler for Shell {
+    fn source_actions(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _offer: &mut smithay_client_toolkit::data_device_manager::data_offer::DragOffer,
+        _actions: wayland_client::protocol::wl_data_device_manager::DndAction,
+    ) {
+        todo!()
+    }
+
+    fn selected_action(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _offer: &mut smithay_client_toolkit::data_device_manager::data_offer::DragOffer,
+        _actions: wayland_client::protocol::wl_data_device_manager::DndAction,
+    ) {
+        todo!()
+    }
+}
+
+impl DataSourceHandler for Shell {
+    fn accept_mime(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _source: &wayland_client::protocol::wl_data_source::WlDataSource,
+        _mime: Option<String>,
+    ) {
+        todo!()
+    }
+
+    fn send_request(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _source: &wayland_client::protocol::wl_data_source::WlDataSource,
+        _mime: String,
+        _fd: smithay_client_toolkit::data_device_manager::WritePipe,
+    ) {
+        todo!()
+    }
+
+    fn cancelled(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _source: &wayland_client::protocol::wl_data_source::WlDataSource,
+    ) {
+        todo!()
+    }
+
+    fn dnd_dropped(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _source: &wayland_client::protocol::wl_data_source::WlDataSource,
+    ) {
+        todo!()
+    }
+
+    fn dnd_finished(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _source: &wayland_client::protocol::wl_data_source::WlDataSource,
+    ) {
+        todo!()
+    }
+
+    fn action(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _source: &wayland_client::protocol::wl_data_source::WlDataSource,
+        _action: wayland_client::protocol::wl_data_device_manager::DndAction,
+    ) {
+        todo!()
+    }
+}
+
 impl ShmHandler for Shell {
     fn shm_state(&mut self) -> &mut Shm {
         &mut self.shm
@@ -728,6 +866,8 @@ delegate_shm!(Shell);
 delegate_seat!(Shell);
 delegate_keyboard!(Shell);
 delegate_pointer!(Shell);
+
+delegate_data_device!(Shell);
 
 delegate_layer!(Shell);
 
