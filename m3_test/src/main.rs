@@ -21,8 +21,8 @@ use winit::window::{Window, WindowId};
 
 use m3_widget::{
     checkbox, icon_button, radio_button, switch, text_field, Button, ButtonSize, ButtonVariant,
-    CheckBox, Divider, Icon, IconButton, IconButtonVariant, ListItem, RadioButton, Slider,
-    SliderSize, Switch, SwitchIcons, TextField, Widget,
+    CheckBox, Divider, Icon, IconButton, IconButtonVariant, ListItem, RadioButton,
+    ScrollableWidget, Slider, SliderSize, Switch, SwitchIcons, TextField, Widget,
 };
 use util::{
     button_code, column_style, item_style, keysym_from_named, load_theme, resolve_layout_rects,
@@ -32,8 +32,10 @@ use util::{
 /// Left/right/top/bottom breathing room around the whole gallery. Top clears
 /// the two header lines drawn separately in `RedrawRequested`.
 const ROOT_PADDING_X: f32 = 24.0;
-const ROOT_PADDING_TOP: f32 = 90.0;
+const ROOT_PADDING_TOP: f32 = 24.0;
 const ROOT_PADDING_BOTTOM: f32 = 24.0;
+/// Height of the fixed header drawn above the scrollable viewport.
+const HEADER_HEIGHT: f32 = 80.0;
 /// Gap between gallery sections (rows/columns), stacked in a column.
 const SECTION_GAP: f32 = 32.0;
 /// Gap between items within one row.
@@ -629,14 +631,6 @@ fn divider_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget
     )
 }
 
-/// A widget paired with the taffy node driving its layout, so a resize can
-/// push fresh geometry into existing widget state (text, value, focus,
-/// callbacks, animations, ...) instead of rebuilding it.
-struct PositionedWidget {
-    node: NodeId,
-    widget: Box<dyn Widget>,
-}
-
 /// A section caption; its screen position is re-derived from its node's
 /// current layout on every relayout, including resize.
 struct Caption {
@@ -646,8 +640,11 @@ struct Caption {
 
 /// Builds every gallery widget positioned by a taffy layout tree instead of
 /// hand-tuned pixel constants, and the section captions that go with it.
+/// Widgets are returned paired with the taffy node driving their layout, so a
+/// resize can push fresh geometry into existing widget state (text, value,
+/// focus, callbacks, animations, ...) instead of rebuilding it.
 fn build_gallery() -> (
-    Vec<PositionedWidget>,
+    Vec<(NodeId, Box<dyn Widget>)>,
     Vec<Caption>,
     HashMap<NodeId, LayoutRect>,
     TaffyTree,
@@ -694,10 +691,7 @@ fn build_gallery() -> (
         .into_iter()
         .map(|p| {
             let rect = rects[&p.node];
-            PositionedWidget {
-                node: p.node,
-                widget: (p.build)(rect),
-            }
+            (p.node, (p.build)(rect))
         })
         .collect();
 
@@ -715,7 +709,11 @@ fn build_gallery() -> (
 struct App {
     theme: ColorTheme,
     fonts: FontBook,
-    widgets: Vec<PositionedWidget>,
+    /// The scrollable viewport owning every gallery widget as a child.
+    scroll: ScrollableWidget,
+    /// Taffy node for each child, in the same order as `scroll.children()`,
+    /// so a relayout can push fresh geometry into each widget.
+    child_nodes: Vec<NodeId>,
     /// Section captions, paired with the taffy node their position is
     /// re-derived from on every relayout.
     captions: Vec<Caption>,
@@ -738,10 +736,17 @@ struct App {
 impl App {
     fn new(theme: ColorTheme, fonts: FontBook) -> Self {
         let (widgets, captions, layout_rects, tree, root) = build_gallery();
+        let mut scroll = ScrollableWidget::new();
+        let mut child_nodes = Vec::with_capacity(widgets.len());
+        for (node, widget) in widgets {
+            child_nodes.push(node);
+            scroll.push(widget);
+        }
         Self {
             theme,
             fonts,
-            widgets,
+            scroll,
+            child_nodes,
             captions,
             layout_rects,
             window: None,
@@ -757,20 +762,56 @@ impl App {
         }
     }
 
-    /// Resolves every node's current rect from the taffy tree and pushes it
-    /// into its widget via `set_layout_rect`, without touching any other
-    /// widget state (text, value, focus, callbacks, animations, ...).
-    /// Captions read their position out of `layout_rects` lazily at draw
-    /// time, so refreshing it here is enough to move them too.
-    fn relayout(&mut self) {
+    /// Resolves every node's current rect from the taffy tree, sets the
+    /// scroll viewport/content height, and pushes fresh geometry into each
+    /// child via `set_layout_rect`, without touching any other widget state
+    /// (text, value, focus, callbacks, animations, ...). Also rebuilds the
+    /// caption overlay so captions keep tracking their section's top edge.
+    fn relayout(&mut self, width: f32, height: f32) {
         let mut rects = HashMap::new();
         resolve_layout_rects(&self.tree, self.root, (0.0, 0.0), &mut rects);
-        for positioned in &mut self.widgets {
-            if let Some(rect) = rects.get(&positioned.node) {
-                positioned.widget.set_layout_rect(*rect);
+
+        self.scroll.set_layout_rect(LayoutRect::new(
+            0.0,
+            HEADER_HEIGHT,
+            width,
+            (height - HEADER_HEIGHT).max(0.0),
+        ));
+        let content_h = self.tree.layout(self.root).unwrap().size.height;
+        self.scroll.set_content_height(content_h);
+
+        for (node, child) in self.child_nodes.iter().zip(self.scroll.children_mut()) {
+            if let Some(rect) = rects.get(node) {
+                child.set_layout_rect(*rect);
             }
         }
         self.layout_rects = rects;
+
+        self.update_caption_overlay();
+    }
+
+    /// Rebuilds the scroll widget's content overlay from the current
+    /// `layout_rects`, so section captions are drawn (and therefore scroll
+    /// and clip) along with the content.
+    fn update_caption_overlay(&mut self) {
+        let caption_data: Vec<(&'static str, f32)> = self
+            .captions
+            .iter()
+            .filter_map(|c| {
+                self.layout_rects
+                    .get(&c.node)
+                    .map(|r| (c.label, r.y - CAPTION_OFFSET))
+            })
+            .collect();
+        self.scroll
+            .set_content_overlay(move |canvas, theme, fonts| {
+                let mut paint = Paint::default();
+                paint.set_color4f(Color4f::from(theme.on_surface), None);
+                let font = fonts.sized("noto_sans", 13.0);
+                for (label, y) in &caption_data {
+                    canvas.draw_str(label, Point::new(ROOT_PADDING_X, *y), &font, &paint);
+                }
+            });
     }
 
     fn paste(&mut self) {
@@ -789,10 +830,7 @@ impl App {
 
     fn dispatch_pointer(&mut self, kind: PointerEventKind) {
         let event = PointerEvent::new(self.cursor, kind);
-        let mut redraw = false;
-        for positioned in &mut self.widgets {
-            redraw |= positioned.widget.on_pointer(&event);
-        }
+        let mut redraw = self.scroll.on_pointer(&event);
         if let PointerEventKind::Press { button } = kind {
             if button == pointer::button::LEFT {
                 redraw |= self.update_focus_from_click();
@@ -806,21 +844,22 @@ impl App {
     }
 
     /// Topmost (last-drawn) focusable widget under the cursor gets focus;
-    /// clicking empty space or a non-focusable widget clears it.
+    /// clicking empty space or a non-focusable widget clears it. Hit-testing
+    /// happens in content space, and only when the cursor is inside the
+    /// scroll viewport.
     fn update_focus_from_click(&mut self) -> bool {
-        let hit = self
-            .widgets
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, positioned)| {
-                let widget = &positioned.widget;
-                widget.focusable()
-                    && widget
-                        .hit_rect()
-                        .contains(self.cursor.0 as f32, self.cursor.1 as f32)
-            })
-            .map(|(i, _)| i);
+        let hit = if self.scroll.viewport_contains(self.cursor) {
+            let cp = self.scroll.content_point(self.cursor);
+            self.scroll
+                .children()
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, w)| w.focusable() && w.hit_rect().contains(cp.0 as f32, cp.1 as f32))
+                .map(|(i, _)| i)
+        } else {
+            None
+        };
         self.set_focus(hit)
     }
 
@@ -828,15 +867,14 @@ impl App {
         if new_focus == self.focus {
             return false;
         }
-        if let Some(old) = self.focus.and_then(|i| self.widgets.get_mut(i)) {
-            old.widget.set_focused(false);
-            old.widget
-                .on_keyboard(&KeyboardEvent::new(KeyboardEventKind::Blur, self.modifiers));
+        if let Some(old) = self.focus.and_then(|i| self.scroll.child_mut(i)) {
+            old.set_focused(false);
+            old.on_keyboard(&KeyboardEvent::new(KeyboardEventKind::Blur, self.modifiers));
         }
         self.focus = new_focus;
-        if let Some(new) = self.focus.and_then(|i| self.widgets.get_mut(i)) {
-            new.widget.set_focused(true);
-            new.widget.on_keyboard(&KeyboardEvent::new(
+        if let Some(new) = self.focus.and_then(|i| self.scroll.child_mut(i)) {
+            new.set_focused(true);
+            new.on_keyboard(&KeyboardEvent::new(
                 KeyboardEventKind::Focus,
                 self.modifiers,
             ));
@@ -852,9 +890,9 @@ impl App {
         };
         let event = KeyboardEvent::new(kind, self.modifiers);
         let redraw = self
-            .widgets
-            .get_mut(idx)
-            .map(|positioned| positioned.widget.on_keyboard(&event))
+            .scroll
+            .child_mut(idx)
+            .map(|widget| widget.on_keyboard(&event))
             .unwrap_or(false);
         if redraw {
             if let Some(w) = &self.window {
@@ -866,7 +904,7 @@ impl App {
     /// Tab / Shift+Tab move focus to the next/previous focusable widget,
     /// wrapping around. Does nothing if there are no focusable widgets.
     fn cycle_focus(&mut self, backward: bool) {
-        let count = self.widgets.len();
+        let count = self.scroll.children().len();
         if count == 0 {
             return;
         }
@@ -878,7 +916,7 @@ impl App {
             } else {
                 (i + 1).rem_euclid(count as isize)
             };
-            if self.widgets[i as usize].widget.focusable() {
+            if self.scroll.children()[i as usize].focusable() {
                 self.set_focus(Some(i as usize));
                 if let Some(w) = &self.window {
                     w.request_redraw();
@@ -900,12 +938,12 @@ impl App {
                 self.root,
                 Size {
                     width: AvailableSpace::Definite(width),
-                    height: AvailableSpace::Definite(height),
+                    height: AvailableSpace::MaxContent,
                 },
             )
             .expect("Failed to recalculate layout");
 
-        self.relayout();
+        self.relayout(width, height);
     }
 }
 
@@ -1071,6 +1109,8 @@ impl ApplicationHandler for App {
 
                 canvas.clear(Color4f::from(self.theme.surface));
 
+                let redraw = self.scroll.draw(canvas, &self.theme, &self.fonts);
+
                 let mut text_paint = Paint::default();
                 text_paint.set_color4f(Color4f::from(self.theme.on_surface), None);
                 let font = self.fonts.sized("noto_sans", 24.0);
@@ -1086,26 +1126,6 @@ impl ApplicationHandler for App {
                     &font,
                     &text_paint,
                 );
-
-                let caption = self.fonts.sized("noto_sans", 13.0);
-                for entry in &self.captions {
-                    let Some(rect) = self.layout_rects.get(&entry.node) else {
-                        continue;
-                    };
-                    canvas.draw_str(
-                        entry.label,
-                        Point::new(ROOT_PADDING_X, rect.y - CAPTION_OFFSET),
-                        &caption,
-                        &text_paint,
-                    );
-                }
-
-                let mut redraw = false;
-
-                // draw widgets
-                for positioned in &mut self.widgets {
-                    redraw |= positioned.widget.draw(canvas, &self.theme, &self.fonts);
-                }
 
                 if redraw {
                     window.request_redraw();
