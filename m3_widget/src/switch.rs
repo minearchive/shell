@@ -13,17 +13,13 @@ use ui_core::{
 
 use crate::{
     animation::{duration, easing},
+    drawing::fill_circle,
+    tokens::{
+        DISABLED_CONTAINER_OPACITY, DISABLED_CONTENT_OPACITY, FOCUS_OPACITY, HOVER_OPACITY,
+        PRESSED_OPACITY,
+    },
     Widget,
 };
-
-/// State layer opacities.
-const HOVER_OPACITY: f32 = 0.08;
-const FOCUS_OPACITY: f32 = 0.10;
-const PRESSED_OPACITY: f32 = 0.10;
-
-/// Disabled treatments.
-const DISABLED_CONTAINER_OPACITY: f32 = 0.12;
-const DISABLED_CONTENT_OPACITY: f32 = 0.38;
 
 /// Track geometry. The track uses the `full` shape token, so its radius is half
 /// its height. Public so callers can size layout around a switch without
@@ -212,9 +208,11 @@ impl Switch {
                 .surface_container_highest
                 .with_alpha(DISABLED_CONTAINER_OPACITY);
             let selected = theme.on_surface.with_alpha(DISABLED_CONTAINER_OPACITY);
-            return lerp_color(unselected, selected, selection);
+            return unselected.lerp(selected, selection);
         }
-        lerp_color(theme.surface_container_highest, theme.primary, selection)
+        theme
+            .surface_container_highest
+            .lerp(theme.primary, selection)
     }
 
     /// The outline belongs to the unselected track only, so it fades out as the
@@ -233,9 +231,9 @@ impl Switch {
             // The disabled selected handle stays opaque so it reads against the
             // dimmed track.
             let unselected = theme.on_surface.with_alpha(DISABLED_CONTENT_OPACITY);
-            return lerp_color(unselected, theme.surface, selection);
+            return unselected.lerp(theme.surface, selection);
         }
-        lerp_color(theme.outline, theme.on_primary, selection)
+        theme.outline.lerp(theme.on_primary, selection)
     }
 
     fn icon_color(&self, theme: &ColorTheme, selected: bool) -> Color {
@@ -263,16 +261,6 @@ impl Switch {
         } else {
             0.0
         }
-    }
-
-    fn fill_circle(canvas: &Canvas, center: Point, radius: f32, color: Color) {
-        if color.a <= 0.0 {
-            return;
-        }
-        let mut paint = Paint::default();
-        paint.set_anti_alias(true);
-        paint.set_color4f(Color4f::from(color), None);
-        canvas.draw_circle(center, radius, &paint);
     }
 
     /// A checkmark or a cross, drawn as strokes in a [`ICON_SIZE`] box centred
@@ -311,20 +299,6 @@ fn lerp(from: f32, to: f32, t: f32) -> f32 {
     from + (to - from) * t
 }
 
-fn lerp_color(from: Color, to: Color, t: f32) -> Color {
-    Color {
-        r: lerp(from.r, to.r, t),
-        g: lerp(from.g, to.g, t),
-        b: lerp(from.b, to.b, t),
-        a: lerp(from.a, to.a, t),
-    }
-}
-
-/// An animation is worth another frame only while it is actually travelling.
-fn animating(animation: &Animation<f32>) -> bool {
-    !animation.is_done() && animation.from() != animation.to()
-}
-
 impl Widget for Switch {
     fn draw(&mut self, canvas: &Canvas, theme: &ColorTheme, _fonts: &FontBook) -> bool {
         let selection = self.animations.selection.value();
@@ -360,12 +334,12 @@ impl Widget for Switch {
 
         let state_opacity = self.state_layer_opacity();
         if state_opacity > 0.0 {
-            let color = lerp_color(theme.on_surface, theme.primary, selection);
+            let color = theme.on_surface.lerp(theme.primary, selection);
             // The layer is wider than the track, so it is clipped to the track's
             // outer edge instead of spilling past it.
             canvas.save();
             canvas.clip_rrect(rrect, None, true);
-            Self::fill_circle(
+            fill_circle(
                 canvas,
                 center,
                 STATE_LAYER_DIAMETER / 2.0,
@@ -374,7 +348,7 @@ impl Widget for Switch {
             canvas.restore();
         }
 
-        Self::fill_circle(
+        fill_circle(
             canvas,
             center,
             diameter / 2.0,
@@ -391,7 +365,7 @@ impl Widget for Switch {
             Self::draw_icon(canvas, center, true, color);
         }
 
-        animating(&self.animations.selection) || animating(&self.animations.press)
+        self.animations.selection.is_traveling() || self.animations.press.is_traveling()
     }
 
     fn on_pointer(&mut self, event: &PointerEvent) -> bool {

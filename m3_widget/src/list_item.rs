@@ -11,16 +11,10 @@ use ui_core::{
     scheme::{color::Color, ColorTheme},
 };
 
-use crate::Widget;
-
-/// State layer opacities.
-const HOVER_OPACITY: f32 = 0.08;
-const FOCUS_OPACITY: f32 = 0.10;
-const PRESSED_OPACITY: f32 = 0.10;
-
-/// Disabled treatment: all content collapses to `on_surface` at this alpha,
-/// regardless of what color it would otherwise be.
-const DISABLED_CONTENT_OPACITY: f32 = 0.38;
+use crate::{
+    tokens::{DISABLED_CONTENT_OPACITY, FOCUS_OPACITY, HOVER_OPACITY, PRESSED_OPACITY},
+    Widget,
+};
 
 /// Horizontal padding at both edges of the row.
 const HORIZONTAL_PADDING: f32 = 16.0;

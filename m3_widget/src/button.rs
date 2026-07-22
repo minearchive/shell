@@ -14,16 +14,11 @@ use ui_core::{
 
 use crate::{
     animation::{duration, easing},
+    tokens::{
+        DISABLED_CONTAINER_OPACITY, DISABLED_CONTENT_OPACITY, HOVER_OPACITY, PRESSED_OPACITY,
+    },
     Widget,
 };
-
-/// State layer opacities.
-const HOVER_OPACITY: f32 = 0.08;
-const PRESSED_OPACITY: f32 = 0.10;
-
-/// Disabled treatments.
-const DISABLED_CONTAINER_OPACITY: f32 = 0.12;
-const DISABLED_CONTENT_OPACITY: f32 = 0.38;
 
 /// Emphasis order: Filled > FilledTonal > Elevated > Outlined > Text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -297,9 +292,7 @@ impl Widget for Button {
                 - self.shape.corder_radius(self.size, false))
                 * self.animations.shape.value();
 
-        if !self.animations.shape.is_done()
-            && self.animations.shape.from() != self.animations.shape.to()
-        {
+        if self.animations.shape.is_traveling() {
             redraw = true;
         }
 

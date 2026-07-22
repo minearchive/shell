@@ -14,22 +14,10 @@ use ui_core::{
 
 use crate::{
     animation::{duration, easing},
+    drawing::fill_circle,
+    tokens::{DISABLED_CONTENT_OPACITY, FOCUS_OPACITY, HOVER_OPACITY, PRESSED_OPACITY},
     Widget,
 };
-
-/// State layer opacities.
-const HOVER_OPACITY: f32 = 0.08;
-const FOCUS_OPACITY: f32 = 0.10;
-const PRESSED_OPACITY: f32 = 0.10;
-
-/// Disabled treatments. Checkbox only actually uses the content opacity (the
-/// box fill, outline, and icon all dim to `on_surface` at this alpha); the
-/// container opacity is kept here for naming parity with switch.rs, which
-/// uses it for the disabled unselected track fill — checkboxes have no such
-/// fill, so it currently has no call site.
-#[allow(dead_code)]
-const DISABLED_CONTAINER_OPACITY: f32 = 0.12;
-const DISABLED_CONTENT_OPACITY: f32 = 0.38;
 
 /// The natural footprint of a checkbox: also the 40dp minimum touch target,
 /// so a layout system can just allocate a `SIZE` x `SIZE` node and get a
@@ -227,17 +215,7 @@ impl CheckBox {
     }
 
     fn state_layer_tint(&self, theme: &ColorTheme, selection: f32) -> Color {
-        lerp_color(theme.on_surface, theme.primary, selection)
-    }
-
-    fn fill_circle(canvas: &Canvas, center: Point, radius: f32, color: Color) {
-        if color.a <= 0.0 {
-            return;
-        }
-        let mut paint = Paint::default();
-        paint.set_anti_alias(true);
-        paint.set_color4f(Color4f::from(color), None);
-        canvas.draw_circle(center, radius, &paint);
+        theme.on_surface.lerp(theme.primary, selection)
     }
 
     /// A checkmark or, for the indeterminate state, a horizontal dash;
@@ -271,24 +249,6 @@ impl CheckBox {
     }
 }
 
-fn lerp(from: f32, to: f32, t: f32) -> f32 {
-    from + (to - from) * t
-}
-
-fn lerp_color(from: Color, to: Color, t: f32) -> Color {
-    Color {
-        r: lerp(from.r, to.r, t),
-        g: lerp(from.g, to.g, t),
-        b: lerp(from.b, to.b, t),
-        a: lerp(from.a, to.a, t),
-    }
-}
-
-/// An animation is worth another frame only while it is actually travelling.
-fn animating(animation: &Animation<f32>) -> bool {
-    !animation.is_done() && animation.from() != animation.to()
-}
-
 impl Widget for CheckBox {
     fn draw(&mut self, canvas: &Canvas, theme: &ColorTheme, _fonts: &FontBook) -> bool {
         let selection = self.animations.selection.value();
@@ -300,7 +260,7 @@ impl Widget for CheckBox {
         let state_opacity = self.state_layer_opacity();
         if state_opacity > 0.0 {
             let tint = self.state_layer_tint(theme, selection);
-            Self::fill_circle(
+            fill_circle(
                 canvas,
                 center,
                 STATE_LAYER_DIAMETER / 2.0,
@@ -335,7 +295,7 @@ impl Widget for CheckBox {
             Self::draw_icon(canvas, center, self.indeterminate, color);
         }
 
-        animating(&self.animations.selection)
+        self.animations.selection.is_traveling()
     }
 
     fn on_pointer(&mut self, event: &PointerEvent) -> bool {

@@ -2,7 +2,7 @@
 //! deselecting siblings is the caller's responsibility — this widget only
 //! owns its own `selected` bool and reports when interaction turns it on.
 
-use skia_safe::{Canvas, Color4f, Paint, Point};
+use skia_safe::{Canvas, Point};
 
 use ui_core::{
     animation::animation::Animation,
@@ -15,17 +15,10 @@ use ui_core::{
 
 use crate::{
     animation::{duration, easing},
+    drawing::{fill_circle, stroke_circle},
+    tokens::{DISABLED_CONTENT_OPACITY, FOCUS_OPACITY, HOVER_OPACITY, PRESSED_OPACITY},
     Widget,
 };
-
-/// State layer opacities.
-const HOVER_OPACITY: f32 = 0.08;
-const FOCUS_OPACITY: f32 = 0.10;
-const PRESSED_OPACITY: f32 = 0.10;
-
-/// Disabled treatment: both the ring and the inner dot dim to `on_surface` at
-/// this alpha.
-const DISABLED_CONTENT_OPACITY: f32 = 0.38;
 
 /// The natural footprint of a radio button: also the 40dp minimum touch
 /// target, so a layout system can just allocate a `SIZE` x `SIZE` node and
@@ -155,7 +148,7 @@ impl RadioButton {
         if !self.enabled {
             return theme.on_surface.with_alpha(DISABLED_CONTENT_OPACITY);
         }
-        lerp_color(theme.on_surface_variant, theme.primary, selection)
+        theme.on_surface_variant.lerp(theme.primary, selection)
     }
 
     fn dot_color(&self, theme: &ColorTheme) -> Color {
@@ -189,46 +182,6 @@ impl RadioButton {
             theme.on_surface
         }
     }
-
-    fn fill_circle(canvas: &Canvas, center: Point, radius: f32, color: Color) {
-        if color.a <= 0.0 || radius <= 0.0 {
-            return;
-        }
-        let mut paint = Paint::default();
-        paint.set_anti_alias(true);
-        paint.set_color4f(Color4f::from(color), None);
-        canvas.draw_circle(center, radius, &paint);
-    }
-
-    fn stroke_circle(canvas: &Canvas, center: Point, radius: f32, width: f32, color: Color) {
-        if color.a <= 0.0 {
-            return;
-        }
-        let mut paint = Paint::default();
-        paint.set_anti_alias(true);
-        paint.set_color4f(Color4f::from(color), None);
-        paint.set_stroke(true);
-        paint.set_stroke_width(width);
-        canvas.draw_circle(center, radius, &paint);
-    }
-}
-
-fn lerp(from: f32, to: f32, t: f32) -> f32 {
-    from + (to - from) * t
-}
-
-fn lerp_color(from: Color, to: Color, t: f32) -> Color {
-    Color {
-        r: lerp(from.r, to.r, t),
-        g: lerp(from.g, to.g, t),
-        b: lerp(from.b, to.b, t),
-        a: lerp(from.a, to.a, t),
-    }
-}
-
-/// An animation is worth another frame only while it is actually travelling.
-fn animating(animation: &Animation<f32>) -> bool {
-    !animation.is_done() && animation.from() != animation.to()
 }
 
 impl Widget for RadioButton {
@@ -239,7 +192,7 @@ impl Widget for RadioButton {
         let state_opacity = self.state_layer_opacity();
         if state_opacity > 0.0 {
             let tint = self.state_layer_tint(theme);
-            Self::fill_circle(
+            fill_circle(
                 canvas,
                 center,
                 STATE_LAYER_DIAMETER / 2.0,
@@ -250,7 +203,7 @@ impl Widget for RadioButton {
         // Inset by half the stroke so the ring stays within its 20dp
         // footprint, matching the outline treatment in checkbox/switch.
         let ring_radius = RING_DIAMETER / 2.0 - RING_STROKE_WIDTH / 2.0;
-        Self::stroke_circle(
+        stroke_circle(
             canvas,
             center,
             ring_radius,
@@ -259,7 +212,7 @@ impl Widget for RadioButton {
         );
 
         if selection > 0.0 {
-            Self::fill_circle(
+            fill_circle(
                 canvas,
                 center,
                 DOT_RADIUS * selection,
@@ -267,7 +220,7 @@ impl Widget for RadioButton {
             );
         }
 
-        animating(&self.animations.selection)
+        self.animations.selection.is_traveling()
     }
 
     fn on_pointer(&mut self, event: &PointerEvent) -> bool {

@@ -19,6 +19,18 @@ impl Color {
             ..self
         }
     }
+
+    /// Linearly interpolates every channel toward `other` by `t` (0 → `self`,
+    /// 1 → `other`). Widgets use this to cross-fade colors as a selection or
+    /// press animation travels.
+    pub fn lerp(self, other: Self, t: f32) -> Self {
+        Self {
+            r: self.r + (other.r - self.r) * t,
+            g: self.g + (other.g - self.g) * t,
+            b: self.b + (other.b - self.b) * t,
+            a: self.a + (other.a - self.a) * t,
+        }
+    }
 }
 
 impl PartialEq for Color {
@@ -116,6 +128,30 @@ mod tests {
         assert!((c.r - 103.0 / 255.0).abs() < 1e-4);
         assert!((c.g - 80.0 / 255.0).abs() < 1e-4);
         assert!((c.b - 164.0 / 255.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_lerp_interpolates_each_channel() {
+        let a = Color {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.0,
+        };
+        let b = Color {
+            r: 1.0,
+            g: 0.5,
+            b: 0.2,
+            a: 1.0,
+        };
+        let mid = a.lerp(b, 0.5);
+        assert!((mid.r - 0.5).abs() < 1e-6);
+        assert!((mid.g - 0.25).abs() < 1e-6);
+        assert!((mid.b - 0.1).abs() < 1e-6);
+        assert!((mid.a - 0.5).abs() < 1e-6);
+        // Endpoints are exact.
+        assert_eq!(a.lerp(b, 0.0), a);
+        assert_eq!(a.lerp(b, 1.0), b);
     }
 
     #[test]

@@ -16,16 +16,13 @@ use ui_core::{
     scheme::{color::Color, ColorTheme},
 };
 
-use crate::Widget;
-
-/// State layer opacities.
-const HOVER_OPACITY: f32 = 0.08;
-const FOCUS_OPACITY: f32 = 0.10;
-const PRESSED_OPACITY: f32 = 0.10;
-
-/// Disabled treatments.
-const DISABLED_CONTAINER_OPACITY: f32 = 0.12;
-const DISABLED_CONTENT_OPACITY: f32 = 0.38;
+use crate::{
+    tokens::{
+        DISABLED_CONTAINER_OPACITY, DISABLED_CONTENT_OPACITY, FOCUS_OPACITY, HOVER_OPACITY,
+        PRESSED_OPACITY,
+    },
+    Widget,
+};
 
 /// The default 40dp square footprint (the `full` shape token, so the
 /// painted container is a circle inscribed in it) and simultaneously the
