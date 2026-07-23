@@ -5,6 +5,7 @@
 
 ## Fonts
 - [ ] Font fallback: Roboto as primary + Noto Sans CJK JP as fallback for CJK glyphs (currently `FontBook` only holds one typeface per key; needs per-char `unichar_to_glyph` check + `match_family_style_character`, with the fallback typeface resolution cached, not called per-draw)
+- [ ] From file
 
 ## Audio
 - [ ] status provider
@@ -24,8 +25,6 @@
 - [ ] support
 - [ ] custom widget
 - [ ] drag and drop
-
-
 
 ## IPC
 - [ ] mapping all niri events
@@ -53,7 +52,13 @@
 # Component
 - [ ] Material3 Main Component
   - [x] Button
-  - [ ] Slider
+    - [x] Normal
+    - [x] Icon
+    - [x] Radio
+  - [x] Slider
+  - [x] CheckBox
+  - [x] Divider
+  - [x] ListItem
   - [ ] Textbox
     - [x] keyboard input, cursor, paste
     - [ ] selection range, cheapest before more edit ops land (state -> anchor + cursor)
@@ -61,3 +66,12 @@
     - [ ] IME / preedit, adapters only since Commit is the one insertion path
   - [ ] DatePicker
   - [ ] Chips
+  - [ ] Navigation
+    - [ ] drawer
+    - [ ] rail
+- [ ] General Positioning Component
+  - [x] Scrollable
+  - [ ] Row
+  - [ ] Column
+  - [ ] Stack
+  - [ ] Align
