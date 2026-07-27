@@ -71,7 +71,7 @@
     - [ ] rail
 - [ ] General Positioning Component
   - [x] Scrollable
-  - [ ] Row
-  - [ ] Column
+  - [x] Row
+  - [x] Column
   - [ ] Stack
-  - [ ] Align
+  - [x] Align
