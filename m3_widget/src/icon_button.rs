@@ -11,7 +11,7 @@ use skia_safe::{Canvas, Color4f, Paint, PaintCap, PaintJoin, PathBuilder, Point,
 use ui_core::{
     animation::animation::Animation,
     font::FontBook,
-    geometry::LayoutRect,
+    geometry::{LayoutRect, Size},
     keyboard::{self, KeyboardEvent, KeyboardEventKind},
     pointer::{self, PointerEvent, PointerEventKind},
     scheme::{color::Color, ColorTheme},
@@ -654,6 +654,11 @@ impl Widget for IconButton {
 
     fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
+    }
+
+    /// The default 40dp square footprint (also the minimum touch target).
+    fn measure(&self, _fonts: &FontBook) -> Size {
+        Size::new(SIZE, SIZE)
     }
 }
 

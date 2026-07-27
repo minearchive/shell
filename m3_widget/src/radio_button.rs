@@ -7,7 +7,7 @@ use skia_safe::{Canvas, Point};
 use ui_core::{
     animation::animation::Animation,
     font::FontBook,
-    geometry::LayoutRect,
+    geometry::{LayoutRect, Size},
     keyboard::{self, KeyboardEvent, KeyboardEventKind},
     pointer::{self, PointerEvent, PointerEventKind},
     scheme::{color::Color, ColorTheme},
@@ -329,6 +329,10 @@ impl Widget for RadioButton {
 
     fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
+    }
+
+    fn measure(&self, _fonts: &FontBook) -> Size {
+        Size::new(SIZE, SIZE)
     }
 }
 

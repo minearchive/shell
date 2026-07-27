@@ -74,6 +74,26 @@ impl From<LayoutRect> for skia_safe::Rect {
     }
 }
 
+/// A widget's intrinsic (natural) width/height, independent of any
+/// [`LayoutRect`] a layout system may have assigned it. See
+/// `ui_widget::Widget::measure`.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Size {
+    pub width: f32,
+    pub height: f32,
+}
+
+impl Size {
+    pub const ZERO: Size = Size {
+        width: 0.0,
+        height: 0.0,
+    };
+
+    pub fn new(width: f32, height: f32) -> Self {
+        Self { width, height }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

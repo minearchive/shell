@@ -23,4 +23,4 @@ pub use slider::{Slider, SliderSize};
 pub use switch::{Switch, SwitchIcons};
 pub use text_field::TextField;
 
-pub use ui_widget::{ScrollableWidget, Widget};
+pub use ui_widget::{Column, CrossAlign, Row, ScrollableWidget, Widget};

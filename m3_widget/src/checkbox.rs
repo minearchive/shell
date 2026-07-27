@@ -6,7 +6,7 @@ use skia_safe::{Canvas, Color4f, Paint, PaintCap, PaintJoin, PathBuilder, Point,
 use ui_core::{
     animation::animation::Animation,
     font::FontBook,
-    geometry::LayoutRect,
+    geometry::{LayoutRect, Size},
     keyboard::{self, KeyboardEvent, KeyboardEventKind},
     pointer::{self, PointerEvent, PointerEventKind},
     scheme::{color::Color, ColorTheme},
@@ -344,6 +344,12 @@ impl Widget for CheckBox {
             }
             _ => false,
         }
+    }
+
+    /// The 40dp minimum touch target, matching [`Self::hit_rect`] — the whole
+    /// footprint a layout system should allocate for a checkbox.
+    fn measure(&self, _fonts: &FontBook) -> Size {
+        Size::new(SIZE, SIZE)
     }
 
     fn on_keyboard(&mut self, event: &KeyboardEvent) -> bool {

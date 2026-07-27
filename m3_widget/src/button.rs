@@ -7,7 +7,7 @@ use skia_safe::{
 use ui_core::{
     animation::animation::Animation,
     font::FontBook,
-    geometry::LayoutRect,
+    geometry::{LayoutRect, Size},
     pointer::{self, PointerEvent, PointerEventKind},
     scheme::{color::Color, ColorTheme},
 };
@@ -415,6 +415,17 @@ impl Widget for Button {
 
     fn layout_rect(&self) -> LayoutRect {
         self.layout_rect
+    }
+
+    /// Height comes straight from [`ButtonSize::height`]; width is the label
+    /// measured at the same font/size `draw` uses, plus horizontal padding on
+    /// both sides (buttons here carry no icon/leading content to add a gap
+    /// for).
+    fn measure(&self, fonts: &FontBook) -> Size {
+        let font = fonts.sized(&self.font_key, self.size.label_size());
+        let label_width = font.measure_str(&self.label, None).0;
+        let width = label_width + self.size.horizontal_padding() * 2.0;
+        Size::new(width, self.size.height())
     }
 }
 

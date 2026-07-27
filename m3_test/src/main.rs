@@ -21,8 +21,8 @@ use winit::window::{Window, WindowId};
 
 use m3_widget::{
     checkbox, icon_button, radio_button, switch, text_field, Button, ButtonSize, ButtonVariant,
-    CheckBox, Divider, Icon, IconButton, IconButtonVariant, ListItem, RadioButton,
-    ScrollableWidget, Slider, SliderSize, Switch, SwitchIcons, TextField, Widget,
+    CheckBox, Column, CrossAlign, Divider, Icon, IconButton, IconButtonVariant, ListItem,
+    RadioButton, Row, ScrollableWidget, Slider, SliderSize, Switch, SwitchIcons, TextField, Widget,
 };
 use util::{
     button_code, column_style, item_style, keysym_from_named, load_theme, resolve_layout_rects,
@@ -184,6 +184,62 @@ fn button_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>
     }
 
     (sections, pending)
+}
+
+/// Demonstrates `ui_widget`'s generic `Row`/`Column` containers, used
+/// directly (not via taffy) to arrange a mix of M3 widgets inside a single
+/// fixed-size taffy leaf. `Column` stacks two stretched buttons above a
+/// centered `Row` of fixed-size controls.
+fn layout_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
+    // Comfortably fits: two Medium buttons (48 each) + a 48-tall control row,
+    // plus two 8px gaps between them (96 + 48 + 16 = 160, rounded up).
+    const LEAF_WIDTH: f32 = 240.0;
+    const LEAF_HEIGHT: f32 = 176.0;
+
+    let mut pending = Vec::new();
+    let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
+
+    let leaf = tree.new_leaf(item_style(LEAF_WIDTH, LEAF_HEIGHT)).unwrap();
+    tree.add_child(row, leaf).unwrap();
+    pending.push(PendingWidget {
+        node: leaf,
+        build: Box::new(move |rect| {
+            let mut col = Column::new().gap(8.0).cross_align(CrossAlign::Stretch);
+            col.push(Box::new(
+                Button::new("One")
+                    .size(ButtonSize::Medium)
+                    .variant(ButtonVariant::Filled)
+                    .on_click(|| println!("One")),
+            ));
+            col.push(Box::new(
+                Button::new("Two")
+                    .size(ButtonSize::Medium)
+                    .variant(ButtonVariant::FilledTonal)
+                    .on_click(|| println!("Two")),
+            ));
+
+            let mut controls = Row::new().gap(8.0).cross_align(CrossAlign::Center);
+            controls.push(Box::new(CheckBox::new(true)));
+            controls.push(Box::new(Switch::new(true)));
+            controls.push(Box::new(
+                IconButton::new()
+                    .variant(IconButtonVariant::Filled)
+                    .icon(Icon::Favorite),
+            ));
+            col.push(Box::new(controls));
+
+            col.set_layout_rect(rect);
+            Box::new(col)
+        }),
+    });
+
+    (
+        vec![Section {
+            caption: "Row / Column",
+            node: row,
+        }],
+        pending,
+    )
 }
 
 fn slider_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
@@ -658,6 +714,7 @@ fn build_gallery() -> (
 
     for (s, p) in [
         button_gallery(&mut tree),
+        layout_gallery(&mut tree),
         slider_gallery(&mut tree),
         text_field_gallery(&mut tree),
         switch_gallery(&mut tree),

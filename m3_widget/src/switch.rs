@@ -5,7 +5,7 @@ use skia_safe::{Canvas, Color4f, Paint, PaintCap, PaintJoin, PathBuilder, Point,
 use ui_core::{
     animation::animation::Animation,
     font::FontBook,
-    geometry::LayoutRect,
+    geometry::{LayoutRect, Size},
     keyboard::{self, KeyboardEvent, KeyboardEventKind},
     pointer::{self, PointerEvent, PointerEventKind},
     scheme::{color::Color, ColorTheme},
@@ -476,6 +476,14 @@ impl Widget for Switch {
 
     fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
+    }
+
+    /// The track's natural footprint. Unlike checkbox/radio, this is smaller
+    /// than the 48dp minimum touch target reported by [`Self::hit_rect`] —
+    /// `measure` reports the visual/layout footprint, not the padded hit
+    /// area.
+    fn measure(&self, _fonts: &FontBook) -> Size {
+        Size::new(TRACK_WIDTH, TRACK_HEIGHT)
     }
 }
 
