@@ -1468,6 +1468,7 @@ dependencies = [
  "softbuffer",
  "toml",
  "ui_core",
+ "ui_widget",
  "winit",
 ]
 
@@ -2974,6 +2975,15 @@ dependencies = [
  "serde",
  "skia-bindings",
  "skia-safe",
+]
+
+[[package]]
+name = "ui_widget"
+version = "0.0.1"
+dependencies = [
+ "skia-bindings",
+ "skia-safe",
+ "ui_core",
 ]
 
 [[package]]

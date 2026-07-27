@@ -1,12 +1,4 @@
 //! A vertically scrollable container widget.
-//!
-//! `ScrollableWidget` owns a list of child widgets laid out in "content
-//! space" (child `layout_rect`s have `y` measured from the content top = 0;
-//! `x` is window-space since the viewport spans full width with `x` origin
-//! 0). The widget's own [`layout_rect`](Widget::layout_rect) is the viewport
-//! in window space; children are translated and clipped into that viewport
-//! at draw time and pointer events are translated back into content space
-//! before being forwarded.
 
 use std::time::Instant;
 
