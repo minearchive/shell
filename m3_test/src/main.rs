@@ -20,9 +20,10 @@ use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
 use m3_widget::{
-    checkbox, icon_button, radio_button, switch, text_field, Button, ButtonSize, ButtonVariant,
-    CheckBox, Column, CrossAlign, Divider, Icon, IconButton, IconButtonVariant, ListItem,
-    RadioButton, Row, ScrollableWidget, Slider, SliderSize, Switch, SwitchIcons, TextField, Widget,
+    buttons::{icon_button, radio_button},
+    checkbox, switch, text_field, Button, ButtonSize, ButtonVariant, CheckBox, Column, CrossAlign,
+    Divider, Icon, IconButton, IconButtonVariant, ListItem, RadioButton, Row, ScrollableWidget,
+    Slider, SliderSize, Switch, SwitchIcons, TextField, Widget,
 };
 use util::{
     button_code, column_style, item_style, keysym_from_named, load_theme, resolve_layout_rects,
