@@ -20,10 +20,11 @@ use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
 use m3_widget::{
-    buttons::{icon_button, radio_button},
+    buttons::{icon_button, radio_button, segmented},
     checkbox, switch, text_field, Button, ButtonSize, ButtonVariant, CheckBox, Column, CrossAlign,
     Divider, Icon, IconButton, IconButtonVariant, ListItem, RadioButton, Row, ScrollableWidget,
-    Slider, SliderSize, Switch, SwitchIcons, TextField, Widget,
+    Segment, SegmentedButton, SelectionMode, Slider, SliderSize, Switch, SwitchIcons, TextField,
+    Widget,
 };
 use util::{
     button_code, column_style, item_style, keysym_from_named, load_theme, resolve_layout_rects,
@@ -180,6 +181,122 @@ fn button_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>
         }
         sections.push(Section {
             caption: title,
+            node: row,
+        });
+    }
+
+    (sections, pending)
+}
+
+/// A fixed per-segment width estimate for sizing taffy leaves. Not
+/// `SegmentedButton::measure` itself — that needs a `FontBook`, which isn't
+/// available while the layout tree is still being built (widgets aren't
+/// constructed until layout is resolved) — but comfortably wide enough for a
+/// short label plus its reserved icon slot, matching the widths used
+/// elsewhere in this file for buttons of similar label length.
+const SEGMENTED_SEGMENT_WIDTH: f32 = 110.0;
+
+fn segmented_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
+    let mut sections = Vec::new();
+    let mut pending = Vec::new();
+
+    // Single-select: three label-only segments, "Day" starts selected.
+    {
+        let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
+        let leaf = tree
+            .new_leaf(item_style(SEGMENTED_SEGMENT_WIDTH * 3.0, segmented::HEIGHT))
+            .unwrap();
+        tree.add_child(row, leaf).unwrap();
+        pending.push(PendingWidget {
+            node: leaf,
+            build: Box::new(move |rect| {
+                let mut widget = SegmentedButton::new()
+                    .segment(Segment::new("Day"))
+                    .segment(Segment::new("Week"))
+                    .segment(Segment::new("Month"))
+                    .selected(0)
+                    .on_change(|i, v| println!("segmented (single): {i} -> {v}"));
+                widget.set_layout_rect(rect);
+                Box::new(widget)
+            }),
+        });
+        sections.push(Section {
+            caption: "Segmented (single)",
+            node: row,
+        });
+    }
+
+    // Multi-select: three icon+label segments, two starting selected.
+    {
+        let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
+        let leaf = tree
+            .new_leaf(item_style(SEGMENTED_SEGMENT_WIDTH * 3.0, segmented::HEIGHT))
+            .unwrap();
+        tree.add_child(row, leaf).unwrap();
+        pending.push(PendingWidget {
+            node: leaf,
+            build: Box::new(move |rect| {
+                let mut widget = SegmentedButton::new()
+                    .segment(Segment::new("Bold").icon(Icon::Check))
+                    .segment(Segment::new("Italic").icon(Icon::Add))
+                    .segment(Segment::new("Underline").icon(Icon::Menu))
+                    .mode(SelectionMode::Multi)
+                    .selected(0)
+                    .selected(2)
+                    .on_change(|i, v| println!("segmented (multi): {i} -> {v}"));
+                widget.set_layout_rect(rect);
+                Box::new(widget)
+            }),
+        });
+        sections.push(Section {
+            caption: "Segmented (multi)",
+            node: row,
+        });
+    }
+
+    // Disabled: one control with a disabled middle segment (its neighbours
+    // stay interactive), and one control disabled entirely.
+    {
+        let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
+
+        let leaf = tree
+            .new_leaf(item_style(SEGMENTED_SEGMENT_WIDTH * 3.0, segmented::HEIGHT))
+            .unwrap();
+        tree.add_child(row, leaf).unwrap();
+        pending.push(PendingWidget {
+            node: leaf,
+            build: Box::new(move |rect| {
+                let mut widget = SegmentedButton::new()
+                    .segment(Segment::new("List"))
+                    .segment(Segment::new("Grid").enabled(false))
+                    .segment(Segment::new("Table"))
+                    .selected(0)
+                    .on_change(|i, v| println!("segmented (disabled segment): {i} -> {v}"));
+                widget.set_layout_rect(rect);
+                Box::new(widget)
+            }),
+        });
+
+        let leaf = tree
+            .new_leaf(item_style(SEGMENTED_SEGMENT_WIDTH * 2.0, segmented::HEIGHT))
+            .unwrap();
+        tree.add_child(row, leaf).unwrap();
+        pending.push(PendingWidget {
+            node: leaf,
+            build: Box::new(move |rect| {
+                let mut widget = SegmentedButton::new()
+                    .segment(Segment::new("On"))
+                    .segment(Segment::new("Off"))
+                    .selected(0)
+                    .enabled(false)
+                    .on_change(|i, v| println!("segmented (disabled control): {i} -> {v}"));
+                widget.set_layout_rect(rect);
+                Box::new(widget)
+            }),
+        });
+
+        sections.push(Section {
+            caption: "Segmented (disabled)",
             node: row,
         });
     }
@@ -715,6 +832,7 @@ fn build_gallery() -> (
 
     for (s, p) in [
         button_gallery(&mut tree),
+        segmented_gallery(&mut tree),
         layout_gallery(&mut tree),
         slider_gallery(&mut tree),
         text_field_gallery(&mut tree),

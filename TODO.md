@@ -48,13 +48,15 @@
 - [ ] set keyboard interactivity to None at creation, drop the pointer Enter hack
 - [ ] keyboard input, only if the bar ever needs it (needs get_keyboard_with_repeat)
 - [ ] make design.
+- [ ] z-order based rendering
 
-# Component
+## Component
 - [ ] Material3 Main Component
   - [x] Button
     - [x] Normal
     - [x] Icon
     - [x] Radio
+    - [x] Segmented
   - [x] Slider
   - [x] CheckBox
   - [x] Divider

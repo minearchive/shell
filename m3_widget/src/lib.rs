@@ -14,6 +14,7 @@ pub mod tokens;
 
 pub use buttons::{
     Button, ButtonShape, ButtonSize, ButtonVariant, IconButton, IconButtonVariant, RadioButton,
+    Segment, SegmentedButton, SelectionMode,
 };
 pub use checkbox::CheckBox;
 pub use divider::{Divider, Orientation};
