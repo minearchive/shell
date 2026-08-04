@@ -61,6 +61,18 @@ pub trait Component {
     fn on_easing_updated(&mut self, _id: String, _easing: &Easing) -> Redraw {
         Redraw::None
     }
+    fn on_drag_enter(&mut self, _mime_types: &[String]) -> Redraw {
+        Redraw::None
+    }
+    fn on_drag_motion(&mut self, _x: f64, _y: f64) -> Redraw {
+        Redraw::None
+    }
+    fn on_drag_leave(&mut self) -> Redraw {
+        Redraw::None
+    }
+    fn on_drop(&mut self, _mime: &str, _data: &[u8]) -> Redraw {
+        Redraw::None
+    }
 }
 
 #[allow(unused)]
@@ -198,6 +210,34 @@ impl UserInterface {
         self.components
             .iter_mut()
             .map(|c| c.on_easing_updated(id.clone(), &easing))
+            .fold(Redraw::None, Redraw::max)
+    }
+
+    pub fn on_drag_enter(&mut self, mime_types: &[String]) -> Redraw {
+        self.components
+            .iter_mut()
+            .map(|c| c.on_drag_enter(mime_types))
+            .fold(Redraw::None, Redraw::max)
+    }
+
+    pub fn on_drag_motion(&mut self, x: f64, y: f64) -> Redraw {
+        self.components
+            .iter_mut()
+            .map(|c| c.on_drag_motion(x, y))
+            .fold(Redraw::None, Redraw::max)
+    }
+
+    pub fn on_drag_leave(&mut self) -> Redraw {
+        self.components
+            .iter_mut()
+            .map(|c| c.on_drag_leave())
+            .fold(Redraw::None, Redraw::max)
+    }
+
+    pub fn on_drop(&mut self, mime: &str, data: &[u8]) -> Redraw {
+        self.components
+            .iter_mut()
+            .map(|c| c.on_drop(mime, data))
             .fold(Redraw::None, Redraw::max)
     }
 }
