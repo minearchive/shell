@@ -144,15 +144,7 @@ fn main() {
         .insert_source(notification_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg(events) = event {
                 debug!("{events:?}");
-                let mut dirty = Vec::new();
-                for (i, screen) in shell.screen.iter_mut().enumerate() {
-                    if screen.ui.on_notification(events.clone()) != Redraw::None {
-                        dirty.push(i);
-                    }
-                }
-                for i in dirty {
-                    shell.request_redraw(i);
-                }
+                shell.dispatch(|ui| ui.on_notification(events.clone()));
             }
         })
         .unwrap();
@@ -162,15 +154,7 @@ fn main() {
     loop_handle
         .insert_source(mpris_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg((ref state, ref ev)) = event {
-                let mut dirty = Vec::new();
-                for (i, screen) in shell.screen.iter_mut().enumerate() {
-                    if screen.ui.on_mpris(state, ev) != Redraw::None {
-                        dirty.push(i);
-                    }
-                }
-                for i in dirty {
-                    shell.request_redraw(i);
-                }
+                shell.dispatch(|ui| ui.on_mpris(state, ev));
             }
         })
         .unwrap();
@@ -180,15 +164,7 @@ fn main() {
     loop_handle
         .insert_source(ipc_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg(ipc_event) = event {
-                let mut dirty = Vec::new();
-                for (i, screen) in shell.screen.iter_mut().enumerate() {
-                    if screen.ui.on_ipc(ipc_event.clone()) != Redraw::None {
-                        dirty.push(i);
-                    }
-                }
-                for i in dirty {
-                    shell.request_redraw(i);
-                }
+                shell.dispatch(|ui| ui.on_ipc(ipc_event.clone()));
             }
         })
         .unwrap();
@@ -198,15 +174,7 @@ fn main() {
     loop_handle
         .insert_source(kde_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg(kde_event) = event {
-                let mut dirty = Vec::new();
-                for (i, screen) in shell.screen.iter_mut().enumerate() {
-                    if screen.ui.on_kde_connect_event(&kde_event.clone()) != Redraw::None {
-                        dirty.push(i);
-                    }
-                }
-                for i in dirty {
-                    shell.request_redraw(i);
-                }
+                shell.dispatch(|ui| ui.on_kde_connect_event(&kde_event));
             }
         })
         .unwrap();
@@ -216,15 +184,7 @@ fn main() {
     loop_handle
         .insert_source(warp_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg(status) = event {
-                let mut dirty = Vec::new();
-                for (i, screen) in shell.screen.iter_mut().enumerate() {
-                    if screen.ui.on_warp(&status) != Redraw::None {
-                        dirty.push(i);
-                    }
-                }
-                for i in dirty {
-                    shell.request_redraw(i);
-                }
+                shell.dispatch(|ui| ui.on_warp(&status));
             }
         })
         .unwrap();
@@ -243,22 +203,13 @@ fn main() {
                             shell.request_redraw(i);
                         }
                     }
-                    UiEvent::AnimationUpdated(easings) => {
-                        let mut dirty = Vec::new();
-                        for (i, screen) in shell.screen.iter_mut().enumerate() {
-                            let mut redraw = Redraw::None;
-                            for (id, easing) in &easings {
-                                redraw = redraw
-                                    .max(screen.ui.on_easing_updated(id.clone(), easing.clone()));
-                            }
-                            if redraw != Redraw::None {
-                                dirty.push(i);
-                            }
-                        }
-                        for i in dirty {
-                            shell.request_redraw(i);
-                        }
-                    }
+                    UiEvent::AnimationUpdated(easings) => shell.dispatch(|ui| {
+                        easings
+                            .iter()
+                            .map(|(id, easing)| ui.on_easing_updated(id.clone(), easing.clone()))
+                            .max()
+                            .unwrap_or_default()
+                    }),
                 }
             }
         })
@@ -624,54 +575,38 @@ impl PointerHandler for Shell {
     ) {
         use PointerEventKind::*;
         for event in events {
-            if let Some(idx) = self
+            let Some(idx) = self
                 .screen
                 .iter()
                 .position(|s| s.layer.wl_surface() == &event.surface)
-            {
-                self.on_cursor(qh, event, idx);
-            }
-
-            if !self
-                .screen
-                .iter()
-                .any(|s| s.layer.wl_surface() == &event.surface)
-            {
+            else {
                 continue;
-            }
+            };
+            self.on_cursor(qh, event, idx);
 
-            {
-                match event.kind {
-                    Enter { .. } => {
-                        info!("Pointer entered @{:?}", event.position);
-                        if let Some(screen) = self
-                            .screen
-                            .iter()
-                            .find(|s| s.layer.wl_surface() == &event.surface)
-                        {
-                            screen
-                                .layer
-                                .set_keyboard_interactivity(KeyboardInteractivity::None);
-                            screen.layer.commit();
-                        }
-                    }
-                    Leave { .. } => {
-                        info!("Pointer left");
-                    }
-                    Motion { .. } => {}
-                    Press { button, .. } => {
-                        info!("Press {:x} @ {:?}", button, event.position);
-                    }
-                    Release { button, .. } => {
-                        info!("Release {:x} @ {:?}", button, event.position);
-                    }
-                    Axis {
-                        horizontal,
-                        vertical,
-                        ..
-                    } => {
-                        info!("h: {horizontal:?}, v: {vertical:?}");
-                    }
+            match event.kind {
+                Enter { .. } => {
+                    info!("Pointer entered @{:?}", event.position);
+                    let layer = &self.screen[idx].layer;
+                    layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+                    layer.commit();
+                }
+                Leave { .. } => {
+                    info!("Pointer left");
+                }
+                Motion { .. } => {}
+                Press { button, .. } => {
+                    info!("Press {:x} @ {:?}", button, event.position);
+                }
+                Release { button, .. } => {
+                    info!("Release {:x} @ {:?}", button, event.position);
+                }
+                Axis {
+                    horizontal,
+                    vertical,
+                    ..
+                } => {
+                    info!("h: {horizontal:?}, v: {vertical:?}");
                 }
             }
         }
@@ -712,11 +647,7 @@ impl DataDeviceHandler for Shell {
         };
         self.dragging_screen = Some(idx);
 
-        let Some(drag_offer) = self
-            .data_device
-            .as_ref()
-            .and_then(|d| d.data().drag_offer())
-        else {
+        let Some(drag_offer) = self.drag_offer() else {
             warn!("DnD enter on screen {idx} without a drag offer");
             return;
         };
@@ -778,11 +709,7 @@ impl DataDeviceHandler for Shell {
             return;
         };
 
-        let Some(offer) = self
-            .data_device
-            .as_ref()
-            .and_then(|d| d.data().drag_offer())
-        else {
+        let Some(offer) = self.drag_offer() else {
             warn!("Drop on screen {idx} without a drag offer");
             return;
         };
@@ -962,6 +889,28 @@ impl Shell {
         }
         info!("Creating data device for seat");
         self.data_device = Some(self.data_device_manager_state.get_data_device(qh, seat));
+    }
+
+    /// Fan an input event out to every screen's UI and repaint the ones that
+    /// asked for it. Collecting the indices first keeps the `&mut self.screen`
+    /// borrow from overlapping `request_redraw`.
+    fn dispatch(&mut self, mut f: impl FnMut(&mut UserInterface) -> Redraw) {
+        let dirty: Vec<usize> = self
+            .screen
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(i, s)| (f(&mut s.ui) != Redraw::None).then_some(i))
+            .collect();
+        for i in dirty {
+            self.request_redraw(i);
+        }
+    }
+
+    /// The drag offer currently being held over this bar, if any.
+    fn drag_offer(&self) -> Option<DragOffer> {
+        self.data_device
+            .as_ref()
+            .and_then(|d| d.data().drag_offer())
     }
 
     pub fn request_redraw(&mut self, idx: usize) {
