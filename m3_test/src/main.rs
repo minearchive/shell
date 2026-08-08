@@ -1,6 +1,7 @@
 mod layout;
 mod util;
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::rc::Rc;
@@ -35,8 +36,13 @@ use util::{button_code, keysym_from_named, load_theme};
 const ROOT_PADDING_X: f32 = 24.0;
 const ROOT_PADDING_TOP: f32 = 24.0;
 const ROOT_PADDING_BOTTOM: f32 = 24.0;
-/// Height of the fixed header drawn above the scrollable viewport.
+/// Height of the fixed header drawn above the rail and the scrollable
+/// viewport.
 const HEADER_HEIGHT: f32 = 80.0;
+/// Width of the shell's left-hand rail slot. Fixed at the expanded width so
+/// the page to its right doesn't reflow every frame while the rail animates
+/// open or closed.
+const RAIL_WIDTH: f32 = navigation_rail::EXPANDED_WIDTH;
 /// Gap between gallery sections (rows/columns), stacked in a column.
 const SECTION_GAP: f32 = 32.0;
 /// Gap between items within one row.
@@ -603,38 +609,50 @@ fn navigation_rail_gallery() -> Vec<LayoutNode> {
     .caption("Navigation rail")]
 }
 
-/// Builds every gallery widget positioned by a taffy layout tree instead of
+/// The rail's destinations, in order. Only eight icons exist, so these reuse
+/// whichever one reads closest to the group.
+const PAGES: [(&str, Icon); 5] = [
+    ("Buttons", Icon::Add),
+    ("Selection", Icon::Check),
+    ("Input", Icon::Settings),
+    ("Lists", Icon::More),
+    ("Layout", Icon::Menu),
+];
+
+/// The gallery sections making up one rail destination. Out-of-range pages
+/// fall through to the last one, so a stale index can't panic.
+fn page_sections(page: usize) -> Vec<LayoutNode> {
+    let groups = match page {
+        0 => vec![button_gallery(), icon_button_gallery()],
+        1 => vec![
+            segmented_gallery(),
+            checkbox_gallery(),
+            radio_gallery(),
+            switch_gallery(),
+        ],
+        2 => vec![slider_gallery(), text_field_gallery()],
+        3 => vec![list_item_gallery(), divider_gallery()],
+        _ => vec![layout_gallery(), navigation_rail_gallery()],
+    };
+    groups.into_iter().flatten().collect()
+}
+
+/// Builds one page's widgets positioned by a taffy layout tree instead of
 /// hand-tuned pixel constants, and the section captions that go with it.
 /// Widgets are returned paired with the taffy node driving their layout, so a
 /// resize can push fresh geometry into existing widget state (text, value,
 /// focus, callbacks, animations, ...) instead of rebuilding it.
-fn build_gallery() -> (
+fn build_gallery(
+    page: usize,
+) -> (
     Vec<PendingWidget>,
     Vec<Caption>,
     HashMap<NodeId, LayoutRect>,
     TaffyTree,
     NodeId,
 ) {
-    let sections: Vec<LayoutNode> = [
-        button_gallery(),
-        segmented_gallery(),
-        layout_gallery(),
-        slider_gallery(),
-        text_field_gallery(),
-        switch_gallery(),
-        checkbox_gallery(),
-        radio_gallery(),
-        icon_button_gallery(),
-        list_item_gallery(),
-        divider_gallery(),
-        navigation_rail_gallery(),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-
     let (widgets, captions, mut tree, root) = build(
-        LayoutNode::column(sections)
+        LayoutNode::column(page_sections(page))
             .gap(SECTION_GAP)
             .padding(root_padding()),
     );
@@ -654,9 +672,44 @@ fn build_gallery() -> (
     (widgets, captions, rects, tree, root)
 }
 
+/// Builds the shell's permanent left-hand rail, one destination per [`PAGES`]
+/// entry. `on_change` can't reach `App` (the rail is a field of it), so the
+/// selection is parked in a shared cell that `dispatch_pointer` drains right
+/// after the event.
+fn build_rail(selection: Rc<Cell<Option<usize>>>) -> NavigationRail {
+    let mut rail = NavigationRail::new().menu_icon(Icon::Menu).expanded(true);
+    for (label, icon) in PAGES {
+        rail = rail.item(NavigationRailItem::new(icon).label(label));
+    }
+    rail.on_change(move |i| selection.set(Some(i)))
+}
+
+/// Splits a freshly built page into the scroll container and the parallel
+/// node list the app keeps in step with it.
+fn page_into_scroll(widgets: Vec<PendingWidget>) -> (ScrollableWidget, Vec<NodeId>) {
+    let mut scroll = ScrollableWidget::new();
+    let mut nodes = Vec::with_capacity(widgets.len());
+    for pending in widgets {
+        nodes.push(pending.node);
+        scroll.push(pending.widget);
+    }
+    (scroll, nodes)
+}
+
+/// Focus index of the rail. Scroll children occupy `1..`, so the rail is
+/// simply the first stop in the Tab cycle.
+const RAIL_FOCUS: usize = 0;
+
 struct App {
     theme: ColorTheme,
     fonts: FontBook,
+    /// Permanent left-hand navigation, outside the scroll viewport so it
+    /// stays put while the page scrolls.
+    rail: NavigationRail,
+    /// Destination the rail last picked, parked here by its `on_change`.
+    nav_selection: Rc<Cell<Option<usize>>>,
+    /// Index into [`PAGES`] currently shown on the right.
+    page: usize,
     /// The scrollable viewport owning every gallery widget as a child.
     scroll: ScrollableWidget,
     /// Taffy node for each child, in the same order as `scroll.children()`,
@@ -683,16 +736,15 @@ struct App {
 
 impl App {
     fn new(theme: ColorTheme, fonts: FontBook) -> Self {
-        let (widgets, captions, layout_rects, tree, root) = build_gallery();
-        let mut scroll = ScrollableWidget::new();
-        let mut child_nodes = Vec::with_capacity(widgets.len());
-        for pending in widgets {
-            child_nodes.push(pending.node);
-            scroll.push(pending.widget);
-        }
+        let (widgets, captions, layout_rects, tree, root) = build_gallery(0);
+        let (scroll, child_nodes) = page_into_scroll(widgets);
+        let nav_selection = Rc::new(Cell::new(None));
         Self {
             theme,
             fonts,
+            rail: build_rail(nav_selection.clone()),
+            nav_selection,
+            page: 0,
             scroll,
             child_nodes,
             captions,
@@ -710,6 +762,32 @@ impl App {
         }
     }
 
+    /// Swaps the right-hand pane over to another destination. The page is
+    /// rebuilt from scratch rather than hidden: a gallery has no state worth
+    /// preserving across a switch, and rebuilding keeps `child_nodes` in step
+    /// with `scroll`'s children for free.
+    fn set_page(&mut self, page: usize) {
+        self.page = page;
+        let (widgets, captions, layout_rects, tree, root) = build_gallery(page);
+        let (scroll, child_nodes) = page_into_scroll(widgets);
+        self.scroll = scroll;
+        self.child_nodes = child_nodes;
+        self.captions = captions;
+        self.layout_rects = layout_rects;
+        self.tree = tree;
+        self.root = root;
+        // The widgets the old focus pointed at are gone; keep focus only if
+        // it was on the rail, which just survived the switch.
+        if self.focus != Some(RAIL_FOCUS) {
+            self.focus = None;
+        }
+
+        if let Some(window) = self.window.clone() {
+            let size = window.inner_size();
+            self.layout_for_viewport(size.width as f32, size.height as f32);
+        }
+    }
+
     /// Resolves every node's current rect from the taffy tree, sets the
     /// scroll viewport/content height, and pushes fresh geometry into each
     /// child via `set_layout_rect`, without touching any other widget state
@@ -719,11 +797,17 @@ impl App {
         let mut rects = HashMap::new();
         resolve_layout_rects(&self.tree, self.root, (0.0, 0.0), &mut rects);
 
+        let body_height = (height - HEADER_HEIGHT).max(0.0);
+        // The rail keeps a fixed expanded-width slot whether or not it is
+        // currently expanded, so collapsing it never reflows the page beside
+        // it — the rail clamps itself to whatever it is given.
+        self.rail
+            .set_layout_rect(LayoutRect::new(0.0, HEADER_HEIGHT, RAIL_WIDTH, body_height));
         self.scroll.set_layout_rect(LayoutRect::new(
-            0.0,
+            RAIL_WIDTH,
             HEADER_HEIGHT,
-            width,
-            (height - HEADER_HEIGHT).max(0.0),
+            (width - RAIL_WIDTH).max(0.0),
+            body_height,
         ));
         let content_h = self.tree.layout(self.root).unwrap().size.height;
         self.scroll.set_content_height(content_h);
@@ -778,12 +862,17 @@ impl App {
 
     fn dispatch_pointer(&mut self, kind: PointerEventKind) {
         let event = PointerEvent::new(self.cursor, kind);
-        let mut redraw = self.scroll.on_pointer(&event);
+        // The rail lives in window space; the scroll translates into content
+        // space itself and sends a synthetic Leave to its children whenever
+        // the cursor is outside its viewport, so hover can't get stuck.
+        let mut redraw = self.rail.on_pointer(&event);
+        redraw |= self.scroll.on_pointer(&event);
         if let PointerEventKind::Press { button } = kind {
             if button == pointer::button::LEFT {
                 redraw |= self.update_focus_from_click();
             }
         }
+        redraw |= self.take_nav_selection();
         if redraw {
             if let Some(w) = &self.window {
                 w.request_redraw();
@@ -791,12 +880,46 @@ impl App {
         }
     }
 
+    /// Applies a destination the rail parked in `nav_selection`, if any.
+    fn take_nav_selection(&mut self) -> bool {
+        match self.nav_selection.take() {
+            Some(page) if page != self.page => {
+                self.set_page(page);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Focusable targets, in Tab order: the rail at [`RAIL_FOCUS`], then the
+    /// scroll's children. Keeping them in one index space lets the existing
+    /// cycling and blur/focus logic treat the rail as just another stop.
+    fn focus_count(&self) -> usize {
+        1 + self.scroll.children().len()
+    }
+
+    fn is_focusable(&self, i: usize) -> bool {
+        match i {
+            RAIL_FOCUS => self.rail.focusable(),
+            _ => self.scroll.children()[i - 1].focusable(),
+        }
+    }
+
+    fn focus_widget_mut(&mut self, i: usize) -> Option<&mut (dyn Widget + 'static)> {
+        match i {
+            RAIL_FOCUS => Some(&mut self.rail),
+            _ => self.scroll.child_mut(i - 1).map(|w| w.as_mut()),
+        }
+    }
+
     /// Topmost (last-drawn) focusable widget under the cursor gets focus;
-    /// clicking empty space or a non-focusable widget clears it. Hit-testing
-    /// happens in content space, and only when the cursor is inside the
-    /// scroll viewport.
+    /// clicking empty space or a non-focusable widget clears it. The rail
+    /// hit-tests in window space, the scroll's children in content space.
     fn update_focus_from_click(&mut self) -> bool {
-        let hit = if self.scroll.viewport_contains(self.cursor) {
+        let (x, y) = (self.cursor.0 as f32, self.cursor.1 as f32);
+        let hit = if self.rail.hit_rect().contains(x, y) {
+            self.rail.focusable().then_some(RAIL_FOCUS)
+        } else if self.scroll.viewport_contains(self.cursor) {
             let cp = self.scroll.content_point(self.cursor);
             self.scroll
                 .children()
@@ -804,7 +927,7 @@ impl App {
                 .enumerate()
                 .rev()
                 .find(|(_, w)| w.focusable() && w.hit_rect().contains(cp.0 as f32, cp.1 as f32))
-                .map(|(i, _)| i)
+                .map(|(i, _)| i + 1)
         } else {
             None
         };
@@ -815,17 +938,15 @@ impl App {
         if new_focus == self.focus {
             return false;
         }
-        if let Some(old) = self.focus.and_then(|i| self.scroll.child_mut(i)) {
+        let modifiers = self.modifiers;
+        if let Some(old) = self.focus.and_then(|i| self.focus_widget_mut(i)) {
             old.set_focused(false);
-            old.on_keyboard(&KeyboardEvent::new(KeyboardEventKind::Blur, self.modifiers));
+            old.on_keyboard(&KeyboardEvent::new(KeyboardEventKind::Blur, modifiers));
         }
         self.focus = new_focus;
-        if let Some(new) = self.focus.and_then(|i| self.scroll.child_mut(i)) {
+        if let Some(new) = self.focus.and_then(|i| self.focus_widget_mut(i)) {
             new.set_focused(true);
-            new.on_keyboard(&KeyboardEvent::new(
-                KeyboardEventKind::Focus,
-                self.modifiers,
-            ));
+            new.on_keyboard(&KeyboardEvent::new(KeyboardEventKind::Focus, modifiers));
         }
         true
     }
@@ -837,11 +958,13 @@ impl App {
             return;
         };
         let event = KeyboardEvent::new(kind, self.modifiers);
-        let redraw = self
-            .scroll
-            .child_mut(idx)
+        let mut redraw = self
+            .focus_widget_mut(idx)
             .map(|widget| widget.on_keyboard(&event))
             .unwrap_or(false);
+        // Keyboard activation of a rail destination lands in the same cell a
+        // click would.
+        redraw |= self.take_nav_selection();
         if redraw {
             if let Some(w) = &self.window {
                 w.request_redraw();
@@ -852,10 +975,7 @@ impl App {
     /// Tab / Shift+Tab move focus to the next/previous focusable widget,
     /// wrapping around. Does nothing if there are no focusable widgets.
     fn cycle_focus(&mut self, backward: bool) {
-        let count = self.scroll.children().len();
-        if count == 0 {
-            return;
-        }
+        let count = self.focus_count();
         let start = self.focus.map(|i| i as isize).unwrap_or(-1);
         let mut i = start;
         for _ in 0..count {
@@ -864,7 +984,7 @@ impl App {
             } else {
                 (i + 1).rem_euclid(count as isize)
             };
-            if self.scroll.children()[i as usize].focusable() {
+            if self.is_focusable(i as usize) {
                 self.set_focus(Some(i as usize));
                 if let Some(w) = &self.window {
                     w.request_redraw();
@@ -880,12 +1000,14 @@ impl App {
         }
     }
 
+    /// Only the right-hand pane is laid out by taffy; the rail's slot is
+    /// carved off first so the page never flows underneath it.
     fn layout_for_viewport(&mut self, width: f32, height: f32) {
         self.tree
             .compute_layout(
                 self.root,
                 Size {
-                    width: AvailableSpace::Definite(width),
+                    width: AvailableSpace::Definite((width - RAIL_WIDTH).max(0.0)),
                     height: AvailableSpace::MaxContent,
                 },
             )
@@ -1057,13 +1179,14 @@ impl ApplicationHandler for App {
 
                 canvas.clear(Color4f::from(self.theme.surface));
 
-                let redraw = self.scroll.draw(canvas, &self.theme, &self.fonts);
+                let mut redraw = self.scroll.draw(canvas, &self.theme, &self.fonts);
+                redraw |= self.rail.draw(canvas, &self.theme, &self.fonts);
 
                 let mut text_paint = Paint::default();
                 text_paint.set_color4f(Color4f::from(self.theme.on_surface), None);
                 let font = self.fonts.sized("noto_sans", 24.0);
                 canvas.draw_str(
-                    "m3_test — ui_core smoke render",
+                    format!("m3_test — {}", PAGES[self.page].0),
                     Point::new(24.0, 40.0),
                     &font,
                     &text_paint,
