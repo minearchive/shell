@@ -61,6 +61,18 @@ pub trait Component {
     fn on_easing_updated(&mut self, _id: String, _easing: &Easing) -> Redraw {
         Redraw::None
     }
+    fn on_drag_enter(&mut self, _mime_types: &[String]) -> Redraw {
+        Redraw::None
+    }
+    fn on_drag_motion(&mut self, _x: f64, _y: f64) -> Redraw {
+        Redraw::None
+    }
+    fn on_drag_leave(&mut self) -> Redraw {
+        Redraw::None
+    }
+    fn on_drop(&mut self, _mime: &str, _data: &[u8]) -> Redraw {
+        Redraw::None
+    }
 }
 
 #[allow(unused)]
@@ -122,7 +134,8 @@ impl UserInterface {
         self.components
             .iter_mut()
             .map(|c| c.on_ipc(&event))
-            .fold(Redraw::None, Redraw::max)
+            .max()
+            .unwrap_or_default()
     }
 
     pub fn on_mpris(&mut self, state: &PlayerState, event: &MprisEvent) -> Redraw {
@@ -130,7 +143,8 @@ impl UserInterface {
             .components
             .iter_mut()
             .map(|c| c.on_mpris(state, event))
-            .fold(Redraw::None, Redraw::max);
+            .max()
+            .unwrap_or_default();
 
         if state.active {
             self.state
@@ -147,7 +161,8 @@ impl UserInterface {
         self.components
             .iter_mut()
             .map(|c| c.on_kde_connect_event(event))
-            .fold(Redraw::None, Redraw::max)
+            .max()
+            .unwrap_or_default()
     }
 
     pub fn on_warp(&mut self, status: &WarpStatus) -> Redraw {
@@ -155,7 +170,8 @@ impl UserInterface {
             .components
             .iter_mut()
             .map(|c| c.on_warp(status))
-            .fold(Redraw::None, Redraw::max);
+            .max()
+            .unwrap_or_default();
         self.state.warp = Some(status.clone());
         redraw
     }
@@ -164,7 +180,8 @@ impl UserInterface {
         self.components
             .iter_mut()
             .map(|c| c.on_notification(&event))
-            .fold(Redraw::None, Redraw::max)
+            .max()
+            .unwrap_or_default()
     }
 
     pub fn draw(&mut self, canvas: &Canvas, fonts: &FontBook) {
@@ -176,7 +193,8 @@ impl UserInterface {
             .components
             .iter_mut()
             .map(|c| c.draw(canvas, &self.state, fonts, theme))
-            .fold(Redraw::None, Redraw::max);
+            .max()
+            .unwrap_or_default();
 
         if redraw == Redraw::Animating {
             let _ = self.sender.send(UiEvent::RequestRedrawAll);
@@ -187,7 +205,8 @@ impl UserInterface {
         self.components
             .iter_mut()
             .map(|c| c.on_cursor(event))
-            .fold(Redraw::None, Redraw::max)
+            .max()
+            .unwrap_or_default()
     }
 
     pub fn on_modifier(&mut self, modifier: Modifiers) {
@@ -198,6 +217,39 @@ impl UserInterface {
         self.components
             .iter_mut()
             .map(|c| c.on_easing_updated(id.clone(), &easing))
-            .fold(Redraw::None, Redraw::max)
+            .max()
+            .unwrap_or_default()
+    }
+
+    pub fn on_drag_enter(&mut self, mime_types: &[String]) -> Redraw {
+        self.components
+            .iter_mut()
+            .map(|c| c.on_drag_enter(mime_types))
+            .max()
+            .unwrap_or_default()
+    }
+
+    pub fn on_drag_motion(&mut self, x: f64, y: f64) -> Redraw {
+        self.components
+            .iter_mut()
+            .map(|c| c.on_drag_motion(x, y))
+            .max()
+            .unwrap_or_default()
+    }
+
+    pub fn on_drag_leave(&mut self) -> Redraw {
+        self.components
+            .iter_mut()
+            .map(|c| c.on_drag_leave())
+            .max()
+            .unwrap_or_default()
+    }
+
+    pub fn on_drop(&mut self, mime: &str, data: &[u8]) -> Redraw {
+        self.components
+            .iter_mut()
+            .map(|c| c.on_drop(mime, data))
+            .max()
+            .unwrap_or_default()
     }
 }

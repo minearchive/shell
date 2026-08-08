@@ -18,7 +18,6 @@ toml = "1.1.2"
 # internal crates
 macros = { path = "./macros" }
 ui_core = { path = "./ui_core" }
-m3_widget = { path = "./m3_widget" }
 
 [package]
 name = "my_shell"
@@ -45,6 +44,5 @@ wayland-client = "0.31.14"
 zbus = { version = "5.16.0", default-features = false, features = ["tokio"] }
 toml.workspace = true
 futures-util = "0.3.32"
-notify-rust = "4.18.0"
 macros.workspace = true
 ui_core.workspace = true
