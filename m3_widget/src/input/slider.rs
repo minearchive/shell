@@ -256,11 +256,21 @@ impl Slider {
         left + (right - left) * fraction
     }
 
-    /// Inverse of [`Self::handle_center_x`]: pointer x to a quantized value.
+    /// Exact inverse of [`Self::handle_center_x`]: pointer x to a quantized
+    /// value. Uses the same inset — the track corner radius for discrete
+    /// sliders (matching `mark_x`), half the handle width otherwise — so
+    /// interior ticks round-trip exactly. The flush endpoints fall outside
+    /// `[left, right]` under the corner inset; the clamp below pins those to
+    /// min/max, which is exactly where `handle_center_x` puts the handle too.
     fn value_at(&self, x: f32) -> f32 {
         let bounds = self.rect();
-        let left = bounds.left + HANDLE_WIDTH / 2.0;
-        let right = bounds.right - HANDLE_WIDTH / 2.0;
+        let inset = if self.step.is_some() {
+            self.size.corner_radius()
+        } else {
+            HANDLE_WIDTH / 2.0
+        };
+        let left = bounds.left + inset;
+        let right = bounds.right - inset;
         let span = right - left;
         let fraction = if span <= 0.0 {
             0.0
@@ -616,6 +626,27 @@ mod tests {
         let just_above = rect.y - 1.0;
         assert!(hit.contains(rect.x + 1.0, just_above));
         assert!(!rect.contains(rect.x + 1.0, just_above));
+    }
+
+    /// `value_at` must be the exact inverse of `handle_center_x` at every
+    /// interior tick of a discrete slider: feeding a tick's drawn x back in
+    /// must return that same value, not a neighboring step. Regression test
+    /// for a mismatched inset (corner radius vs. half handle width) that
+    /// mis-rounded clicks on `ExtraLarge`, where the gap is largest.
+    #[test]
+    fn value_at_is_exact_inverse_of_handle_center_x_at_interior_ticks() {
+        let mut slider = Slider::new(0.0, 100.0, 0.0)
+            .size(SliderSize::ExtraLarge)
+            .step(10.0);
+        let rect = LayoutRect::new(0.0, 0.0, 600.0, SliderSize::ExtraLarge.handle_height());
+        slider.set_layout_rect(rect);
+
+        for step in 1..10 {
+            let value = step as f32 * 10.0;
+            slider.set_value(value);
+            let x = slider.handle_center_x();
+            assert_eq!(slider.value_at(x), value);
+        }
     }
 
     /// The value indicator paints above the handle but must not be reachable
