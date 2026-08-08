@@ -677,7 +677,7 @@ fn build_gallery(
 /// selection is parked in a shared cell that `dispatch_pointer` drains right
 /// after the event.
 fn build_rail(selection: Rc<Cell<Option<usize>>>) -> NavigationRail {
-    let mut rail = NavigationRail::new().menu_icon(Icon::Menu).expanded(true);
+    let mut rail = NavigationRail::new().menu_icon(Icon::Menu).expanded(false);
     for (label, icon) in PAGES {
         rail = rail.item(NavigationRailItem::new(icon).label(label));
     }
