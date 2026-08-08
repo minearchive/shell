@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use skia_safe::Color4f;
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
 #[serde(try_from = "String")]
 pub struct Color {
     pub r: f32,
@@ -29,23 +29,6 @@ impl Color {
             g: self.g + (other.g - self.g) * t,
             b: self.b + (other.b - self.b) * t,
             a: self.a + (other.a - self.a) * t,
-        }
-    }
-}
-
-impl PartialEq for Color {
-    fn eq(&self, other: &Self) -> bool {
-        self.r == other.r && self.g == other.g && self.b == other.b && self.a == other.a
-    }
-}
-
-impl Default for Color {
-    fn default() -> Self {
-        Self {
-            r: 0.0,
-            g: 0.0,
-            b: 0.0,
-            a: 0.0,
         }
     }
 }

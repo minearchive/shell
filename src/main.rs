@@ -8,12 +8,18 @@ use calloop::{
     EventLoop, LoopHandle,
 };
 use calloop_wayland_source::WaylandSource;
-use log::{debug, info};
+use log::{debug, info, warn};
 use skia_safe::{surfaces, ImageInfo};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
-    delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
-    delegate_registry, delegate_seat, delegate_shm,
+    data_device_manager::{
+        data_device::{DataDevice, DataDeviceHandler},
+        data_offer::{DataOfferHandler, DragOffer},
+        data_source::DataSourceHandler,
+        DataDeviceManagerState,
+    },
+    delegate_compositor, delegate_data_device, delegate_keyboard, delegate_layer, delegate_output,
+    delegate_pointer, delegate_registry, delegate_seat, delegate_shm,
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
@@ -36,6 +42,8 @@ use tokio::sync::mpsc::UnboundedSender;
 use wayland_client::{
     globals::registry_queue_init,
     protocol::{
+        wl_data_device::WlDataDevice,
+        wl_data_device_manager::DndAction,
         wl_keyboard::WlKeyboard,
         wl_output::{Transform, WlOutput},
         wl_pointer::WlPointer,
@@ -92,13 +100,15 @@ pub struct Shell {
     output_state: OutputState,
     seat_state: SeatState,
     compositor_state: CompositorState,
+    data_device_manager_state: DataDeviceManagerState,
     layer_shell: LayerShell,
     qh: QueueHandle<Shell>,
-    _loop_handle: LoopHandle<'static, Shell>,
+    loop_handle: LoopHandle<'static, Shell>,
     keyboard: Option<WlKeyboard>,
+    data_device: Option<DataDevice>,
+    dragging_screen: Option<usize>,
     pointer: Option<WlPointer>,
     screen: Vec<Screen>,
-    shift: Option<u32>,
     shm: Shm,
     registry_state: RegistryState,
     ipc: WindowManagerIPC,
@@ -134,15 +144,7 @@ fn main() {
         .insert_source(notification_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg(events) = event {
                 debug!("{events:?}");
-                let mut dirty = Vec::new();
-                for (i, screen) in shell.screen.iter_mut().enumerate() {
-                    if screen.ui.on_notification(events.clone()) != Redraw::None {
-                        dirty.push(i);
-                    }
-                }
-                for i in dirty {
-                    shell.request_redraw(i);
-                }
+                shell.dispatch(|ui| ui.on_notification(events.clone()));
             }
         })
         .unwrap();
@@ -152,15 +154,7 @@ fn main() {
     loop_handle
         .insert_source(mpris_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg((ref state, ref ev)) = event {
-                let mut dirty = Vec::new();
-                for (i, screen) in shell.screen.iter_mut().enumerate() {
-                    if screen.ui.on_mpris(state, ev) != Redraw::None {
-                        dirty.push(i);
-                    }
-                }
-                for i in dirty {
-                    shell.request_redraw(i);
-                }
+                shell.dispatch(|ui| ui.on_mpris(state, ev));
             }
         })
         .unwrap();
@@ -170,15 +164,7 @@ fn main() {
     loop_handle
         .insert_source(ipc_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg(ipc_event) = event {
-                let mut dirty = Vec::new();
-                for (i, screen) in shell.screen.iter_mut().enumerate() {
-                    if screen.ui.on_ipc(ipc_event.clone()) != Redraw::None {
-                        dirty.push(i);
-                    }
-                }
-                for i in dirty {
-                    shell.request_redraw(i);
-                }
+                shell.dispatch(|ui| ui.on_ipc(ipc_event.clone()));
             }
         })
         .unwrap();
@@ -188,15 +174,7 @@ fn main() {
     loop_handle
         .insert_source(kde_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg(kde_event) = event {
-                let mut dirty = Vec::new();
-                for (i, screen) in shell.screen.iter_mut().enumerate() {
-                    if screen.ui.on_kde_connect_event(&kde_event.clone()) != Redraw::None {
-                        dirty.push(i);
-                    }
-                }
-                for i in dirty {
-                    shell.request_redraw(i);
-                }
+                shell.dispatch(|ui| ui.on_kde_connect_event(&kde_event));
             }
         })
         .unwrap();
@@ -206,15 +184,7 @@ fn main() {
     loop_handle
         .insert_source(warp_channel, |event, _, shell| {
             if let calloop::channel::Event::Msg(status) = event {
-                let mut dirty = Vec::new();
-                for (i, screen) in shell.screen.iter_mut().enumerate() {
-                    if screen.ui.on_warp(&status) != Redraw::None {
-                        dirty.push(i);
-                    }
-                }
-                for i in dirty {
-                    shell.request_redraw(i);
-                }
+                shell.dispatch(|ui| ui.on_warp(&status));
             }
         })
         .unwrap();
@@ -233,22 +203,13 @@ fn main() {
                             shell.request_redraw(i);
                         }
                     }
-                    UiEvent::AnimationUpdated(easings) => {
-                        let mut dirty = Vec::new();
-                        for (i, screen) in shell.screen.iter_mut().enumerate() {
-                            let mut redraw = Redraw::None;
-                            for (id, easing) in &easings {
-                                redraw = redraw
-                                    .max(screen.ui.on_easing_updated(id.clone(), easing.clone()));
-                            }
-                            if redraw != Redraw::None {
-                                dirty.push(i);
-                            }
-                        }
-                        for i in dirty {
-                            shell.request_redraw(i);
-                        }
-                    }
+                    UiEvent::AnimationUpdated(easings) => shell.dispatch(|ui| {
+                        easings
+                            .iter()
+                            .map(|(id, easing)| ui.on_easing_updated(id.clone(), easing.clone()))
+                            .max()
+                            .unwrap_or_default()
+                    }),
                 }
             }
         })
@@ -258,6 +219,9 @@ fn main() {
 
     let layer_shell =
         LayerShell::bind(&globals, &qh).expect("Wayland layer shell is not available");
+
+    let data_device_manager_state = DataDeviceManagerState::bind(&globals, &qh)
+        .expect("Data Device Manager State is not available");
 
     let shm = Shm::bind(&globals, &qh).expect("Wayland shared memory is not available");
 
@@ -283,13 +247,13 @@ fn main() {
         output_state: OutputState::new(&globals, &qh),
         seat_state: SeatState::new(&globals, &qh),
         compositor_state: compositor,
+        data_device_manager_state,
         qh: qh.clone(),
-        _loop_handle: loop_handle,
+        loop_handle,
         layer_shell,
         keyboard: None,
         pointer: None,
         screen: Vec::new(),
-        shift: None,
         shm,
         registry_state: RegistryState::new(&globals),
         ipc,
@@ -312,7 +276,14 @@ fn main() {
         ui_tx,
         exit: false,
         counter: 0,
+        data_device: None,
+        dragging_screen: None,
     };
+
+    let seats: Vec<_> = application.seat_state.seats().collect();
+    for seat in &seats {
+        application.ensure_data_device(&qh, seat);
+    }
 
     let signal = event_loop.get_signal();
     event_loop
@@ -464,9 +435,10 @@ impl SeatHandler for Shell {
     fn new_seat(
         &mut self,
         _: &Connection,
-        _: &QueueHandle<Self>,
-        _: wayland_client::protocol::wl_seat::WlSeat,
+        qh: &QueueHandle<Self>,
+        seat: wayland_client::protocol::wl_seat::WlSeat,
     ) {
+        self.ensure_data_device(qh, &seat);
     }
 
     fn new_capability(
@@ -607,67 +579,300 @@ impl PointerHandler for Shell {
     ) {
         use PointerEventKind::*;
         for event in events {
-            if let Some(idx) = self
+            let Some(idx) = self
                 .screen
                 .iter()
                 .position(|s| s.layer.wl_surface() == &event.surface)
-            {
-                self.on_cursor(qh, event, idx);
-            }
-
-            if !self
-                .screen
-                .iter()
-                .any(|s| s.layer.wl_surface() == &event.surface)
-            {
+            else {
                 continue;
-            }
+            };
+            self.on_cursor(qh, event, idx);
 
-            {
-                match event.kind {
-                    Enter { .. } => {
-                        info!("Pointer entered @{:?}", event.position);
-                        // The bar must never steal keyboard focus from the
-                        // user's window, so it gives up interactivity here.
-                        // Enter always precedes a click, which leaves the
-                        // OnDemand set in `new_output` unreachable: deliberate,
-                        // not a `Leave` restore that was forgotten.
-                        //
-                        // Reverse both (and create the keyboard with
-                        // `get_keyboard_with_repeat`, so key repeat works) if
-                        // the bar ever needs text input.
-                        if let Some(screen) = self
-                            .screen
-                            .iter()
-                            .find(|s| s.layer.wl_surface() == &event.surface)
-                        {
-                            screen
-                                .layer
-                                .set_keyboard_interactivity(KeyboardInteractivity::None);
-                            screen.layer.commit();
-                        }
-                    }
-                    Leave { .. } => {
-                        info!("Pointer left");
-                    }
-                    Motion { .. } => {}
-                    Press { button, .. } => {
-                        info!("Press {:x} @ {:?}", button, event.position);
-                        self.shift = self.shift.xor(Some(0));
-                    }
-                    Release { button, .. } => {
-                        info!("Release {:x} @ {:?}", button, event.position);
-                    }
-                    Axis {
-                        horizontal,
-                        vertical,
-                        ..
-                    } => {
-                        info!("h: {horizontal:?}, v: {vertical:?}");
-                    }
+            match event.kind {
+                Enter { .. } => {
+                    info!("Pointer entered @{:?}", event.position);
+                    // The bar must never steal keyboard focus from the user's
+                    // window, so it gives up interactivity here. Enter always
+                    // precedes a click, which leaves the OnDemand set in
+                    // `new_output` unreachable: deliberate, not a `Leave`
+                    // restore that was forgotten.
+                    //
+                    // Reverse both (and create the keyboard with
+                    // `get_keyboard_with_repeat`, so key repeat works) if the
+                    // bar ever needs text input.
+                    let layer = &self.screen[idx].layer;
+                    layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+                    layer.commit();
+                }
+                Leave { .. } => {
+                    info!("Pointer left");
+                }
+                Motion { .. } => {}
+                Press { button, .. } => {
+                    info!("Press {:x} @ {:?}", button, event.position);
+                }
+                Release { button, .. } => {
+                    info!("Release {:x} @ {:?}", button, event.position);
+                }
+                Axis {
+                    horizontal,
+                    vertical,
+                    ..
+                } => {
+                    info!("h: {horizontal:?}, v: {vertical:?}");
                 }
             }
         }
+    }
+}
+
+/// Mime types we know how to log on drop, in preference order.
+const PREFERRED_DROP_MIME_TYPES: &[&str] =
+    &["text/uri-list", "text/plain;charset=utf-8", "text/plain"];
+
+fn pick_drop_mime(mime_types: &[String]) -> Option<String> {
+    PREFERRED_DROP_MIME_TYPES
+        .iter()
+        .find_map(|preferred| mime_types.iter().find(|m| m.as_str() == *preferred))
+        .or_else(|| mime_types.first())
+        .cloned()
+}
+
+impl DataDeviceHandler for Shell {
+    fn enter(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _data_device: &WlDataDevice,
+        x: f64,
+        y: f64,
+        wl_surface: &WlSurface,
+    ) {
+        info!("DnD enter @{x:.2},{y:.2}");
+
+        let Some(idx) = self
+            .screen
+            .iter()
+            .position(|s| s.layer.wl_surface() == wl_surface)
+        else {
+            warn!("DnD enter on a surface that belongs to no screen, ignoring");
+            return;
+        };
+        self.dragging_screen = Some(idx);
+
+        let Some(drag_offer) = self.drag_offer() else {
+            warn!("DnD enter on screen {idx} without a drag offer");
+            return;
+        };
+
+        let mime_types = drag_offer.with_mime_types(<[String]>::to_vec);
+        if let Some(mime) = pick_drop_mime(&mime_types) {
+            drag_offer.accept_mime_type(drag_offer.serial, Some(mime));
+        }
+        drag_offer.set_actions(DndAction::Copy, DndAction::Copy);
+
+        info!("DnD offer on screen {idx}: {mime_types:?}");
+        if self.screen[idx].ui.on_drag_enter(&mime_types) != Redraw::None {
+            self.request_redraw(idx);
+        }
+    }
+
+    fn leave(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _data_device: &WlDataDevice) {
+        if let Some(idx) = self.dragging_screen.take() {
+            if self.screen[idx].ui.on_drag_leave() != Redraw::None {
+                self.request_redraw(idx);
+            }
+        }
+    }
+
+    fn motion(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _data_device: &WlDataDevice,
+        x: f64,
+        y: f64,
+    ) {
+        if let Some(idx) = self.dragging_screen {
+            if self.screen[idx].ui.on_drag_motion(x, y) != Redraw::None {
+                self.request_redraw(idx);
+            }
+        }
+    }
+
+    fn selection(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _data_device: &WlDataDevice,
+    ) {
+        debug!("Clipboard selection changed (unhandled: this bar is a DnD target only)");
+    }
+
+    fn drop_performed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _data_device: &WlDataDevice,
+    ) {
+        info!("DnD drop performed");
+
+        let Some(idx) = self.dragging_screen.take() else {
+            warn!("Drop performed without a preceding DnD enter, ignoring");
+            return;
+        };
+
+        let Some(offer) = self.drag_offer() else {
+            warn!("Drop on screen {idx} without a drag offer");
+            return;
+        };
+
+        let mime_types = offer.with_mime_types(<[String]>::to_vec);
+        let Some(mime) = pick_drop_mime(&mime_types) else {
+            warn!("Drop on screen {idx} offered no mime types");
+            offer.finish();
+            offer.destroy();
+            return;
+        };
+
+        let read_pipe = match offer.receive(mime.clone()) {
+            Ok(pipe) => pipe,
+            Err(err) => {
+                warn!("Failed to receive drag-and-drop offer: {err}");
+                offer.finish();
+                offer.destroy();
+                return;
+            }
+        };
+
+        offer.accept_mime_type(offer.serial, Some(mime.clone()));
+        offer.set_actions(DndAction::Copy, DndAction::Copy);
+
+        let mut data = Vec::new();
+        let finish_offer = offer.clone();
+        let register =
+            self.loop_handle
+                .clone()
+                .insert_source(read_pipe, move |_, f, shell: &mut Shell| {
+                    use std::io::BufRead;
+
+                    // SAFETY: the fd stays open (and thus valid) until this closure returns
+                    // PostAction::Remove, matching smithay-client-toolkit's own data_device example.
+                    let f: &mut std::fs::File = unsafe { f.get_mut() };
+                    let mut reader = std::io::BufReader::new(f);
+                    match reader.fill_buf() {
+                        Ok([]) => {
+                            info!("Dropped {} bytes ({mime}) on screen {idx}", data.len());
+                            debug!("Dropped data: {:?}", String::from_utf8_lossy(&data));
+                            if shell.screen[idx].ui.on_drop(&mime, &data) != Redraw::None {
+                                shell.request_redraw(idx);
+                            }
+                            finish_offer.finish();
+                            finish_offer.destroy();
+                            calloop::PostAction::Remove
+                        }
+                        Ok(buf) => {
+                            let len = buf.len();
+                            data.extend_from_slice(buf);
+                            reader.consume(len);
+                            calloop::PostAction::Continue
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                            calloop::PostAction::Continue
+                        }
+                        Err(e) => {
+                            warn!("Error reading dropped data: {e}");
+                            finish_offer.finish();
+                            finish_offer.destroy();
+                            calloop::PostAction::Remove
+                        }
+                    }
+                });
+
+        if let Err(err) = register {
+            warn!("Failed to register drop read source: {err}");
+            offer.finish();
+            offer.destroy();
+        }
+    }
+}
+
+impl DataOfferHandler for Shell {
+    fn source_actions(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        offer: &mut DragOffer,
+        actions: DndAction,
+    ) {
+        debug!("Drag source advertised actions: {actions:?}");
+        offer.set_actions(DndAction::Copy, DndAction::Copy);
+    }
+
+    fn selected_action(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _offer: &mut DragOffer,
+        actions: DndAction,
+    ) {
+        debug!("Compositor selected drag action: {actions:?}");
+    }
+}
+
+impl DataSourceHandler for Shell {
+    fn accept_mime(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _source: &wayland_client::protocol::wl_data_source::WlDataSource,
+        _mime: Option<String>,
+    ) {
+        debug!("DataSourceHandler::accept_mime called, but this bar never creates a drag source");
+    }
+
+    fn send_request(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _source: &wayland_client::protocol::wl_data_source::WlDataSource,
+        _mime: String,
+        _fd: smithay_client_toolkit::data_device_manager::WritePipe,
+    ) {
+        debug!("DataSourceHandler::send_request called, but this bar never creates a drag source");
+    }
+
+    fn cancelled(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _source: &wayland_client::protocol::wl_data_source::WlDataSource,
+    ) {
+    }
+
+    fn dnd_dropped(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _source: &wayland_client::protocol::wl_data_source::WlDataSource,
+    ) {
+    }
+
+    fn dnd_finished(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _source: &wayland_client::protocol::wl_data_source::WlDataSource,
+    ) {
+    }
+
+    fn action(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _source: &wayland_client::protocol::wl_data_source::WlDataSource,
+        _action: DndAction,
+    ) {
     }
 }
 
@@ -684,6 +889,43 @@ pub enum KeyTiming {
 }
 
 impl Shell {
+    /// Create the seat's `wl_data_device`, without which the compositor has
+    /// nowhere to send drag-and-drop events.
+    ///
+    /// Called both from `SeatHandler::new_seat` and, at startup, for the seats
+    /// `SeatState::new` already bound — SCTK only reaches `new_seat` through
+    /// `RegistryHandler::new_global`, which is not called during the initial
+    /// enumeration of globals.
+    fn ensure_data_device(&mut self, qh: &QueueHandle<Self>, seat: &WlSeat) {
+        if self.data_device.is_some() {
+            return;
+        }
+        info!("Creating data device for seat");
+        self.data_device = Some(self.data_device_manager_state.get_data_device(qh, seat));
+    }
+
+    /// Fan an input event out to every screen's UI and repaint the ones that
+    /// asked for it. Collecting the indices first keeps the `&mut self.screen`
+    /// borrow from overlapping `request_redraw`.
+    fn dispatch(&mut self, mut f: impl FnMut(&mut UserInterface) -> Redraw) {
+        let dirty: Vec<usize> = self
+            .screen
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(i, s)| (f(&mut s.ui) != Redraw::None).then_some(i))
+            .collect();
+        for i in dirty {
+            self.request_redraw(i);
+        }
+    }
+
+    /// The drag offer currently being held over this bar, if any.
+    fn drag_offer(&self) -> Option<DragOffer> {
+        self.data_device
+            .as_ref()
+            .and_then(|d| d.data().drag_offer())
+    }
+
     pub fn request_redraw(&mut self, idx: usize) {
         let Some(screen) = self.screen.get_mut(idx) else {
             return;
@@ -744,6 +986,8 @@ delegate_shm!(Shell);
 delegate_seat!(Shell);
 delegate_keyboard!(Shell);
 delegate_pointer!(Shell);
+
+delegate_data_device!(Shell);
 
 delegate_layer!(Shell);
 

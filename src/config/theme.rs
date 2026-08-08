@@ -10,18 +10,12 @@ use crate::ui::UiEvent;
 
 use super::watchable::WatchableConfig;
 
-#[derive(Deserialize, Serialize, Default)]
+#[derive(Deserialize, Serialize, Default, PartialEq)]
 #[serde(default)]
 pub struct Theme {
     pub is_dark: bool,
     pub dark: ColorTheme,
     pub light: ColorTheme,
-}
-
-impl PartialEq for Theme {
-    fn eq(&self, other: &Self) -> bool {
-        self.is_dark == other.is_dark && self.dark == other.dark && self.light == other.light
-    }
 }
 
 impl WatchableConfig for Theme {

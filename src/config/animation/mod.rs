@@ -13,18 +13,10 @@ use crate::ui::UiEvent;
 use self::easings::RawAnimationConfig;
 use super::watchable::WatchableConfig;
 
+#[derive(Default)]
 pub struct AnimationConfig {
     raw: HashMap<String, String>,
     easings: HashMap<String, Easing>,
-}
-
-impl Default for AnimationConfig {
-    fn default() -> Self {
-        Self {
-            raw: HashMap::new(),
-            easings: HashMap::new(),
-        }
-    }
 }
 
 impl WatchableConfig for AnimationConfig {

@@ -77,3 +77,8 @@
   - [x] Column
   - [ ] Stack
   - [x] Align
+
+# Setting GUI
+- [ ] Itegrate with main
+  - [ ] realtime mapping with config
+  - [ ] event separate from bar

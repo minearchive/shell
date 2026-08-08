@@ -1,16 +1,50 @@
 {
-  description = "GTK4 layer shell bar";
+  description = "Wayland layer-shell bar rendered with Skia";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+    }:
+    flake-utils.lib.eachDefaultSystem (
+      system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-      in {
+
+        # Runtime/build deps (migrated from devenv.nix).
+        packages = with pkgs; [
+          gtk3
+          gtk4
+          libadwaita
+          gtk4-layer-shell
+          gcc
+          clang
+          llvmPackages.libclang
+          python3
+          pkg-config
+          gnumake
+          cmake
+          ninja
+          libepoxy
+          mesa
+          libGL
+          wayland
+          libxkbcommon
+        ];
+
+        env = {
+          LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+          LD_LIBRARY_PATH = "${pkgs.mesa}/lib:${pkgs.libGL}/lib:${pkgs.wayland}/lib:${pkgs.libxkbcommon}/lib";
+          __EGL_VENDOR_LIBRARY_DIRS = "/run/opengl-driver/share/glvnd/egl_vendor.d";
+        };
+      in
+      {
         packages.default = pkgs.rustPlatform.buildRustPackage {
           pname = "gtk_learn";
           version = "0.1.0";
@@ -20,30 +54,32 @@
 
           nativeBuildInputs = with pkgs; [
             pkg-config
-            wrapGAppsHook4
+            clang
+            llvmPackages.libclang
+            cmake
+            ninja
+            python3
           ];
 
-          buildInputs = with pkgs; [
-            gtk4
-            gtk4-layer-shell
-            glib
-          ];
+          buildInputs = packages;
+
+          inherit (env) LIBCLANG_PATH;
         };
 
-        devShells.default = pkgs.mkShell {
-          nativeBuildInputs = with pkgs; [
-            rustc
-            cargo
-            rust-analyzer
-            pkg-config
-          ];
-
-          buildInputs = with pkgs; [
-            gtk4
-            gtk4-layer-shell
-            glib
-          ];
-        };
+        devShells.default = pkgs.mkShell (
+          {
+            buildInputs =
+              (with pkgs; [
+                rustc
+                cargo
+                clippy
+                rustfmt
+                rust-analyzer
+              ])
+              ++ packages;
+          }
+          // env
+        );
       }
     );
 }
