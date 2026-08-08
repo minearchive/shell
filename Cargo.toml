@@ -1,10 +1,13 @@
 [workspace]
 members = [
+    "m3_test",
+    "m3_widget",
     "macros",
-    "ui_core"
+    "ui_core",
+    "ui_widget"
 ]
 
-# Shared package metadata; members opt in with `edition.workspace = true`.
+
 [workspace.package]
 edition = "2021"
 
@@ -14,10 +17,16 @@ edition = "2021"
 skia-safe = "0.97.2"
 skia-bindings = "0.97.2"
 serde = { version = "1.0.228", features = ["derive"] }
+winit = "0.30"
+softbuffer = "0.4"
 toml = "1.1.2"
+taffy = "0.12.2"
 # internal crates
 macros = { path = "./macros" }
 ui_core = { path = "./ui_core" }
+ui_widget = { path = "./ui_widget" }
+m3_widget = { path = "./m3_widget" }
+m3_test = { path = "./m3_test" }
 
 [package]
 name = "my_shell"

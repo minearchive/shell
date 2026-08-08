@@ -10,6 +10,29 @@ pub struct Color {
     pub a: f32,
 }
 
+impl Color {
+    /// Scales alpha, keeping the channels intact. State layers and disabled
+    /// treatments are defined this way.
+    pub fn with_alpha(self, alpha: f32) -> Self {
+        Self {
+            a: self.a * alpha,
+            ..self
+        }
+    }
+
+    /// Linearly interpolates every channel toward `other` by `t` (0 → `self`,
+    /// 1 → `other`). Widgets use this to cross-fade colors as a selection or
+    /// press animation travels.
+    pub fn lerp(self, other: Self, t: f32) -> Self {
+        Self {
+            r: self.r + (other.r - self.r) * t,
+            g: self.g + (other.g - self.g) * t,
+            b: self.b + (other.b - self.b) * t,
+            a: self.a + (other.a - self.a) * t,
+        }
+    }
+}
+
 impl TryFrom<String> for Color {
     type Error = String;
 
@@ -77,5 +100,48 @@ mod tests {
     fn test_color_default_is_transparent() {
         let c = Color::default();
         assert_eq!(c.a, 0.0);
+    }
+
+    #[test]
+    fn test_with_alpha_scales_alpha_and_keeps_channels() {
+        let c = Color::try_from("#6750A4".to_string())
+            .unwrap()
+            .with_alpha(0.12);
+        assert!((c.a - 0.12).abs() < 1e-4);
+        assert!((c.r - 103.0 / 255.0).abs() < 1e-4);
+        assert!((c.g - 80.0 / 255.0).abs() < 1e-4);
+        assert!((c.b - 164.0 / 255.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_lerp_interpolates_each_channel() {
+        let a = Color {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.0,
+        };
+        let b = Color {
+            r: 1.0,
+            g: 0.5,
+            b: 0.2,
+            a: 1.0,
+        };
+        let mid = a.lerp(b, 0.5);
+        assert!((mid.r - 0.5).abs() < 1e-6);
+        assert!((mid.g - 0.25).abs() < 1e-6);
+        assert!((mid.b - 0.1).abs() < 1e-6);
+        assert!((mid.a - 0.5).abs() < 1e-6);
+        // Endpoints are exact.
+        assert_eq!(a.lerp(b, 0.0), a);
+        assert_eq!(a.lerp(b, 1.0), b);
+    }
+
+    #[test]
+    fn test_with_alpha_is_relative_to_existing_alpha() {
+        let c = Color::try_from("#6750A480".to_string())
+            .unwrap()
+            .with_alpha(0.5);
+        assert!((c.a - 128.0 / 255.0 * 0.5).abs() < 1e-4);
     }
 }

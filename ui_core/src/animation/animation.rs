@@ -39,6 +39,13 @@ impl Animation<f32> {
         self.started.elapsed() >= self.duration
     }
 
+    /// Whether the animation is still moving: not finished, and actually going
+    /// somewhere (`from != to`). Widgets use this to decide whether another
+    /// frame is worth requesting.
+    pub fn is_traveling(&self) -> bool {
+        !self.is_done() && self.from != self.to
+    }
+
     pub fn reset(&mut self, from: f32, to: f32) {
         self.from = from;
         self.to = to;

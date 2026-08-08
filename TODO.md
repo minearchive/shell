@@ -1,15 +1,30 @@
 # TODO
 
 ## Rendering
-- [ ] Redraw Only updated Area
+- [ ] Optimized rendering
+
+## Fonts
+- [ ] Font fallback: Roboto as primary + Noto Sans CJK JP as fallback for CJK glyphs (currently `FontBook` only holds one typeface per key; needs per-char `unichar_to_glyph` check + `match_family_style_character`, with the fallback typeface resolution cached, not called per-draw)
+- [ ] From file
 
 ## Audio
 - [ ] status provider
+- [ ] setting for each process
+- [ ] EQ
 - [ ] OSD
 
 ## Battery
 - [ ] status provider
 - [ ] alert
+
+## Monitor
+- [ ] light level
+- [ ] mirroring in niri
+
+## LocalSend & Quickshare
+- [ ] support
+- [ ] custom widget
+- [ ] drag and drop
 
 ## IPC
 - [ ] mapping all niri events
@@ -29,16 +44,41 @@
 - [ ] mirroring in niri
 - [ ] system resources
 
-# Component
+## Shell
+- [ ] set keyboard interactivity to None at creation, drop the pointer Enter hack
+- [ ] keyboard input, only if the bar ever needs it (needs get_keyboard_with_repeat)
+- [ ] make design.
+- [ ] z-order based rendering
+
+## Component
 - [ ] Material3 Main Component
-  - [ ] Button
-  - [ ] Slider
+  - [x] Button
+    - [x] Normal
+    - [x] Icon
+    - [x] Radio
+    - [x] Segmented
+  - [x] Slider
+  - [x] CheckBox
+  - [x] Divider
+  - [x] ListItem
   - [ ] Textbox
+    - [x] keyboard input, cursor, paste
+    - [ ] selection range, cheapest before more edit ops land (state -> anchor + cursor)
+    - [ ] copy/cut, needs selection first
+    - [ ] IME / preedit, adapters only since Commit is the one insertion path
   - [ ] DatePicker
   - [ ] Chips
+  - [ ] Navigation
+    - [ ] drawer
+    - [ ] rail
+- [ ] General Positioning Component
+  - [x] Scrollable
+  - [x] Row
+  - [x] Column
+  - [ ] Stack
+  - [x] Align
 
 # Setting GUI
 - [ ] Itegrate with main
   - [ ] realtime mapping with config
   - [ ] event separate from bar
-  - [ ]

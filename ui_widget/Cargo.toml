@@ -1,0 +1,9 @@
+[package]
+name = "ui_widget"
+version = "0.0.1"
+edition.workspace = true
+
+[dependencies]
+skia-bindings.workspace = true
+skia-safe.workspace = true
+ui_core.workspace = true
