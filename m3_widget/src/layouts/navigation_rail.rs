@@ -7,8 +7,9 @@
 //! destination selected) and one sliding active-indicator animation that
 //! needs every destination's geometry at once. The optional leading menu
 //! button is plain drawn content pinned to the top of the rail, not a widget
-//! of its own — the rail only reports the click, the caller owns whatever
-//! open/close state it drives.
+//! of its own — clicking it toggles the rail's own expanded/collapsed state
+//! (see [`NavigationRail::set_expanded`]) and fires
+//! [`NavigationRail::on_menu_click`] so the caller can react too.
 
 use skia_safe::{Canvas, Color4f, Contains, Paint, Point, RRect, Rect};
 
@@ -374,9 +375,6 @@ impl NavigationRail {
                 return false;
             }
             if self.items[candidate as usize].enabled {
-                if candidate as usize == self.focused_index {
-                    return false;
-                }
                 self.focused_index = candidate as usize;
                 return true;
             }
@@ -428,10 +426,9 @@ impl NavigationRail {
             + gap * self.items.len().saturating_sub(1) as f32
     }
 
-    /// The rail's natural footprint: the current animated width plus the
-    /// menu button (if any) and the sum of every destination's height. No
-    /// [`FontBook`] needed since every dimension here is fixed, not
-    /// measured from text.
+    /// The rail's natural height: top/bottom padding plus the menu button
+    /// (if any) plus the sum of every destination's height. No [`FontBook`]
+    /// needed since every dimension here is fixed, not measured from text.
     fn natural_height(&self) -> f32 {
         let menu = if self.menu_icon.is_some() {
             MENU_BUTTON_SIZE + LEADING_GAP

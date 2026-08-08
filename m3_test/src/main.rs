@@ -31,13 +31,13 @@ use m3_widget::{
 };
 use util::{button_code, keysym_from_named, load_theme};
 
-/// Left/right/top/bottom breathing room around the whole gallery. Top clears
-/// the two header lines drawn separately in `RedrawRequested`.
+/// Left/right/top/bottom breathing room around the scrollable gallery
+/// content.
 const ROOT_PADDING_X: f32 = 24.0;
 const ROOT_PADDING_TOP: f32 = 24.0;
 const ROOT_PADDING_BOTTOM: f32 = 24.0;
 /// Height of the fixed header drawn above the rail and the scrollable
-/// viewport.
+/// viewport — the two header lines drawn separately in `RedrawRequested`.
 const HEADER_HEIGHT: f32 = 80.0;
 /// Rail width change (in px) that triggers a relayout of the page beside it.
 /// Below this the page would shift by less than half a pixel, which rounds
@@ -180,10 +180,9 @@ fn button_gallery() -> Vec<LayoutNode> {
 
 /// A fixed per-segment width estimate for sizing taffy leaves. Not
 /// `SegmentedButton::measure` itself — that needs a `FontBook`, which isn't
-/// available while the layout tree is still being built (widgets aren't
-/// constructed until layout is resolved) — but comfortably wide enough for a
-/// short label plus its reserved icon slot, matching the widths used
-/// elsewhere in this file for buttons of similar label length.
+/// threaded into these gallery-building functions — but comfortably wide
+/// enough for a short label plus its reserved icon slot, matching the widths
+/// used elsewhere in this file for buttons of similar label length.
 const SEGMENTED_SEGMENT_WIDTH: f32 = 110.0;
 
 fn segmented_gallery() -> Vec<LayoutNode> {
@@ -255,8 +254,8 @@ fn segmented_gallery() -> Vec<LayoutNode> {
 /// only describes taffy nodes. The two never interleave — the `Column` below
 /// owns everything inside its single leaf.
 fn layout_gallery() -> Vec<LayoutNode> {
-    // Comfortably fits: two Medium buttons (48 each) + a 48-tall control row,
-    // plus two 8px gaps between them (96 + 48 + 16 = 160, rounded up).
+    // Comfortably fits: two Medium buttons (48 each) + a 40-tall control row,
+    // plus two 8px gaps between them (96 + 40 + 16 = 152, rounded up).
     const LEAF_WIDTH: f32 = 240.0;
     const LEAF_HEIGHT: f32 = 176.0;
 
@@ -734,7 +733,6 @@ struct App {
     /// no-op rather than a hard failure.
     clipboard: Option<arboard::Clipboard>,
     tree: TaffyTree,
-    /// root node of tree
     root: NodeId,
 }
 

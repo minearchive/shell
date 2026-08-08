@@ -2,8 +2,9 @@
 //!
 //! This groups the common (action) buttons, icon buttons, radio buttons and
 //! segmented buttons, because they share a presentation vocabulary — state
-//! layers, disabled treatment and press shape-morph — rather than any code
-//! hierarchy. That shared logic lives outside this module on purpose:
+//! layers and disabled treatment (Button/IconButton additionally share a
+//! press shape-morph; RadioButton/SegmentedButton don't) — rather than any
+//! code hierarchy. That shared logic lives outside this module on purpose:
 //! interaction opacities in [`crate::tokens`], motion in
 //! [`crate::tokens::motion`], and the glyph set in [`crate::icon`], so a
 //! non-button widget can reuse them without depending on `buttons`.

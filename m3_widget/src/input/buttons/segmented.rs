@@ -347,9 +347,6 @@ impl SegmentedButton {
                 return false;
             }
             if self.segments[candidate as usize].enabled {
-                if candidate as usize == self.focused_index {
-                    return false;
-                }
                 self.focused_index = candidate as usize;
                 return true;
             }
