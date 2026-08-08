@@ -5,7 +5,7 @@
 //! layers, disabled treatment and press shape-morph — rather than any code
 //! hierarchy. That shared logic lives outside this module on purpose:
 //! interaction opacities in [`crate::tokens`], motion in
-//! [`crate::animation`], and the glyph set in [`crate::icon`], so a
+//! [`crate::tokens::motion`], and the glyph set in [`crate::icon`], so a
 //! non-button widget can reuse them without depending on `buttons`.
 
 pub mod common;

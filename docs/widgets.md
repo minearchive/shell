@@ -104,10 +104,26 @@ since there's no `Now`/`None` distinction to make at this layer).
 
 ## `m3_widget` — Material 3 widget implementations
 
-Modules: `animation`, `buttons/`, `checkbox`, `divider`, `drawing`, `icon`,
-`list_item`, `slider`, `switch`, `text_field`, `tokens`. `lib.rs` re-exports
-the widgets plus `ui_widget`'s `Row`/`Column`/`ScrollableWidget`/`Widget`, so
-`use m3_widget::{Widget, Row, CheckBox, ...}` is enough for most consumers.
+Widgets are grouped by role into three **private** module directories, plus
+two shared paint helpers at the root:
+
+```
+input/     buttons/{common,icon_button,radio_button,segmented},
+           checkbox, slider, switch, text_field
+layouts/   divider, list_item, navigation_rail
+tokens/    mod.rs (state-layer/disabled opacities), motion (durations, easings)
+drawing.rs, icon.rs
+```
+
+`input` and `layouts` are `mod`, not `pub mod`: `lib.rs` re-exports every
+widget type **and** every leaf widget module at the crate root, so the public
+paths are `m3_widget::CheckBox` and `m3_widget::checkbox::SIZE` — never
+`m3_widget::input::checkbox`. Moving a widget between groups is therefore not
+a breaking change. `tokens` is public: the opacities live directly in
+`tokens/mod.rs` (`crate::tokens::HOVER_OPACITY`), motion constants under
+`crate::tokens::motion::{duration, easing}`.
+`lib.rs` also re-exports `ui_widget`'s `Row`/`Column`/`ScrollableWidget`/`Widget`,
+so `use m3_widget::{Widget, Row, CheckBox, ...}` is enough for most consumers.
 
 ### Shared building blocks
 
@@ -116,7 +132,7 @@ the widgets plus `ui_widget`'s `Row`/`Column`/`ScrollableWidget`/`Widget`, so
   `DISABLED_CONTAINER_OPACITY = 0.12`, `DISABLED_CONTENT_OPACITY = 0.38`.
   Individual widgets may deviate locally (e.g. `text_field` uses a 0.04
   disabled container opacity) rather than overriding the shared constant.
-- **`animation`** — MD3 motion tokens, built on `ui_core::animation::parser`.
+- **`tokens::motion`** — MD3 motion tokens, built on `ui_core::animation::parser`.
   `duration::{SHORT1..4 = 50/100/150/200, MEDIUM1..4 = 250/300/350/400,
   LONG1..4 = 450/500/550/600, EXTRA_LONG1..4 = 700/800/900/1000}` ms.
   `easing::{standard, standard_decelerate, standard_accelerate, emphasized,
@@ -145,7 +161,8 @@ the widgets plus `ui_widget`'s `Row`/`Column`/`ScrollableWidget`/`Widget`, so
 | `buttons::Button` | `ButtonVariant { Filled(default), FilledTonal, Elevated, Outlined, Text }`, `ButtonShape { Round(default), Square }`, `ButtonSize { ExtraSmall, Small(default), Medium, Large, ExtraLarge }` with `height()`/`horizontal_padding()`/`label_size()`/`corner_radius(pressed)`. `animations.shape` (SHORT4+standard) morphs round→squarer on press. API: `Button::new("Label").variant(..).shape(..).size(..).font(key).on_click(cb)`. |
 | `buttons::IconButton` | `IconButtonVariant { Standard(default, no container), Filled, FilledTonal, Outlined }`. Has both `on_click` (non-toggle mode) and `on_change` (toggle mode) — mutually exclusive; `toggle(bool)`, `selected()`, `set_selected()`. Accepts either an `Icon` or a custom `icon_fn: Box<dyn Fn(&Canvas, Rect, Color)>`. |
 | `buttons::RadioButton` | Same shape as `CheckBox` (`selected` + `on_change`), single-choice semantics left to the caller. |
-| `buttons::SegmentedButton` | Newest widget (commit `b167598`). Deliberately **one `Widget` owning every segment** rather than a `Row` of children, because segments share one outline and internal dividers — splitting it into children would duplicate that geometry. `Segment { label: Option<String>, icon: Option<Icon>, enabled }` via `Segment::new(label)` / `Segment::icon_only(icon)`. `SelectionMode { Single(default), Multi }`. Fields: `segments, mode, selected: Vec<bool>, hovered/pressed: Option<usize>, focused_index, measured_widths: Option<Vec<f32>>` (cached per-segment widths from the last `draw`, reused for hit-testing), `on_change: Option<Box<dyn FnMut(usize, bool)>>`. |
+| `buttons::SegmentedButton` | Deliberately **one `Widget` owning every segment** rather than a `Row` of children, because segments share one outline and internal dividers — splitting it into children would duplicate that geometry. `Segment { label: Option<String>, icon: Option<Icon>, enabled }` via `Segment::new(label)` / `Segment::icon_only(icon)`. `SelectionMode { Single(default), Multi }`. Fields: `segments, mode, selected: Vec<bool>, hovered/pressed: Option<usize>, focused_index, measured_widths: Option<Vec<f32>>` (cached per-segment widths from the last `draw`, reused for hit-testing), `on_change: Option<Box<dyn FnMut(usize, bool)>>`. |
+| `NavigationRail` | Newest widget. Like `SegmentedButton`, **one `Widget` owning every destination** — a single-select group can't let members decide selection independently, and the sliding indicator is one animation across the whole rail. `WIDTH = 80.0`, indicator pill 56x32 r16, item height 56 (no label) / 72 (labeled). `NavigationRailItem::new(icon).label(..).enabled(..)`; `NavigationRailAlignment { Top(default), Bottom }`. **Collapsed↔expanded (wide) state**: `EXPANDED_WIDTH = 220.0` (the token `ContainerWidthMinimum`; 360dp max-width negotiation and the modal variant are out of scope). Expanded items lay out *horizontally* — 56-tall full-width indicator inset 16 each side (radius 28), icon at indicator-left+16, label at icon-right+8 in Label Large 14px, 6dp between items — versus the collapsed stacked 56x32 pill with Label Medium 12px. A `width: Animation<f32>` drives the container between the two (MEDIUM4 + emphasized, substituting for Compose's `DefaultSpatial` spring, which this crate has no primitive for). **Every item dimension lerps continuously by `t = width_progress()`** — item height, inter-item gap, pill left/top/width/height, indicator radius, icon centre, label anchor and label size; there is no midpoint snap and no cross-fade. Icon centre and label anchor are each their *own* lerp between the collapsed and expanded formulas (centred-in-pill vs. offset-from-leading-edge), not derived from the blended pill, because the two formulas are structurally different. The label is one left-aligned `draw_str` throughout, its collapsed x pre-offset by half its `measure_str` width to read as centred — `Align::Center` isn't lerpable. **Collapsed-state geometry anchors to `rect.left + WIDTH / 2.0`, never to the animated `center_x()`**, so the menu button is fully static across the transition and a destination icon travels only 40→44px total. `effective_rect` clamps the animated width to the assigned slot so the rail never overdraws it — **give the rail `EXPANDED_WIDTH` of room or it cannot visibly expand.** Optional leading menu button (`menu_icon`/`on_menu_click`) — plain drawn content pinned to the top, not a separate widget, and it takes no keyboard focus; unlike Compose (where `WideNavigationRailState` is hoisted to the caller), **the rail owns `expanded` and the menu button toggles it**, firing `on_menu_click` afterwards. No FAB slot. `hovered`/`pressed` are a single `Option<Hit>` where `Hit { Item(usize), Menu }`, not a bool per region. `indicator` tracks the selected index as a *continuous* value and `draw` interpolates the pill between the two bracketing items (MEDIUM1+emphasized), so it slides correctly even when items differ in height. `compute_layout` returns `(Option<Rect>, Vec<Rect>)` (menu button, destinations) and is font-independent (expanded item height is the 56dp indicator, also not text-measured), so `draw` and `on_pointer` can never disagree about geometry — no cached-measurement field, unlike `SegmentedButton`. `measure` reports the *animated* width, not a constant. `draw` returns true while either animation is traveling. Hit target is the full rail-width stripe, not just the pill. API: `NavigationRail::new().menu_icon(..).item(..).alignment(..).expanded(..).on_change(cb).on_menu_click(cb)`, plus `set_selected`/`set_item_enabled`/`set_menu_icon`/`set_expanded`/`toggle_expanded`/`is_expanded`. |
 
 ### Recipe for a new `m3_widget` widget
 
@@ -168,7 +185,7 @@ Derived from the four most recently added widgets (`CheckBox`, `IconButton`,
    differently); `set_layout_rect`/`layout_rect` are plain accessors;
    `focusable()` returns `self.enabled`; `set_focused` sets the field.
 4. Reuse `crate::tokens::*` opacities, `crate::drawing::fill_circle` for state
-   layers, `crate::animation::{duration, easing}` for motion constants, and
+   layers, `crate::tokens::motion::{duration, easing}` for motion constants, and
    `crate::icon::Icon` where applicable — don't re-derive these per widget.
 5. Fire callbacks only on genuine user interaction (a completed
    press-then-release, a committed key), never during construction or from a

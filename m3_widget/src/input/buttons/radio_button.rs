@@ -14,8 +14,8 @@ use ui_core::{
 };
 
 use crate::{
-    animation::{duration, easing},
     drawing::{fill_circle, stroke_circle},
+    tokens::motion::{duration, easing},
     tokens::{DISABLED_CONTENT_OPACITY, FOCUS_OPACITY, HOVER_OPACITY, PRESSED_OPACITY},
     Widget,
 };

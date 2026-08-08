@@ -21,10 +21,10 @@ use winit::window::{Window, WindowId};
 
 use m3_widget::{
     buttons::{icon_button, radio_button, segmented},
-    checkbox, switch, text_field, Button, ButtonSize, ButtonVariant, CheckBox, Column, CrossAlign,
-    Divider, Icon, IconButton, IconButtonVariant, ListItem, RadioButton, Row, ScrollableWidget,
-    Segment, SegmentedButton, SelectionMode, Slider, SliderSize, Switch, SwitchIcons, TextField,
-    Widget,
+    checkbox, navigation_rail, switch, text_field, Button, ButtonSize, ButtonVariant, CheckBox,
+    Column, CrossAlign, Divider, Icon, IconButton, IconButtonVariant, ListItem, NavigationRail,
+    NavigationRailAlignment, NavigationRailItem, RadioButton, Row, ScrollableWidget, Segment,
+    SegmentedButton, SelectionMode, Slider, SliderSize, Switch, SwitchIcons, TextField, Widget,
 };
 use util::{
     button_code, column_style, item_style, keysym_from_named, load_theme, resolve_layout_rects,
@@ -805,6 +805,66 @@ fn divider_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget
     )
 }
 
+fn navigation_rail_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
+    const RAIL_HEIGHT: f32 = 400.0;
+
+    let mut pending = Vec::new();
+    let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
+
+    // Menu button plus three labeled, top-aligned destinations, one disabled.
+    // Given the expanded width up front so clicking the menu button has room
+    // to actually widen into — the rail clamps itself to its assigned slot.
+    let leaf = tree
+        .new_leaf(item_style(navigation_rail::EXPANDED_WIDTH, RAIL_HEIGHT))
+        .unwrap();
+    tree.add_child(row, leaf).unwrap();
+    pending.push(PendingWidget {
+        node: leaf,
+        build: Box::new(move |rect| {
+            let mut widget = NavigationRail::new()
+                .menu_icon(Icon::Menu)
+                .on_menu_click(|| println!("nav rail: menu toggled"))
+                .item(NavigationRailItem::new(Icon::Favorite).label("Home"))
+                .item(NavigationRailItem::new(Icon::Settings).label("Settings"))
+                .item(
+                    NavigationRailItem::new(Icon::More)
+                        .label("More")
+                        .enabled(false),
+                )
+                .on_change(|i| println!("nav rail: {i}"));
+            widget.set_layout_rect(rect);
+            Box::new(widget)
+        }),
+    });
+
+    // Minimal rail: unlabeled destinations, bottom-aligned.
+    let leaf = tree
+        .new_leaf(item_style(navigation_rail::WIDTH, RAIL_HEIGHT))
+        .unwrap();
+    tree.add_child(row, leaf).unwrap();
+    pending.push(PendingWidget {
+        node: leaf,
+        build: Box::new(move |rect| {
+            let mut widget = NavigationRail::new()
+                .alignment(NavigationRailAlignment::Bottom)
+                .item(NavigationRailItem::new(Icon::Favorite))
+                .item(NavigationRailItem::new(Icon::Settings))
+                .on_change(|i| println!("nav rail (minimal): {i}"));
+            widget.set_selected(1);
+            widget.set_layout_rect(rect);
+            Box::new(widget)
+        }),
+    });
+
+    (
+        vec![Section {
+            caption: "Navigation rail",
+            node: row,
+        }],
+        pending,
+    )
+}
+
 /// A section caption; its screen position is re-derived from its node's
 /// current layout on every relayout, including resize.
 struct Caption {
@@ -842,6 +902,7 @@ fn build_gallery() -> (
         icon_button_gallery(&mut tree),
         list_item_gallery(&mut tree),
         divider_gallery(&mut tree),
+        navigation_rail_gallery(&mut tree),
     ] {
         sections.extend(s);
         pending.extend(p);

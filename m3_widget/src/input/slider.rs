@@ -11,7 +11,7 @@ use ui_core::{
 };
 
 use crate::{
-    animation::{duration, easing},
+    tokens::motion::{duration, easing},
     Widget,
 };
 

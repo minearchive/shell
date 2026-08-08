@@ -13,7 +13,7 @@ use ui_core::{
 };
 
 use crate::{
-    animation::{duration, easing},
+    tokens::motion::{duration, easing},
     tokens::{
         DISABLED_CONTAINER_OPACITY, DISABLED_CONTENT_OPACITY, HOVER_OPACITY, PRESSED_OPACITY,
     },
