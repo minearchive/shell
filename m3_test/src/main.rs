@@ -1,3 +1,4 @@
+mod layout;
 mod util;
 
 use std::collections::HashMap;
@@ -19,6 +20,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
+use crate::layout::{build, leaf, resolve_layout_rects, Caption, LayoutNode, PendingWidget};
 use m3_widget::{
     buttons::{icon_button, radio_button, segmented},
     checkbox, navigation_rail, switch, text_field, Button, ButtonSize, ButtonVariant, CheckBox,
@@ -26,10 +28,7 @@ use m3_widget::{
     NavigationRailAlignment, NavigationRailItem, RadioButton, Row, ScrollableWidget, Segment,
     SegmentedButton, SelectionMode, Slider, SliderSize, Switch, SwitchIcons, TextField, Widget,
 };
-use util::{
-    button_code, column_style, item_style, keysym_from_named, load_theme, resolve_layout_rects,
-    row_style, PendingWidget, Section,
-};
+use util::{button_code, keysym_from_named, load_theme};
 
 /// Left/right/top/bottom breathing room around the whole gallery. Top clears
 /// the two header lines drawn separately in `RedrawRequested`.
@@ -49,25 +48,16 @@ const COLUMN_ITEM_GAP: f32 = 8.0;
 /// Baseline offset from a section's top to its caption, drawn just above it.
 const CAPTION_OFFSET: f32 = 8.0;
 
-fn root_style() -> Style {
-    Style {
-        display: Display::Flex,
-        flex_direction: FlexDirection::Column,
-        padding: Rect {
-            left: length(ROOT_PADDING_X),
-            right: length(ROOT_PADDING_X),
-            top: length(ROOT_PADDING_TOP),
-            bottom: length(ROOT_PADDING_BOTTOM),
-        },
-        gap: Size {
-            width: length(0.0),
-            height: length(SECTION_GAP),
-        },
-        ..Default::default()
+fn root_padding() -> Rect<LengthPercentage> {
+    Rect {
+        left: length(ROOT_PADDING_X),
+        right: length(ROOT_PADDING_X),
+        top: length(ROOT_PADDING_TOP),
+        bottom: length(ROOT_PADDING_BOTTOM),
     }
 }
 
-fn button_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
+fn button_gallery() -> Vec<LayoutNode> {
     let variants = [
         (
             "Filled",
@@ -152,40 +142,34 @@ fn button_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>
         ("Text", ButtonSize::Medium, ButtonVariant::Text, false, 90.0),
     ];
 
-    let mut sections = Vec::new();
-    let mut pending = Vec::new();
-
     let all = [
         ("Variants", variants),
         ("Sizes", sizes),
         ("Disabled", disabled),
     ];
 
-    for (title, variant) in all {
-        let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
-        for (label, size, variant, enabled, width) in variant {
-            let leaf = tree.new_leaf(item_style(width, size.height())).unwrap();
-            tree.add_child(row, leaf).unwrap();
-            pending.push(PendingWidget {
-                node: leaf,
-                build: Box::new(move |rect| {
-                    let mut widget = Button::new(label)
-                        .size(size)
-                        .variant(variant)
-                        .enabled(enabled)
-                        .on_click(move || println!("clicked: {label}"));
-                    widget.set_layout_rect(rect);
-                    Box::new(widget)
-                }),
-            });
-        }
-        sections.push(Section {
-            caption: title,
-            node: row,
-        });
-    }
-
-    (sections, pending)
+    all.into_iter()
+        .map(|(title, group)| {
+            LayoutNode::row(
+                group
+                    .into_iter()
+                    .map(|(label, size, variant, enabled, width)| {
+                        leaf(
+                            width,
+                            size.height(),
+                            Button::new(label)
+                                .size(size)
+                                .variant(variant)
+                                .enabled(enabled)
+                                .on_click(move || println!("clicked: {label}")),
+                        )
+                    })
+                    .collect(),
+            )
+            .gap(ITEM_GAP)
+            .caption(title)
+        })
+        .collect()
 }
 
 /// A fixed per-segment width estimate for sizing taffy leaves. Not
@@ -196,342 +180,225 @@ fn button_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>
 /// elsewhere in this file for buttons of similar label length.
 const SEGMENTED_SEGMENT_WIDTH: f32 = 110.0;
 
-fn segmented_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
-    let mut sections = Vec::new();
-    let mut pending = Vec::new();
-
-    // Single-select: three label-only segments, "Day" starts selected.
-    {
-        let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
-        let leaf = tree
-            .new_leaf(item_style(SEGMENTED_SEGMENT_WIDTH * 3.0, segmented::HEIGHT))
-            .unwrap();
-        tree.add_child(row, leaf).unwrap();
-        pending.push(PendingWidget {
-            node: leaf,
-            build: Box::new(move |rect| {
-                let mut widget = SegmentedButton::new()
-                    .segment(Segment::new("Day"))
-                    .segment(Segment::new("Week"))
-                    .segment(Segment::new("Month"))
-                    .selected(0)
-                    .on_change(|i, v| println!("segmented (single): {i} -> {v}"));
-                widget.set_layout_rect(rect);
-                Box::new(widget)
-            }),
-        });
-        sections.push(Section {
-            caption: "Segmented (single)",
-            node: row,
-        });
-    }
-
-    // Multi-select: three icon+label segments, two starting selected.
-    {
-        let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
-        let leaf = tree
-            .new_leaf(item_style(SEGMENTED_SEGMENT_WIDTH * 3.0, segmented::HEIGHT))
-            .unwrap();
-        tree.add_child(row, leaf).unwrap();
-        pending.push(PendingWidget {
-            node: leaf,
-            build: Box::new(move |rect| {
-                let mut widget = SegmentedButton::new()
-                    .segment(Segment::new("Bold").icon(Icon::Check))
-                    .segment(Segment::new("Italic").icon(Icon::Add))
-                    .segment(Segment::new("Underline").icon(Icon::Menu))
-                    .mode(SelectionMode::Multi)
-                    .selected(0)
-                    .selected(2)
-                    .on_change(|i, v| println!("segmented (multi): {i} -> {v}"));
-                widget.set_layout_rect(rect);
-                Box::new(widget)
-            }),
-        });
-        sections.push(Section {
-            caption: "Segmented (multi)",
-            node: row,
-        });
-    }
-
-    // Disabled: one control with a disabled middle segment (its neighbours
-    // stay interactive), and one control disabled entirely.
-    {
-        let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
-
-        let leaf = tree
-            .new_leaf(item_style(SEGMENTED_SEGMENT_WIDTH * 3.0, segmented::HEIGHT))
-            .unwrap();
-        tree.add_child(row, leaf).unwrap();
-        pending.push(PendingWidget {
-            node: leaf,
-            build: Box::new(move |rect| {
-                let mut widget = SegmentedButton::new()
+fn segmented_gallery() -> Vec<LayoutNode> {
+    vec![
+        // Single-select: three label-only segments, "Day" starts selected.
+        row![leaf(
+            SEGMENTED_SEGMENT_WIDTH * 3.0,
+            segmented::HEIGHT,
+            SegmentedButton::new()
+                .segment(Segment::new("Day"))
+                .segment(Segment::new("Week"))
+                .segment(Segment::new("Month"))
+                .selected(0)
+                .on_change(|i, v| println!("segmented (single): {i} -> {v}")),
+        )]
+        .gap(ITEM_GAP)
+        .caption("Segmented (single)"),
+        // Multi-select: three icon+label segments, two starting selected.
+        row![leaf(
+            SEGMENTED_SEGMENT_WIDTH * 3.0,
+            segmented::HEIGHT,
+            SegmentedButton::new()
+                .segment(Segment::new("Bold").icon(Icon::Check))
+                .segment(Segment::new("Italic").icon(Icon::Add))
+                .segment(Segment::new("Underline").icon(Icon::Menu))
+                .mode(SelectionMode::Multi)
+                .selected(0)
+                .selected(2)
+                .on_change(|i, v| println!("segmented (multi): {i} -> {v}")),
+        )]
+        .gap(ITEM_GAP)
+        .caption("Segmented (multi)"),
+        // Disabled: one control with a disabled middle segment (its
+        // neighbours stay interactive), and one control disabled entirely.
+        row![
+            leaf(
+                SEGMENTED_SEGMENT_WIDTH * 3.0,
+                segmented::HEIGHT,
+                SegmentedButton::new()
                     .segment(Segment::new("List"))
                     .segment(Segment::new("Grid").enabled(false))
                     .segment(Segment::new("Table"))
                     .selected(0)
-                    .on_change(|i, v| println!("segmented (disabled segment): {i} -> {v}"));
-                widget.set_layout_rect(rect);
-                Box::new(widget)
-            }),
-        });
-
-        let leaf = tree
-            .new_leaf(item_style(SEGMENTED_SEGMENT_WIDTH * 2.0, segmented::HEIGHT))
-            .unwrap();
-        tree.add_child(row, leaf).unwrap();
-        pending.push(PendingWidget {
-            node: leaf,
-            build: Box::new(move |rect| {
-                let mut widget = SegmentedButton::new()
+                    .on_change(|i, v| println!("segmented (disabled segment): {i} -> {v}")),
+            ),
+            leaf(
+                SEGMENTED_SEGMENT_WIDTH * 2.0,
+                segmented::HEIGHT,
+                SegmentedButton::new()
                     .segment(Segment::new("On"))
                     .segment(Segment::new("Off"))
                     .selected(0)
                     .enabled(false)
-                    .on_change(|i, v| println!("segmented (disabled control): {i} -> {v}"));
-                widget.set_layout_rect(rect);
-                Box::new(widget)
-            }),
-        });
-
-        sections.push(Section {
-            caption: "Segmented (disabled)",
-            node: row,
-        });
-    }
-
-    (sections, pending)
+                    .on_change(|i, v| println!("segmented (disabled control): {i} -> {v}")),
+            ),
+        ]
+        .gap(ITEM_GAP)
+        .caption("Segmented (disabled)"),
+    ]
 }
 
 /// Demonstrates `ui_widget`'s generic `Row`/`Column` containers, used
 /// directly (not via taffy) to arrange a mix of M3 widgets inside a single
 /// fixed-size taffy leaf. `Column` stacks two stretched buttons above a
 /// centered `Row` of fixed-size controls.
-fn layout_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
+///
+/// Note these are *not* the `row!`/`column!` macros: `ui_widget::Row` lays out
+/// and paints its children itself in one immediate-mode pass, whereas `row!`
+/// only describes taffy nodes. The two never interleave — the `Column` below
+/// owns everything inside its single leaf.
+fn layout_gallery() -> Vec<LayoutNode> {
     // Comfortably fits: two Medium buttons (48 each) + a 48-tall control row,
     // plus two 8px gaps between them (96 + 48 + 16 = 160, rounded up).
     const LEAF_WIDTH: f32 = 240.0;
     const LEAF_HEIGHT: f32 = 176.0;
 
-    let mut pending = Vec::new();
-    let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
+    let mut col = Column::new().gap(8.0).cross_align(CrossAlign::Stretch);
+    col.push(Box::new(
+        Button::new("One")
+            .size(ButtonSize::Medium)
+            .variant(ButtonVariant::Filled)
+            .on_click(|| println!("One")),
+    ));
+    col.push(Box::new(
+        Button::new("Two")
+            .size(ButtonSize::Medium)
+            .variant(ButtonVariant::FilledTonal)
+            .on_click(|| println!("Two")),
+    ));
 
-    let leaf = tree.new_leaf(item_style(LEAF_WIDTH, LEAF_HEIGHT)).unwrap();
-    tree.add_child(row, leaf).unwrap();
-    pending.push(PendingWidget {
-        node: leaf,
-        build: Box::new(move |rect| {
-            let mut col = Column::new().gap(8.0).cross_align(CrossAlign::Stretch);
-            col.push(Box::new(
-                Button::new("One")
-                    .size(ButtonSize::Medium)
-                    .variant(ButtonVariant::Filled)
-                    .on_click(|| println!("One")),
-            ));
-            col.push(Box::new(
-                Button::new("Two")
-                    .size(ButtonSize::Medium)
-                    .variant(ButtonVariant::FilledTonal)
-                    .on_click(|| println!("Two")),
-            ));
+    let mut controls = Row::new().gap(8.0).cross_align(CrossAlign::Center);
+    controls.push(Box::new(CheckBox::new(true)));
+    controls.push(Box::new(Switch::new(true)));
+    controls.push(Box::new(
+        IconButton::new()
+            .variant(IconButtonVariant::Filled)
+            .icon(Icon::Favorite),
+    ));
+    col.push(Box::new(controls));
 
-            let mut controls = Row::new().gap(8.0).cross_align(CrossAlign::Center);
-            controls.push(Box::new(CheckBox::new(true)));
-            controls.push(Box::new(Switch::new(true)));
-            controls.push(Box::new(
-                IconButton::new()
-                    .variant(IconButtonVariant::Filled)
-                    .icon(Icon::Favorite),
-            ));
-            col.push(Box::new(controls));
-
-            col.set_layout_rect(rect);
-            Box::new(col)
-        }),
-    });
-
-    (
-        vec![Section {
-            caption: "Row / Column",
-            node: row,
-        }],
-        pending,
-    )
+    vec![row![leaf(LEAF_WIDTH, LEAF_HEIGHT, col)]
+        .gap(ITEM_GAP)
+        .caption("Row / Column")]
 }
 
-fn slider_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
-    let mut sections = Vec::new();
-    let mut pending = Vec::new();
-
-    let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
-
+fn slider_gallery() -> Vec<LayoutNode> {
     let types = [(true, 0.), (true, 10.), (false, 0.)];
-
-    for (enabled, step) in types {
-        let leaf = tree
-            .new_leaf(item_style(200.0, SliderSize::default().handle_height()))
-            .unwrap();
-        tree.add_child(row, leaf).unwrap();
-        pending.push(PendingWidget {
-            node: leaf,
-            build: Box::new(move |rect| {
-                let mut widget = Slider::new(0.0, 100.0, 40.0)
-                    .labeled(true)
-                    .enabled(enabled)
-                    .step(step)
-                    .on_change(|v| println!("continuous: {v:.1}"));
-                widget.set_layout_rect(rect);
-                Box::new(widget)
-            }),
-        });
-    }
-
-    sections.push(Section {
-        caption: "Sliders",
-        node: row,
-    });
-
     let sizes = [
         SliderSize::ExtraSmall,
         SliderSize::Small,
         SliderSize::Medium,
     ];
-    let column = tree.new_leaf(column_style(COLUMN_ITEM_GAP)).unwrap();
-    for size in sizes {
-        let leaf = tree
-            .new_leaf(item_style(280.0, size.handle_height()))
-            .unwrap();
-        tree.add_child(column, leaf).unwrap();
-        pending.push(PendingWidget {
-            node: leaf,
-            build: Box::new(move |rect| {
-                let mut widget = Slider::new(0.0, 100.0, 50.0).size(size);
-                widget.set_layout_rect(rect);
-                Box::new(widget)
-            }),
-        });
-    }
-    sections.push(Section {
-        caption: "Slider sizes",
-        node: column,
-    });
 
-    (sections, pending)
+    vec![
+        LayoutNode::row(
+            types
+                .into_iter()
+                .map(|(enabled, step)| {
+                    leaf(
+                        200.0,
+                        SliderSize::default().handle_height(),
+                        Slider::new(0.0, 100.0, 40.0)
+                            .labeled(true)
+                            .enabled(enabled)
+                            .step(step)
+                            .on_change(|v| println!("continuous: {v:.1}")),
+                    )
+                })
+                .collect(),
+        )
+        .gap(ITEM_GAP)
+        .caption("Sliders"),
+        LayoutNode::column(
+            sizes
+                .into_iter()
+                .map(|size| {
+                    leaf(
+                        280.0,
+                        size.handle_height(),
+                        Slider::new(0.0, 100.0, 50.0).size(size),
+                    )
+                })
+                .collect(),
+        )
+        .gap(COLUMN_ITEM_GAP)
+        .caption("Slider sizes"),
+    ]
 }
 
-fn text_field_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
-    let mut pending = Vec::new();
-    let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
-
-    let leaf = tree
-        .new_leaf(item_style(220.0, text_field::HEIGHT))
-        .unwrap();
-    tree.add_child(row, leaf).unwrap();
-    pending.push(PendingWidget {
-        node: leaf,
-        build: Box::new(move |rect| {
-            let mut widget = TextField::new().on_change(|text| println!("text: {text}"));
-            widget.set_layout_rect(rect);
-            Box::new(widget)
-        }),
-    });
-
-    let leaf = tree
-        .new_leaf(item_style(220.0, text_field::HEIGHT))
-        .unwrap();
-    tree.add_child(row, leaf).unwrap();
-    pending.push(PendingWidget {
-        node: leaf,
-        build: Box::new(move |rect| {
-            let mut widget = TextField::new()
+fn text_field_gallery() -> Vec<LayoutNode> {
+    vec![row![
+        leaf(
+            220.0,
+            text_field::HEIGHT,
+            TextField::new().on_change(|text| println!("text: {text}")),
+        ),
+        leaf(
+            220.0,
+            text_field::HEIGHT,
+            TextField::new()
                 .text("フォント入力テスト")
-                .on_change(|text| println!("text: {text}"));
-            widget.set_layout_rect(rect);
-            Box::new(widget)
-        }),
-    });
-
-    let leaf = tree
-        .new_leaf(item_style(220.0, text_field::HEIGHT))
-        .unwrap();
-    tree.add_child(row, leaf).unwrap();
-    pending.push(PendingWidget {
-        node: leaf,
-        build: Box::new(move |rect| {
-            let mut widget = TextField::new().text("disabled").enabled(false);
-            widget.set_layout_rect(rect);
-            Box::new(widget)
-        }),
-    });
-
-    (
-        vec![Section {
-            caption: "Text fields",
-            node: row,
-        }],
-        pending,
-    )
+                .on_change(|text| println!("text: {text}")),
+        ),
+        leaf(
+            220.0,
+            text_field::HEIGHT,
+            TextField::new().text("disabled").enabled(false),
+        ),
+    ]
+    .gap(ITEM_GAP)
+    .caption("Text fields")]
 }
 
-fn switch_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
+fn switch_gallery() -> Vec<LayoutNode> {
     let variants = [
         ("plain", SwitchIcons::None),
         ("selected-icon", SwitchIcons::Selected),
         ("both-icons", SwitchIcons::Both),
     ];
 
-    let mut pending = Vec::new();
-    let outer = tree.new_leaf(row_style(GROUP_GAP)).unwrap();
+    let mut groups: Vec<LayoutNode> = variants
+        .into_iter()
+        .map(|(label, icons)| {
+            LayoutNode::row(
+                [false, true]
+                    .into_iter()
+                    .map(|checked| {
+                        leaf(
+                            switch::TRACK_WIDTH,
+                            switch::TRACK_HEIGHT,
+                            Switch::new(checked)
+                                .icons(icons)
+                                .on_change(move |v| println!("{label}: {v}")),
+                        )
+                    })
+                    .collect(),
+            )
+            .gap(ITEM_GAP)
+        })
+        .collect();
 
-    for (label, icons) in variants {
-        let group = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
-        tree.add_child(outer, group).unwrap();
-        for checked in [false, true] {
-            let leaf = tree
-                .new_leaf(item_style(switch::TRACK_WIDTH, switch::TRACK_HEIGHT))
-                .unwrap();
-            tree.add_child(group, leaf).unwrap();
-            pending.push(PendingWidget {
-                node: leaf,
-                build: Box::new(move |rect| {
-                    let mut widget = Switch::new(checked)
-                        .icons(icons)
-                        .on_change(move |v| println!("{label}: {v}"));
-                    widget.set_layout_rect(rect);
-                    Box::new(widget)
-                }),
-            });
-        }
-    }
+    groups.push(
+        LayoutNode::row(
+            [false, true]
+                .into_iter()
+                .map(|checked| {
+                    leaf(
+                        switch::TRACK_WIDTH,
+                        switch::TRACK_HEIGHT,
+                        Switch::new(checked).icons(SwitchIcons::Both).enabled(false),
+                    )
+                })
+                .collect(),
+        )
+        .gap(ITEM_GAP),
+    );
 
-    let disabled_group = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
-    tree.add_child(outer, disabled_group).unwrap();
-    for checked in [false, true] {
-        let leaf = tree
-            .new_leaf(item_style(switch::TRACK_WIDTH, switch::TRACK_HEIGHT))
-            .unwrap();
-        tree.add_child(disabled_group, leaf).unwrap();
-        pending.push(PendingWidget {
-            node: leaf,
-            build: Box::new(move |rect| {
-                let mut widget = Switch::new(checked).icons(SwitchIcons::Both).enabled(false);
-                widget.set_layout_rect(rect);
-                Box::new(widget)
-            }),
-        });
-    }
-
-    (
-        vec![Section {
-            caption: "Switches",
-            node: outer,
-        }],
-        pending,
-    )
+    vec![LayoutNode::row(groups).gap(GROUP_GAP).caption("Switches")]
 }
 
-fn checkbox_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
+fn checkbox_gallery() -> Vec<LayoutNode> {
     let variants = [
         ("unchecked", false, false, true),
         ("checked", true, false, true),
@@ -540,37 +407,26 @@ fn checkbox_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidge
         ("disabled-checked", true, false, false),
     ];
 
-    let mut pending = Vec::new();
-    let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
-
-    for (label, checked, indeterminate, enabled) in variants {
-        let leaf = tree
-            .new_leaf(item_style(checkbox::SIZE, checkbox::SIZE))
-            .unwrap();
-        tree.add_child(row, leaf).unwrap();
-        pending.push(PendingWidget {
-            node: leaf,
-            build: Box::new(move |rect| {
-                let mut widget = CheckBox::new(checked)
-                    .indeterminate(indeterminate)
-                    .enabled(enabled)
-                    .on_change(move |v| println!("{label}: {v}"));
-                widget.set_layout_rect(rect);
-                Box::new(widget)
-            }),
-        });
-    }
-
-    (
-        vec![Section {
-            caption: "Checkboxes",
-            node: row,
-        }],
-        pending,
+    vec![LayoutNode::row(
+        variants
+            .into_iter()
+            .map(|(label, checked, indeterminate, enabled)| {
+                leaf(
+                    checkbox::SIZE,
+                    checkbox::SIZE,
+                    CheckBox::new(checked)
+                        .indeterminate(indeterminate)
+                        .enabled(enabled)
+                        .on_change(move |v| println!("{label}: {v}")),
+                )
+            })
+            .collect(),
     )
+    .gap(ITEM_GAP)
+    .caption("Checkboxes")]
 }
 
-fn radio_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
+fn radio_gallery() -> Vec<LayoutNode> {
     // One radio group: only "Option A" starts selected. Real deselection of
     // the previously selected sibling when another option is picked (via
     // `RadioButton::set_selected`) is the app's job, not wired up here.
@@ -581,36 +437,25 @@ fn radio_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>)
         ("Disabled", false, false),
     ];
 
-    let mut pending = Vec::new();
-    let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
-
-    for (label, selected, enabled) in variants {
-        let leaf = tree
-            .new_leaf(item_style(radio_button::SIZE, radio_button::SIZE))
-            .unwrap();
-        tree.add_child(row, leaf).unwrap();
-        pending.push(PendingWidget {
-            node: leaf,
-            build: Box::new(move |rect| {
-                let mut widget = RadioButton::new(selected)
-                    .enabled(enabled)
-                    .on_change(move |v| println!("{label}: {v}"));
-                widget.set_layout_rect(rect);
-                Box::new(widget)
-            }),
-        });
-    }
-
-    (
-        vec![Section {
-            caption: "Radio buttons",
-            node: row,
-        }],
-        pending,
+    vec![LayoutNode::row(
+        variants
+            .into_iter()
+            .map(|(label, selected, enabled)| {
+                leaf(
+                    radio_button::SIZE,
+                    radio_button::SIZE,
+                    RadioButton::new(selected)
+                        .enabled(enabled)
+                        .on_change(move |v| println!("{label}: {v}")),
+                )
+            })
+            .collect(),
     )
+    .gap(ITEM_GAP)
+    .caption("Radio buttons")]
 }
 
-fn icon_button_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
+fn icon_button_gallery() -> Vec<LayoutNode> {
     let icons = [
         ("favorite", Icon::Favorite),
         ("add", Icon::Add),
@@ -625,203 +470,122 @@ fn icon_button_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWi
         ("Outlined", IconButtonVariant::Outlined),
     ];
 
-    let mut pending = Vec::new();
-    let outer = tree.new_leaf(row_style(GROUP_GAP)).unwrap();
-
-    for (variant_label, variant) in variants {
-        let group = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
-        tree.add_child(outer, group).unwrap();
-        for (icon_label, icon) in icons {
-            let leaf = tree
-                .new_leaf(item_style(icon_button::SIZE, icon_button::SIZE))
-                .unwrap();
-            tree.add_child(group, leaf).unwrap();
-            pending.push(PendingWidget {
-                node: leaf,
-                build: Box::new(move |rect| {
-                    let mut widget = IconButton::new()
-                        .variant(variant)
-                        .icon(icon)
-                        .on_click(move || println!("clicked: {variant_label} {icon_label}"));
-                    widget.set_layout_rect(rect);
-                    Box::new(widget)
-                }),
-            });
-        }
-    }
+    let mut groups: Vec<LayoutNode> = variants
+        .into_iter()
+        .map(|(variant_label, variant)| {
+            LayoutNode::row(
+                icons
+                    .into_iter()
+                    .map(|(icon_label, icon)| {
+                        leaf(
+                            icon_button::SIZE,
+                            icon_button::SIZE,
+                            IconButton::new()
+                                .variant(variant)
+                                .icon(icon)
+                                .on_click(move || {
+                                    println!("clicked: {variant_label} {icon_label}")
+                                }),
+                        )
+                    })
+                    .collect(),
+            )
+            .gap(ITEM_GAP)
+        })
+        .collect();
 
     // Disabled and toggle examples share a final group.
-    let extra_group = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
-    tree.add_child(outer, extra_group).unwrap();
+    groups.push(
+        row![
+            leaf(
+                icon_button::SIZE,
+                icon_button::SIZE,
+                IconButton::new()
+                    .variant(IconButtonVariant::Filled)
+                    .icon(Icon::Close)
+                    .enabled(false),
+            ),
+            leaf(
+                icon_button::SIZE,
+                icon_button::SIZE,
+                IconButton::new()
+                    .variant(IconButtonVariant::Standard)
+                    .icon(Icon::Favorite)
+                    .toggle(true)
+                    .selected(true)
+                    .on_change(|v| println!("toggle favorite: {v}")),
+            ),
+        ]
+        .gap(ITEM_GAP),
+    );
 
-    let leaf = tree
-        .new_leaf(item_style(icon_button::SIZE, icon_button::SIZE))
-        .unwrap();
-    tree.add_child(extra_group, leaf).unwrap();
-    pending.push(PendingWidget {
-        node: leaf,
-        build: Box::new(move |rect| {
-            let mut widget = IconButton::new()
-                .variant(IconButtonVariant::Filled)
-                .icon(Icon::Close)
-                .enabled(false);
-            widget.set_layout_rect(rect);
-            Box::new(widget)
-        }),
-    });
-
-    let leaf = tree
-        .new_leaf(item_style(icon_button::SIZE, icon_button::SIZE))
-        .unwrap();
-    tree.add_child(extra_group, leaf).unwrap();
-    pending.push(PendingWidget {
-        node: leaf,
-        build: Box::new(move |rect| {
-            let mut widget = IconButton::new()
-                .variant(IconButtonVariant::Standard)
-                .icon(Icon::Favorite)
-                .toggle(true)
-                .selected(true)
-                .on_change(|v| println!("toggle favorite: {v}"));
-            widget.set_layout_rect(rect);
-            Box::new(widget)
-        }),
-    });
-
-    (
-        vec![Section {
-            caption: "Icon buttons",
-            node: outer,
-        }],
-        pending,
-    )
+    vec![LayoutNode::row(groups)
+        .gap(GROUP_GAP)
+        .caption("Icon buttons")]
 }
 
-fn list_item_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
-    let mut pending = Vec::new();
-    let column = tree.new_leaf(column_style(COLUMN_ITEM_GAP)).unwrap();
-
-    let leaf = tree.new_leaf(item_style(320.0, 56.0)).unwrap();
-    tree.add_child(column, leaf).unwrap();
-    pending.push(PendingWidget {
-        node: leaf,
-        build: Box::new(move |rect| {
-            let mut widget = ListItem::new("Headline only");
-            widget.set_layout_rect(rect);
-            Box::new(widget)
-        }),
-    });
-
-    let leaf = tree.new_leaf(item_style(320.0, 72.0)).unwrap();
-    tree.add_child(column, leaf).unwrap();
-    pending.push(PendingWidget {
-        node: leaf,
-        build: Box::new(move |rect| {
-            let mut widget = ListItem::new("Headline").supporting("Supporting text");
-            widget.set_layout_rect(rect);
-            Box::new(widget)
-        }),
-    });
-
-    let leaf = tree.new_leaf(item_style(320.0, 72.0)).unwrap();
-    tree.add_child(column, leaf).unwrap();
-    pending.push(PendingWidget {
-        node: leaf,
-        build: Box::new(move |rect| {
-            let mut widget = ListItem::new("Headline")
+fn list_item_gallery() -> Vec<LayoutNode> {
+    vec![column![
+        leaf(320.0, 56.0, ListItem::new("Headline only")),
+        leaf(
+            320.0,
+            72.0,
+            ListItem::new("Headline").supporting("Supporting text"),
+        ),
+        leaf(
+            320.0,
+            72.0,
+            ListItem::new("Headline")
                 .supporting("Supporting text")
-                .trailing_text("12:34");
-            widget.set_layout_rect(rect);
-            Box::new(widget)
-        }),
-    });
-
-    let leaf = tree.new_leaf(item_style(320.0, 56.0)).unwrap();
-    tree.add_child(column, leaf).unwrap();
-    pending.push(PendingWidget {
-        node: leaf,
-        build: Box::new(move |rect| {
-            let mut widget = ListItem::new("Tap me").on_click(|| println!("list item clicked"));
-            widget.set_layout_rect(rect);
-            Box::new(widget)
-        }),
-    });
-
-    let leaf = tree.new_leaf(item_style(320.0, 72.0)).unwrap();
-    tree.add_child(column, leaf).unwrap();
-    pending.push(PendingWidget {
-        node: leaf,
-        build: Box::new(move |rect| {
-            let mut widget = ListItem::new("Favorite item")
+                .trailing_text("12:34"),
+        ),
+        leaf(
+            320.0,
+            56.0,
+            ListItem::new("Tap me").on_click(|| println!("list item clicked")),
+        ),
+        leaf(
+            320.0,
+            72.0,
+            ListItem::new("Favorite item")
                 .supporting("With leading/trailing icons")
                 .leading(|canvas, rect, color| Icon::Favorite.draw(canvas, rect, color))
-                .trailing(|canvas, rect, color| Icon::Close.draw(canvas, rect, color));
-            widget.set_layout_rect(rect);
-            Box::new(widget)
-        }),
-    });
-
-    (
-        vec![Section {
-            caption: "List items",
-            node: column,
-        }],
-        pending,
-    )
+                .trailing(|canvas, rect, color| Icon::Close.draw(canvas, rect, color)),
+        ),
+    ]
+    .gap(COLUMN_ITEM_GAP)
+    .caption("List items")]
 }
 
-fn divider_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
-    let mut pending = Vec::new();
-    let column = tree.new_leaf(column_style(COLUMN_ITEM_GAP)).unwrap();
-
-    let leaf = tree.new_leaf(item_style(320.0, 16.0)).unwrap();
-    tree.add_child(column, leaf).unwrap();
-    pending.push(PendingWidget {
-        node: leaf,
-        build: Box::new(move |rect| {
-            let mut widget = Divider::new();
-            widget.set_layout_rect(rect);
-            Box::new(widget)
-        }),
-    });
-
-    let leaf = tree.new_leaf(item_style(320.0, 16.0)).unwrap();
-    tree.add_child(column, leaf).unwrap();
-    pending.push(PendingWidget {
-        node: leaf,
-        build: Box::new(move |rect| {
-            let mut widget = Divider::new().leading_inset(16.0);
-            widget.set_layout_rect(rect);
-            Box::new(widget)
-        }),
-    });
-
-    (
-        vec![Section {
-            caption: "Dividers",
-            node: column,
-        }],
-        pending,
-    )
+fn divider_gallery() -> Vec<LayoutNode> {
+    vec![column![
+        leaf(320.0, 16.0, Divider::new()),
+        leaf(320.0, 16.0, Divider::new().leading_inset(16.0)),
+    ]
+    .gap(COLUMN_ITEM_GAP)
+    .caption("Dividers")]
 }
 
-fn navigation_rail_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<PendingWidget>) {
+fn navigation_rail_gallery() -> Vec<LayoutNode> {
     const RAIL_HEIGHT: f32 = 400.0;
 
-    let mut pending = Vec::new();
-    let row = tree.new_leaf(row_style(ITEM_GAP)).unwrap();
+    // Minimal rail: unlabeled destinations, bottom-aligned.
+    let mut minimal = NavigationRail::new()
+        .alignment(NavigationRailAlignment::Bottom)
+        .item(NavigationRailItem::new(Icon::Favorite))
+        .item(NavigationRailItem::new(Icon::Settings))
+        .on_change(|i| println!("nav rail (minimal): {i}"));
+    minimal.set_selected(1);
 
-    // Menu button plus three labeled, top-aligned destinations, one disabled.
-    // Given the expanded width up front so clicking the menu button has room
-    // to actually widen into — the rail clamps itself to its assigned slot.
-    let leaf = tree
-        .new_leaf(item_style(navigation_rail::EXPANDED_WIDTH, RAIL_HEIGHT))
-        .unwrap();
-    tree.add_child(row, leaf).unwrap();
-    pending.push(PendingWidget {
-        node: leaf,
-        build: Box::new(move |rect| {
-            let mut widget = NavigationRail::new()
+    vec![row![
+        // Menu button plus three labeled, top-aligned destinations, one
+        // disabled. Given the expanded width up front so clicking the menu
+        // button has room to actually widen into — the rail clamps itself to
+        // its assigned slot.
+        leaf(
+            navigation_rail::EXPANDED_WIDTH,
+            RAIL_HEIGHT,
+            NavigationRail::new()
                 .menu_icon(Icon::Menu)
                 .on_menu_click(|| println!("nav rail: menu toggled"))
                 .item(NavigationRailItem::new(Icon::Favorite).label("Home"))
@@ -831,45 +595,12 @@ fn navigation_rail_gallery(tree: &mut TaffyTree<()>) -> (Vec<Section>, Vec<Pendi
                         .label("More")
                         .enabled(false),
                 )
-                .on_change(|i| println!("nav rail: {i}"));
-            widget.set_layout_rect(rect);
-            Box::new(widget)
-        }),
-    });
-
-    // Minimal rail: unlabeled destinations, bottom-aligned.
-    let leaf = tree
-        .new_leaf(item_style(navigation_rail::WIDTH, RAIL_HEIGHT))
-        .unwrap();
-    tree.add_child(row, leaf).unwrap();
-    pending.push(PendingWidget {
-        node: leaf,
-        build: Box::new(move |rect| {
-            let mut widget = NavigationRail::new()
-                .alignment(NavigationRailAlignment::Bottom)
-                .item(NavigationRailItem::new(Icon::Favorite))
-                .item(NavigationRailItem::new(Icon::Settings))
-                .on_change(|i| println!("nav rail (minimal): {i}"));
-            widget.set_selected(1);
-            widget.set_layout_rect(rect);
-            Box::new(widget)
-        }),
-    });
-
-    (
-        vec![Section {
-            caption: "Navigation rail",
-            node: row,
-        }],
-        pending,
-    )
-}
-
-/// A section caption; its screen position is re-derived from its node's
-/// current layout on every relayout, including resize.
-struct Caption {
-    label: &'static str,
-    node: NodeId,
+                .on_change(|i| println!("nav rail: {i}")),
+        ),
+        leaf(navigation_rail::WIDTH, RAIL_HEIGHT, minimal),
+    ]
+    .gap(ITEM_GAP)
+    .caption("Navigation rail")]
 }
 
 /// Builds every gallery widget positioned by a taffy layout tree instead of
@@ -878,39 +609,35 @@ struct Caption {
 /// resize can push fresh geometry into existing widget state (text, value,
 /// focus, callbacks, animations, ...) instead of rebuilding it.
 fn build_gallery() -> (
-    Vec<(NodeId, Box<dyn Widget>)>,
+    Vec<PendingWidget>,
     Vec<Caption>,
     HashMap<NodeId, LayoutRect>,
     TaffyTree,
     NodeId,
 ) {
-    let mut tree: TaffyTree<()> = TaffyTree::new();
-    let root = tree.new_leaf(root_style()).unwrap();
+    let sections: Vec<LayoutNode> = [
+        button_gallery(),
+        segmented_gallery(),
+        layout_gallery(),
+        slider_gallery(),
+        text_field_gallery(),
+        switch_gallery(),
+        checkbox_gallery(),
+        radio_gallery(),
+        icon_button_gallery(),
+        list_item_gallery(),
+        divider_gallery(),
+        navigation_rail_gallery(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
 
-    let mut sections = Vec::new();
-    let mut pending = Vec::new();
-
-    for (s, p) in [
-        button_gallery(&mut tree),
-        segmented_gallery(&mut tree),
-        layout_gallery(&mut tree),
-        slider_gallery(&mut tree),
-        text_field_gallery(&mut tree),
-        switch_gallery(&mut tree),
-        checkbox_gallery(&mut tree),
-        radio_gallery(&mut tree),
-        icon_button_gallery(&mut tree),
-        list_item_gallery(&mut tree),
-        divider_gallery(&mut tree),
-        navigation_rail_gallery(&mut tree),
-    ] {
-        sections.extend(s);
-        pending.extend(p);
-    }
-
-    for section in &sections {
-        tree.add_child(root, section.node).unwrap();
-    }
+    let (widgets, captions, mut tree, root) = build(
+        LayoutNode::column(sections)
+            .gap(SECTION_GAP)
+            .padding(root_padding()),
+    );
 
     tree.compute_layout(
         root,
@@ -923,22 +650,6 @@ fn build_gallery() -> (
 
     let mut rects = HashMap::new();
     resolve_layout_rects(&tree, root, (0.0, 0.0), &mut rects);
-
-    let widgets = pending
-        .into_iter()
-        .map(|p| {
-            let rect = rects[&p.node];
-            (p.node, (p.build)(rect))
-        })
-        .collect();
-
-    let captions = sections
-        .into_iter()
-        .map(|s| Caption {
-            label: s.caption,
-            node: s.node,
-        })
-        .collect();
 
     (widgets, captions, rects, tree, root)
 }
@@ -975,9 +686,9 @@ impl App {
         let (widgets, captions, layout_rects, tree, root) = build_gallery();
         let mut scroll = ScrollableWidget::new();
         let mut child_nodes = Vec::with_capacity(widgets.len());
-        for (node, widget) in widgets {
-            child_nodes.push(node);
-            scroll.push(widget);
+        for pending in widgets {
+            child_nodes.push(pending.node);
+            scroll.push(pending.widget);
         }
         Self {
             theme,
