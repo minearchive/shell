@@ -39,10 +39,10 @@ const ROOT_PADDING_BOTTOM: f32 = 24.0;
 /// Height of the fixed header drawn above the rail and the scrollable
 /// viewport.
 const HEADER_HEIGHT: f32 = 80.0;
-/// Width of the shell's left-hand rail slot. Fixed at the expanded width so
-/// the page to its right doesn't reflow every frame while the rail animates
-/// open or closed.
-const RAIL_WIDTH: f32 = navigation_rail::EXPANDED_WIDTH;
+/// Rail width change (in px) that triggers a relayout of the page beside it.
+/// Below this the page would shift by less than half a pixel, which rounds
+/// away — no point rebuilding the layout for it.
+const RAIL_WIDTH_EPSILON: f32 = 0.5;
 /// Gap between gallery sections (rows/columns), stacked in a column.
 const SECTION_GAP: f32 = 32.0;
 /// Gap between items within one row.
@@ -710,6 +710,10 @@ struct App {
     nav_selection: Rc<Cell<Option<usize>>>,
     /// Index into [`PAGES`] currently shown on the right.
     page: usize,
+    /// Rail width as of the last `relayout`. Compared against the rail's
+    /// current animated width to decide whether an open/close transition has
+    /// moved the page's left edge far enough to need a fresh layout.
+    last_rail_width: f32,
     /// The scrollable viewport owning every gallery widget as a child.
     scroll: ScrollableWidget,
     /// Taffy node for each child, in the same order as `scroll.children()`,
@@ -745,6 +749,7 @@ impl App {
             rail: build_rail(nav_selection.clone()),
             nav_selection,
             page: 0,
+            last_rail_width: 0.0,
             scroll,
             child_nodes,
             captions,
@@ -798,15 +803,14 @@ impl App {
         resolve_layout_rects(&self.tree, self.root, (0.0, 0.0), &mut rects);
 
         let body_height = (height - HEADER_HEIGHT).max(0.0);
-        // The rail keeps a fixed expanded-width slot whether or not it is
-        // currently expanded, so collapsing it never reflows the page beside
-        // it — the rail clamps itself to whatever it is given.
+        let rail_width = self.rail_width();
+        self.last_rail_width = rail_width;
         self.rail
-            .set_layout_rect(LayoutRect::new(0.0, HEADER_HEIGHT, RAIL_WIDTH, body_height));
+            .set_layout_rect(LayoutRect::new(0.0, HEADER_HEIGHT, rail_width, body_height));
         self.scroll.set_layout_rect(LayoutRect::new(
-            RAIL_WIDTH,
+            rail_width,
             HEADER_HEIGHT,
-            (width - RAIL_WIDTH).max(0.0),
+            (width - rail_width).max(0.0),
             body_height,
         ));
         let content_h = self.tree.layout(self.root).unwrap().size.height;
@@ -1000,14 +1004,23 @@ impl App {
         }
     }
 
+    /// The rail's width right now — animated, so it lands between
+    /// [`navigation_rail::WIDTH`] and [`navigation_rail::EXPANDED_WIDTH`]
+    /// while an open/close transition is in flight. The page beside the rail
+    /// starts where this ends, so it slides along with the transition.
+    fn rail_width(&self) -> f32 {
+        self.rail.measure(&self.fonts).width
+    }
+
     /// Only the right-hand pane is laid out by taffy; the rail's slot is
     /// carved off first so the page never flows underneath it.
     fn layout_for_viewport(&mut self, width: f32, height: f32) {
+        let available = (width - self.rail_width()).max(0.0);
         self.tree
             .compute_layout(
                 self.root,
                 Size {
-                    width: AvailableSpace::Definite((width - RAIL_WIDTH).max(0.0)),
+                    width: AvailableSpace::Definite(available),
                     height: AvailableSpace::MaxContent,
                 },
             )
@@ -1151,8 +1164,7 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                let (Some(window), Some(surface)) = (self.window.as_ref(), self.surface.as_mut())
-                else {
+                let Some(window) = self.window.clone() else {
                     return;
                 };
 
@@ -1161,6 +1173,21 @@ impl ApplicationHandler for App {
                 if w == 0 || h == 0 {
                     return;
                 }
+
+                // The rail's width animates as it opens and closes, and the
+                // page starts where the rail ends — so a relayout has to run
+                // on the animating frames too, not just on resize. Those
+                // frames are already being drawn (the rail's `draw` reports
+                // itself as still traveling and asks for the next one), so
+                // this adds no redraws of its own: once the transition
+                // settles, the width stops moving and so does this.
+                if (self.rail_width() - self.last_rail_width).abs() > RAIL_WIDTH_EPSILON {
+                    self.layout_for_viewport(w as f32, h as f32);
+                }
+
+                let Some(surface) = self.surface.as_mut() else {
+                    return;
+                };
 
                 surface
                     .resize(NonZeroU32::new(w).unwrap(), NonZeroU32::new(h).unwrap())
