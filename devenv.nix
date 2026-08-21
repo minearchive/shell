@@ -27,6 +27,6 @@
   ];
 
   env.LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
-  env.LD_LIBRARY_PATH = "${pkgs.mesa.drivers}/lib:${pkgs.libGL}/lib";
+  env.LD_LIBRARY_PATH = "${pkgs.mesa}/lib:${pkgs.libGL}/lib";
   env.__EGL_VENDOR_LIBRARY_DIRS = "/run/opengl-driver/share/glvnd/egl_vendor.d";
 }
