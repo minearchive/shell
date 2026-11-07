@@ -1425,6 +1425,7 @@ dependencies = [
  "futures-util",
  "hyprland",
  "log",
+ "m3_widget",
  "macros",
  "mpris",
  "niri-ipc",

@@ -9,6 +9,7 @@ use macros::boxed;
 
 use skia_safe::{Canvas, Color, Color4f, Font, Paint, Rect};
 use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind};
+use tokio::sync::mpsc::UnboundedSender;
 
 use mpris::Event as MprisEvent;
 
@@ -21,7 +22,7 @@ use ui_core::{
 };
 
 use crate::{
-    components::{clock::Clock, notifications::Notifications, warp::Warp},
+    components::{clock::Clock, notifications::Notifications, toolbox::Toolbox, warp::Warp},
     config::{animation::AnimationConfig, theme::Theme},
     dbus::{
         kdeconnect::KDEConnectEvent,
@@ -30,6 +31,7 @@ use crate::{
         warp::WarpStatus,
     },
     ipc::events::IPCEvent,
+    system::{SystemCommand, SystemStatus},
 };
 
 pub const BAR_HEIGHT: u32 = 60;
@@ -248,6 +250,7 @@ pub struct UIState {
     pub players: HashMap<String, PlayerState>,
     pub warp: Option<WarpStatus>,
     pub notifications: NotificationStore,
+    pub system: SystemStatus,
 }
 
 impl UIState {
@@ -331,8 +334,14 @@ impl UserInterface {
         theme: Arc<RwLock<Theme>>,
         animation: &RwLock<AnimationConfig>,
         ui_tx: Sender<UiEvent>,
+        system_commands: UnboundedSender<SystemCommand>,
     ) -> Self {
-        let components: Vec<Box<dyn Component>> = boxed!(Clock, Warp, Notifications::new(ui_tx));
+        let components: Vec<Box<dyn Component>> = boxed!(
+            Clock,
+            Warp,
+            Notifications::new(ui_tx),
+            Toolbox::new(system_commands)
+        );
         let easing = animation
             .read()
             .unwrap()
@@ -672,6 +681,7 @@ mod tests {
             Arc::new(RwLock::new(theme)),
             &RwLock::new(AnimationConfig::default()),
             tx,
+            tokio::sync::mpsc::unbounded_channel().0,
         );
         let mut fonts = FontBook::new();
         fonts.register("noto_sans", "Noto Sans CJK JP", FontStyle::normal());

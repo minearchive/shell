@@ -105,8 +105,10 @@ impl OutputHandler for Shell {
                 Arc::clone(&self.theme),
                 &self.animation_config,
                 self.ui_tx.clone(),
+                self.system_commands.clone(),
             ),
             output,
+            catcher: None,
         });
     }
 
@@ -125,6 +127,10 @@ impl LayerShellHandler for Shell {
         configure: LayerSurfaceConfigure,
         _serial: u32,
     ) {
+        if self.configure_catcher(surfaces, configure.new_size) {
+            return;
+        }
+
         let Some(idx) = self.screen.iter().position(|s| &s.layer == surfaces) else {
             return;
         };
@@ -142,6 +148,8 @@ impl LayerShellHandler for Shell {
     /// Only this surface is gone (typically its monitor was unplugged); the
     /// other screens keep running, and `new_output` covers a replugged monitor.
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, surface: &LayerSurface) {
-        self.screen.retain(|s| &s.layer != surface);
+        if !self.close_catcher(surface) {
+            self.screen.retain(|s| &s.layer != surface);
+        }
     }
 }

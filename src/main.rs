@@ -47,11 +47,13 @@ use crate::{
         warp::{WarpClient, WarpCommand, WarpStatus},
     },
     ipc::events::IPCEvent,
+    system::{SystemCommand, SystemStatus},
     ui::{Redraw, UIState, UiEvent, UserInterface, BAR_HEIGHT, ISLAND_MAX_HEIGHT},
 };
 
 use ui_core::font::FontBook;
 
+mod catcher;
 mod components;
 mod config;
 mod dbus;
@@ -59,6 +61,7 @@ mod dnd;
 mod ipc;
 mod output;
 mod seat;
+mod system;
 
 mod ui;
 
@@ -83,6 +86,7 @@ pub struct Screen {
     input_region: [i32; 5],
     ui: UserInterface,
     output: WlOutput,
+    catcher: Option<catcher::Catcher>,
 }
 
 pub struct Shell {
@@ -105,6 +109,7 @@ pub struct Shell {
     theme: Arc<RwLock<Theme>>,
     animation_config: Arc<RwLock<AnimationConfig>>,
     ui_tx: Sender<UiEvent>,
+    system_commands: UnboundedSender<SystemCommand>,
     notification_handle: Option<NotificationHandle>,
     _commands: Commands,
 }
@@ -174,6 +179,13 @@ fn main() {
     on_msg(&loop_handle, warp_rx, |status, shell| {
         shell.state.warp = Some(status.clone());
         shell.dispatch(|ui| ui.on_warp(&status));
+    });
+
+    let (system_tx, system_rx) = channel::channel::<SystemStatus>();
+    let system_commands = system::start(system_tx);
+    on_msg(&loop_handle, system_rx, |status, shell| {
+        shell.state.system = status;
+        shell.request_redraw_all();
     });
 
     let (ui_tx, ui_rx) = channel::channel::<UiEvent>();
@@ -249,6 +261,7 @@ fn main() {
         theme,
         animation_config,
         ui_tx,
+        system_commands,
         notification_handle,
         _commands: Commands {
             kdeconnect: kde_command_sender,
@@ -403,6 +416,7 @@ impl Shell {
         // An animating screen repaints itself from its next frame callback.
         self.screen[idx].needs_redraw = redraw == Redraw::Animating;
         self.update_input_region(idx, width as i32);
+        self.sync_catcher(idx);
 
         let surface = self.screen[idx].layer.wl_surface();
         surface.frame(&self.qh, surface.clone());

@@ -54,4 +54,5 @@ zbus = { version = "5.16.0", default-features = false, features = ["tokio"] }
 toml.workspace = true
 futures-util = "0.3.32"
 macros.workspace = true
+m3_widget.workspace = true
 ui_core.workspace = true
