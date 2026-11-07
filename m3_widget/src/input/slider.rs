@@ -1,6 +1,11 @@
 //! Material 3 slider: continuous or discrete, five sizes.
 
-use skia_safe::{utils::text_utils::Align, Canvas, Color4f, Paint, Point, RRect, Rect, Vector};
+use std::f32::consts::TAU;
+
+use skia_safe::{
+    paint, utils::text_utils::Align, Canvas, Color4f, Paint, PathBuilder, Point, RRect, Rect,
+    Vector,
+};
 
 use ui_core::{
     animation::animation::Animation,
@@ -41,6 +46,22 @@ const VALUE_INDICATOR_HEIGHT: f32 = 28.0;
 const VALUE_INDICATOR_PADDING: f32 = 12.0;
 /// Space between the value indicator and the handle.
 const VALUE_INDICATOR_BOTTOM_SPACE: f32 = 12.0;
+
+/// Thin track of a wavy slider, and the distance over which its wave settles into the
+/// handle.
+const WAVE_TRACK_HEIGHT: f32 = 4.0;
+const WAVE_LENGTH: f32 = 28.0;
+const WAVE_TAPER: f32 = 14.0;
+const WAVE_STEP: f32 = 2.0;
+
+/// M3 Expressive's look for something playing: a thin track whose active part waves.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SliderWave {
+    /// Height of a crest above the track's center. 0 rests flat.
+    pub amplitude: f32,
+    /// Where in its cycle the wave is, in radians. Advance it to make the wave travel.
+    pub phase: f32,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SliderSize {
@@ -90,6 +111,7 @@ pub struct Slider {
     font_key: String,
     labeled: bool,
     enabled: bool,
+    wave: Option<SliderWave>,
     hovered: bool,
     pressed: bool,
     /// Widget rect (handle height, not track height), assigned by the layout
@@ -127,6 +149,7 @@ impl Slider {
             font_key: "noto_sans".to_string(),
             labeled: false,
             enabled: true,
+            wave: None,
             hovered: false,
             pressed: false,
             layout_rect: LayoutRect::empty(),
@@ -174,6 +197,10 @@ impl Slider {
 
     pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
+    }
+
+    pub fn set_wave(&mut self, wave: Option<SliderWave>) {
+        self.wave = wave;
     }
 
     /// Replaces the change callback, dropping any previous one.
@@ -343,6 +370,38 @@ impl Slider {
         RRect::new_rect_radii(rect, &radii)
     }
 
+    /// The active track as a wave from `left` to `right`, which settles to a flat line at
+    /// the handle so that it never leaves the track pointing away from it.
+    fn draw_wave(
+        canvas: &Canvas,
+        (left, right): (f32, f32),
+        center_y: f32,
+        wave: SliderWave,
+        color: Color,
+    ) {
+        let height = |x: f32| {
+            let settle = ((right - x) / WAVE_TAPER).min(1.0);
+            let angle = (x - left) / WAVE_LENGTH * TAU - wave.phase;
+            center_y + angle.sin() * wave.amplitude * settle
+        };
+        let mut path = PathBuilder::new();
+        path.move_to((left, height(left)));
+        let mut x = left + WAVE_STEP;
+        while x < right {
+            path.line_to((x, height(x)));
+            x += WAVE_STEP;
+        }
+        path.line_to((right, height(right)));
+
+        let mut paint = Paint::new(Color4f::from(color), None);
+        paint.set_anti_alias(true);
+        paint.set_style(paint::Style::Stroke);
+        paint.set_stroke_width(WAVE_TRACK_HEIGHT);
+        paint.set_stroke_cap(paint::Cap::Round);
+        paint.set_stroke_join(paint::Join::Round);
+        canvas.draw_path(&path.detach(), &paint);
+    }
+
     /// The fractions carrying a mark: every step on a discrete slider, or just
     /// the far end on a continuous one, where the mark is the stop indicator.
     fn mark_fractions(&self) -> Vec<f32> {
@@ -477,14 +536,29 @@ impl Widget for Slider {
             track.bottom,
         );
 
-        if active.width() > 0.0 {
+        if let Some(wave) = self.wave {
+            if active.width() > 0.0 {
+                let ends = (active.left, active.right);
+                let color = self.active_track_color(theme);
+                Self::draw_wave(canvas, ends, track.center_y(), wave, color);
+            }
+            if inactive.width() > 0.0 {
+                let thin = inactive.with_inset((0.0, (track.height() - WAVE_TRACK_HEIGHT) / 2.0));
+                let corner = WAVE_TRACK_HEIGHT / 2.0;
+                Self::fill_rrect(
+                    canvas,
+                    RRect::new_rect_xy(thin, corner, corner),
+                    self.inactive_track_color(theme),
+                );
+            }
+        } else if active.width() > 0.0 {
             Self::fill_rrect(
                 canvas,
                 Self::track_rrect(active, radius, Side::Left),
                 self.active_track_color(theme),
             );
         }
-        if inactive.width() > 0.0 {
+        if self.wave.is_none() && inactive.width() > 0.0 {
             Self::fill_rrect(
                 canvas,
                 Self::track_rrect(inactive, radius, Side::Right),
@@ -604,6 +678,42 @@ impl Widget for Slider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Whether anything is drawn on a row this far below the track's center.
+    fn draws_below_center(wave: SliderWave, below: i32) -> bool {
+        let theme = ColorTheme {
+            primary: Color {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 1.0,
+            },
+            ..Default::default()
+        };
+        let mut surface = skia_safe::surfaces::raster_n32_premul((200, 40)).unwrap();
+        let mut slider = Slider::new(0.0, 1.0, 0.5);
+        slider.set_wave(Some(wave));
+        slider.set_layout_rect(LayoutRect::new(0.0, 8.0, 200.0, 24.0));
+        slider.draw(surface.canvas(), &theme, &FontBook::new());
+        let pixels = surface.peek_pixels().unwrap();
+        // Short of the handle, which is taller than any wave.
+        (0..80).any(|x| pixels.get_color((x, 20 + below)).a() > 0)
+    }
+
+    #[test]
+    fn only_a_wave_with_height_leaves_the_thin_track() {
+        let flat = SliderWave {
+            amplitude: 0.0,
+            phase: 0.0,
+        };
+        let wavy = SliderWave {
+            amplitude: 3.0,
+            phase: 0.0,
+        };
+        assert!(draws_below_center(flat, 1));
+        assert!(!draws_below_center(flat, 4));
+        assert!(draws_below_center(wavy, 4));
+    }
 
     /// The assigned rect must be readable before the first `draw`.
     #[test]

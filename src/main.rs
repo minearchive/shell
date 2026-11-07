@@ -182,6 +182,16 @@ fn main() {
         shell.dispatch(|ui| ui.on_warp(&status));
     });
 
+    let (art_tx, art_rx) = channel::channel();
+    dbus::player_art::start_watcher(art_tx);
+    on_msg(&loop_handle, art_rx, |(bus_name, art), shell| {
+        match art {
+            Some(art) => shell.state.player_art.insert(bus_name, art),
+            None => shell.state.player_art.remove(&bus_name),
+        };
+        shell.request_redraw_all();
+    });
+
     let (system_tx, system_rx) = channel::channel::<SystemStatus>();
     let system_commands = system::start(system_tx);
     on_msg(&loop_handle, system_rx, |status, shell| {

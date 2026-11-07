@@ -29,6 +29,7 @@ use crate::{
         kdeconnect::KDEConnectEvent,
         mpris::{PlayerCommand, PlayerState},
         notification::{NotificationEvent, NotificationStore},
+        player_art::Art,
         warp::{WarpCommand, WarpStatus},
     },
     ipc::events::IPCEvent,
@@ -283,6 +284,8 @@ pub enum UiEvent {
 pub struct UIState {
     /// Keyed by bus name: two instances of a player share an identity.
     pub players: HashMap<String, PlayerState>,
+    /// Keyed by bus name, like `players`.
+    pub player_art: HashMap<String, Art>,
     pub warp: Option<WarpStatus>,
     pub notifications: NotificationStore,
     pub system: SystemStatus,

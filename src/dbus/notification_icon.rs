@@ -135,7 +135,7 @@ fn data_dirs() -> Vec<PathBuf> {
 }
 
 /// A sequence that isn't valid hex stays as it is.
-fn percent_decode(text: &str) -> String {
+pub fn percent_decode(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;

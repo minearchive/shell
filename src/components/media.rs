@@ -1,28 +1,37 @@
-//! The media player in the middle of the bar: an icon and the title, which open an
-//! island with the track and its controls.
+//! The media player in the middle of the bar: the cover art or an icon and the title, which
+//! open an island with a card like Material 3 Expressive's media player on a phone.
 
 use std::{
     collections::HashMap,
-    sync::mpsc::Sender,
+    sync::{mpsc::Sender, Arc},
     time::{Duration, Instant},
 };
 
-use m3_widget::{icon::BOX_SIZE, Icon, Slider, Widget};
+use m3_widget::{icon::BOX_SIZE, Icon, Slider, SliderWave, Widget};
 use mpris::{Event, PlaybackStatus};
-use skia_safe::{Canvas, Color4f, Paint, Point, Rect};
+use skia_safe::{
+    canvas::SrcRectConstraint,
+    gradient::{shaders, Colors, Gradient, Interpolation},
+    Canvas, Color4f, Contains, FilterMode, Image, MipmapMode, Paint, Point, RRect, Rect,
+    SamplingOptions, TileMode,
+};
 use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind};
 
 use ui_core::{
+    animation::animation::{easing::ease_out_cubic, Animation},
     font::FontBook,
     geometry::LayoutRect,
     pointer::{button, PointerEvent as CorePointerEvent, PointerEventKind as CoreKind},
-    scheme::ColorTheme,
+    scheme::{color::Color, ColorTheme},
     util::{elide, wrap_text},
 };
 
 use crate::{
     components::toolbox::lerp_box,
-    dbus::mpris::{PlayerAction, PlayerCommand, PlayerState},
+    dbus::{
+        mpris::{PlayerAction, PlayerCommand, PlayerState},
+        player_art::Art,
+    },
     ui::{
         bar_baseline, to_core_event, BarSlot, Component, IslandFrame, IslandPlacement,
         IslandRequest, Redraw, UIState, BAR_HEIGHT, ISLAND_SIDE_MARGIN,
@@ -33,29 +42,35 @@ const FONT: &str = "noto_sans";
 const BAR_TEXT_SIZE: f32 = 16.0;
 const MAX_BAR_TEXT_WIDTH: f32 = 280.0;
 const ICON_GAP: f32 = 8.0;
+const THUMBNAIL_RADIUS: f32 = 6.0;
 
-const ISLAND_WIDTH: f32 = 360.0;
-const PADDING: f32 = 18.0;
-/// Less than the sides: the button row has room of its own above the screen's edge.
-const BOTTOM_PADDING: f32 = 6.0;
+const ISLAND_WIDTH: f32 = 400.0;
+/// The card sits inside the island, concentric with the island's corners.
+const CARD_MARGIN: f32 = 8.0;
+const CARD_RADIUS: f32 = 20.0;
+const CARD_PADDING: f32 = 16.0;
+/// Room for the art to show, however short the text is.
+const HEADER_MIN_HEIGHT: f32 = 76.0;
 const TITLE_SIZE: f32 = 16.0;
 const ARTIST_SIZE: f32 = 14.0;
 const LINE_HEIGHT: f32 = 1.4;
 const MAX_TITLE_LINES: usize = 2;
+const PLAY_SIZE: f32 = 56.0;
+const PLAY_GAP: f32 = 12.0;
+/// A circle at rest; playing, it's the squarer shape M3 Expressive morphs a button into.
+const PLAY_RADIUS_PLAYING: f32 = 16.0;
+const CONTROL_ROW_GAP: f32 = 8.0;
+const CONTROL_SIZE: f32 = 40.0;
+const CONTROL_INSET: f32 = 8.0;
 const TIME_SIZE: f32 = 12.0;
-const TIME_WIDTH: f32 = 44.0;
-const SLIDER_ROW_HEIGHT: f32 = 36.0;
-const SLIDER_ROW_GAP: f32 = 4.0;
-const BUTTON_WIDTH: f32 = 56.0;
-const BUTTON_ROW_HEIGHT: f32 = 44.0;
+const TIME_WIDTH: f32 = 36.0;
+const SLIDER_HEIGHT: f32 = 24.0;
+const WAVE_AMPLITUDE: f32 = 3.0;
+/// How fast the wave travels, in radians a second: a wavelength every two seconds.
+const WAVE_SPEED: f32 = std::f32::consts::PI;
+const MORPH: Duration = Duration::from_millis(300);
 /// Below notifications, which take the island over and then hand it back.
 const ISLAND_PRIORITY: u8 = 50;
-const BUTTONS: [PlayerAction; 3] = [
-    PlayerAction::Previous,
-    PlayerAction::PlayPause,
-    PlayerAction::Next,
-];
-
 /// The player to show, if any: playing beats paused, then whichever last played. A
 /// stopped player has nothing to show. `last_playing` keeps the bar on the player the
 /// user just paused, rather than jumping to another that happens to be paused too.
@@ -106,10 +121,77 @@ fn travel(from: Point, to: Point, content: LayoutRect, progress: f32) -> Point {
     )
 }
 
+/// Draws `image` over `rect`, cropped rather than stretched to fit.
+fn draw_art(canvas: &Canvas, image: &Image, rect: Rect, radius: f32, alpha: f32) {
+    let (width, height) = (image.width() as f32, image.height() as f32);
+    let scale = (width / rect.width()).min(height / rect.height());
+    let (crop_w, crop_h) = (rect.width() * scale, rect.height() * scale);
+    let crop = Rect::from_xywh(
+        (width - crop_w) / 2.0,
+        (height - crop_h) / 2.0,
+        crop_w,
+        crop_h,
+    );
+
+    let mut paint = Paint::default();
+    paint.set_anti_alias(true);
+    paint.set_alpha_f(alpha);
+    let saved = canvas.save();
+    canvas.clip_rrect(RRect::new_rect_xy(rect, radius, radius), None, true);
+    canvas.draw_image_rect_with_sampling_options(
+        image,
+        Some((&crop, SrcRectConstraint::Fast)),
+        rect,
+        SamplingOptions::new(FilterMode::Linear, MipmapMode::None),
+        &paint,
+    );
+    canvas.restore_to_count(saved);
+}
+
+/// The card's colors: from the art with light text on its scrim, whatever the theme is
+/// like, and from the theme without art.
+struct CardColors {
+    content: Color,
+    content_variant: Color,
+    accent: Color,
+    on_accent: Color,
+    track: Color,
+}
+
+impl CardColors {
+    fn new(art: Option<&Art>, theme: &ColorTheme) -> Self {
+        match art {
+            Some(art) => {
+                let white = Color {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: 1.0,
+                };
+                Self {
+                    content: white,
+                    content_variant: white.with_alpha(0.8),
+                    accent: art.accent,
+                    on_accent: art.on_accent,
+                    track: white.with_alpha(0.3),
+                }
+            }
+            None => Self {
+                content: theme.on_surface,
+                content_variant: theme.on_surface_variant,
+                accent: theme.primary,
+                on_accent: theme.on_primary,
+                track: theme.secondary_container,
+            },
+        }
+    }
+}
+
 /// The track laid out for the island. Kept after the island closes, so it is still there
 /// to draw while it collapses.
 struct Shown {
     bus_name: String,
+    art: Option<Art>,
     title: Vec<String>,
     artist: String,
     playing: bool,
@@ -119,9 +201,9 @@ struct Shown {
 }
 
 impl Shown {
-    fn new(player: &PlayerState, bar_width: f32, fonts: &FontBook) -> Self {
+    fn new(player: &PlayerState, art: Option<&Art>, bar_width: f32, fonts: &FontBook) -> Self {
         let width = ISLAND_WIDTH.min(bar_width - ISLAND_SIDE_MARGIN * 2.0);
-        let text_width = width - PADDING * 2.0;
+        let text_width = width - (CARD_MARGIN + CARD_PADDING) * 2.0 - PLAY_SIZE - PLAY_GAP;
         let artists = player.artists.as_deref().unwrap_or_default().join(", ");
         let artist = elide(&artists, text_width, |s| {
             fonts.measure(FONT, ARTIST_SIZE, s)
@@ -134,15 +216,15 @@ impl Shown {
         } else {
             ARTIST_SIZE * LINE_HEIGHT
         };
-        let height = PADDING
-            + TITLE_SIZE * LINE_HEIGHT * title.len() as f32
-            + artist_height
-            + SLIDER_ROW_GAP
-            + SLIDER_ROW_HEIGHT
-            + BUTTON_ROW_HEIGHT
-            + BOTTOM_PADDING;
+        let text_height = TITLE_SIZE * LINE_HEIGHT * title.len() as f32 + artist_height;
+        let height = (CARD_MARGIN + CARD_PADDING) * 2.0
+            + text_height.max(HEADER_MIN_HEIGHT)
+            + CONTROL_ROW_GAP
+            + CONTROL_SIZE
+            - CONTROL_INSET;
         Self {
             bus_name: player.bus_name.clone(),
+            art: art.cloned(),
             title,
             artist,
             playing: player.status == PlaybackStatus::Playing,
@@ -151,59 +233,97 @@ impl Shown {
         }
     }
 
-    fn slider_rect(&self) -> LayoutRect {
-        let (_, top) = self.button_origin();
-        let x = PADDING + TIME_WIDTH;
-        LayoutRect::new(
-            x,
-            top - SLIDER_ROW_HEIGHT,
-            self.size.0 - x * 2.0,
-            SLIDER_ROW_HEIGHT,
-        )
+    fn card(&self) -> Rect {
+        Rect::from_wh(self.size.0, self.size.1).with_inset((CARD_MARGIN, CARD_MARGIN))
     }
 
     /// The title's and artist's lines: their text, size and baseline's start.
-    fn lines(&self, fonts: &FontBook) -> Vec<(&str, f32, Point)> {
+    fn lines(&self) -> Vec<(&str, f32, Point)> {
         let titles = self.title.iter().map(|line| (line.as_str(), TITLE_SIZE));
-        let mut y = PADDING;
+        let mut y = CARD_MARGIN + CARD_PADDING;
         titles
             .chain([(self.artist.as_str(), ARTIST_SIZE)])
             .filter(|(text, _)| !text.is_empty())
             .map(|(text, size)| {
-                let x = (self.size.0 - fonts.measure(FONT, size, text)) / 2.0;
-                let at = Point::new(x, y + size);
+                let at = Point::new(CARD_MARGIN + CARD_PADDING, y + size);
                 y += size * LINE_HEIGHT;
                 (text, size, at)
             })
             .collect()
     }
 
-    /// The icon of the `index`th button.
-    fn button_box(&self, index: usize) -> Rect {
-        let (left, top) = self.button_origin();
+    fn play_rect(&self) -> Rect {
+        let card = self.card();
         Rect::from_xywh(
-            left + index as f32 * BUTTON_WIDTH + (BUTTON_WIDTH - BOX_SIZE) / 2.0,
-            top + (BUTTON_ROW_HEIGHT - BOX_SIZE) / 2.0,
-            BOX_SIZE,
-            BOX_SIZE,
+            card.right - CARD_PADDING - PLAY_SIZE,
+            card.top + CARD_PADDING,
+            PLAY_SIZE,
+            PLAY_SIZE,
         )
     }
 
-    /// The left edge of the first button and the top of the row.
-    fn button_origin(&self) -> (f32, f32) {
-        (
-            (self.size.0 - BUTTON_WIDTH * BUTTONS.len() as f32) / 2.0,
-            self.size.1 - BOTTOM_PADDING - BUTTON_ROW_HEIGHT,
+    fn control_top(&self) -> f32 {
+        self.card().bottom - CONTROL_INSET - CONTROL_SIZE
+    }
+
+    fn previous_rect(&self) -> Rect {
+        let left = self.card().left + CONTROL_INSET;
+        Rect::from_xywh(left, self.control_top(), CONTROL_SIZE, CONTROL_SIZE)
+    }
+
+    fn next_rect(&self) -> Rect {
+        let left = self.card().right - CONTROL_INSET - CONTROL_SIZE;
+        Rect::from_xywh(left, self.control_top(), CONTROL_SIZE, CONTROL_SIZE)
+    }
+
+    fn slider_rect(&self) -> LayoutRect {
+        let left = self.previous_rect().right + TIME_WIDTH;
+        LayoutRect::new(
+            left,
+            self.control_top() + (CONTROL_SIZE - SLIDER_HEIGHT) / 2.0,
+            self.next_rect().left - TIME_WIDTH - left,
+            SLIDER_HEIGHT,
         )
     }
 
     fn button_at(&self, x: f64, y: f64) -> Option<PlayerAction> {
-        let (left, top) = self.button_origin();
-        let (x, y) = (x as f32 - left, y as f32 - top);
-        if x < 0.0 || !(0.0..BUTTON_ROW_HEIGHT).contains(&y) {
-            return None;
-        }
-        BUTTONS.get((x / BUTTON_WIDTH) as usize).copied()
+        [
+            (self.previous_rect(), PlayerAction::Previous),
+            (self.play_rect(), PlayerAction::PlayPause),
+            (self.next_rect(), PlayerAction::Next),
+        ]
+        .into_iter()
+        .find(|(rect, _)| rect.contains(Point::new(x as f32, y as f32)))
+        .map(|(_, action)| action)
+    }
+
+    /// The art under a scrim for the text, or a plain card. The text is on the left, so
+    /// that's where the scrim is darkest.
+    fn draw_card(&self, canvas: &Canvas, theme: &ColorTheme) {
+        let card = self.card();
+        let rrect = RRect::new_rect_xy(card, CARD_RADIUS, CARD_RADIUS);
+        let mut paint = Paint::default();
+        paint.set_anti_alias(true);
+        let Some(art) = &self.art else {
+            paint.set_color4f(Color4f::from(theme.surface_container_high), None);
+            canvas.draw_rrect(rrect, &paint);
+            return;
+        };
+        draw_art(canvas, &art.image, card, CARD_RADIUS, 1.0);
+        let colors = [
+            Color4f::new(0.0, 0.0, 0.0, 0.78),
+            Color4f::new(0.0, 0.0, 0.0, 0.35),
+        ];
+        let scrim = Gradient::new(
+            Colors::new_evenly_spaced(&colors, TileMode::Clamp, None),
+            Interpolation::default(),
+        );
+        paint.set_shader(shaders::linear_gradient(
+            ((card.left, 0.0), (card.right, 0.0)),
+            &scrim,
+            None,
+        ));
+        canvas.draw_rrect(rrect, &paint);
     }
 }
 
@@ -213,6 +333,10 @@ pub struct Media {
     open: bool,
     shown: Option<Shown>,
     slider: Slider,
+    /// 1 while playing: drives the play button's shape and the wave's height.
+    playing: Animation<f32>,
+    /// What the wave's motion counts from.
+    started: Instant,
     /// The width in the bar on the last draw, for hit testing.
     bar_width: f32,
 }
@@ -225,6 +349,8 @@ impl Media {
             open: false,
             shown: None,
             slider: Slider::new(0.0, 1.0, 0.0),
+            playing: Animation::new(0.0, 0.0, MORPH, Arc::new(ease_out_cubic)),
+            started: Instant::now(),
             bar_width: 0.0,
         }
     }
@@ -305,8 +431,8 @@ impl Component for Media {
         })
     }
 
-    /// Drawn here rather than in `draw` so the icon and the text can move into the island
-    /// as it opens: the icon to the play button, the title to its first line.
+    /// Drawn here rather than in `draw` so everything can move into the island as it opens:
+    /// the title to its first line, and the art to the card or the icon to the play button.
     fn draw_overlay(
         &mut self,
         canvas: &Canvas,
@@ -321,6 +447,12 @@ impl Component for Media {
             BOX_SIZE + ICON_GAP,
             bar_baseline(&fonts.sized(FONT, BAR_TEXT_SIZE)),
         );
+        let in_bar = Rect::from_xywh(
+            0.0,
+            (BAR_HEIGHT as f32 - BOX_SIZE) / 2.0,
+            BOX_SIZE,
+            BOX_SIZE,
+        );
         let mut paint = Paint::default();
         paint.set_anti_alias(true);
         // Fading over only half the way keeps what the two titles share solid throughout.
@@ -330,19 +462,16 @@ impl Component for Media {
         let rest_alpha = (progress * 2.0 - 1.0).max(0.0);
 
         let mut title_at = bar_text_at;
-        let mut note_at = Rect::from_xywh(
-            0.0,
-            (BAR_HEIGHT as f32 - BOX_SIZE) / 2.0,
-            BOX_SIZE,
-            BOX_SIZE,
-        );
+        let mut card_at = in_bar;
+        let mut play_at = in_bar;
         if let Some((frame, shown)) = island.zip(self.shown.as_ref()) {
             let origin = (frame.content.x, frame.content.y);
-            for (i, (text, size, at)) in shown.lines(fonts).into_iter().enumerate() {
+            let colors = CardColors::new(shown.art.as_ref(), theme);
+            for (i, (text, size, at)) in shown.lines().into_iter().enumerate() {
                 let color = if i < shown.title.len() {
-                    theme.on_surface
+                    colors.content
                 } else {
-                    theme.on_surface_variant
+                    colors.content_variant
                 };
                 let at = travel(
                     bar_text_at,
@@ -357,8 +486,8 @@ impl Component for Media {
                 paint.set_color4f(Color4f::from(color.with_alpha(alpha)), None);
                 fonts.draw(canvas, FONT, size, text, at, &paint);
             }
-            let play = shown.button_box(1).with_offset(origin);
-            note_at = lerp_box(note_at, play, progress);
+            card_at = shown.card().with_offset(origin);
+            play_at = shown.play_rect().with_offset(origin);
         }
 
         if let Some(player) = self.player(state) {
@@ -367,7 +496,30 @@ impl Component for Media {
             } else {
                 theme.on_surface_variant
             };
-            Icon::MusicNote.draw(canvas, note_at, color.with_alpha(1.0 - progress));
+            match state.player_art.get(&player.bus_name) {
+                Some(art) => {
+                    let lerp = |from: f32, to: f32| from + (to - from) * progress;
+                    let at = Rect::new(
+                        lerp(in_bar.left, card_at.left),
+                        lerp(in_bar.top, card_at.top),
+                        lerp(in_bar.right, card_at.right),
+                        lerp(in_bar.bottom, card_at.bottom),
+                    );
+                    let radius = lerp(THUMBNAIL_RADIUS, CARD_RADIUS);
+                    // Gone by halfway, before it can be seen not to line up with the growing card.
+                    draw_art(
+                        canvas,
+                        &art.image,
+                        at,
+                        radius,
+                        (1.0 - progress * 2.0).max(0.0),
+                    );
+                }
+                None => {
+                    let at = lerp_box(in_bar, play_at, progress);
+                    Icon::MusicNote.draw(canvas, at, color.with_alpha(1.0 - progress));
+                }
+            }
             paint.set_color4f(Color4f::from(color.with_alpha(bar_alpha)), None);
             let text = bar_title(player, fonts);
             fonts.draw(canvas, FONT, BAR_TEXT_SIZE, &text, title_at, &paint);
@@ -407,7 +559,8 @@ impl Component for Media {
         if !self.open {
             return None;
         }
-        let shown = Shown::new(player, bar_width, fonts);
+        let art = state.player_art.get(&player.bus_name);
+        let shown = Shown::new(player, art, bar_width, fonts);
         let request = IslandRequest {
             width: shown.size.0,
             height: shown.size.1,
@@ -430,8 +583,18 @@ impl Component for Media {
             return Redraw::None;
         };
 
-        let mut paint = Paint::new(Color4f::from(theme.on_surface_variant), None);
-        paint.set_anti_alias(true);
+        shown.draw_card(canvas, theme);
+        let colors = CardColors::new(shown.art.as_ref(), theme);
+        let mut slider_theme = theme.clone();
+        slider_theme.primary = colors.accent;
+        slider_theme.secondary_container = colors.track;
+        slider_theme.on_surface = colors.content;
+
+        let target = if shown.playing { 1.0 } else { 0.0 };
+        if self.playing.to() != target {
+            self.playing.set_target(target);
+        }
+        let playing = self.playing.value();
 
         // Mid-drag the slider leads, and the time follows it.
         self.slider.set_enabled(shown.progress.is_some());
@@ -441,29 +604,56 @@ impl Component for Media {
         }
         let slider = shown.slider_rect();
         self.slider.set_layout_rect(slider);
-        let animating = self.slider.draw(canvas, theme, fonts);
+        let waving = shown.progress.is_some();
+        self.slider.set_wave(Some(SliderWave {
+            amplitude: if waving {
+                WAVE_AMPLITUDE * playing
+            } else {
+                0.0
+            },
+            phase: self.started.elapsed().as_secs_f32() * WAVE_SPEED,
+        }));
+        let animating = self.slider.draw(canvas, &slider_theme, fonts);
 
         if let Some((_, length)) = shown.progress {
-            let position = length.mul_f32(self.slider.value());
+            let mut paint = Paint::new(Color4f::from(colors.content_variant), None);
+            paint.set_anti_alias(true);
             let baseline = slider.y + (slider.height + TIME_SIZE) / 2.0 - 1.0;
-            let at = Point::new(PADDING, baseline);
-            fonts.draw(canvas, FONT, TIME_SIZE, &format_time(position), at, &paint);
+            let position = format_time(length.mul_f32(self.slider.value()));
+            let at = Point::new(shown.previous_rect().right, baseline);
+            fonts.draw(canvas, FONT, TIME_SIZE, &position, at, &paint);
             let total = format_time(length);
-            let x = shown.size.0 - PADDING - fonts.measure(FONT, TIME_SIZE, &total);
+            let x = shown.next_rect().left - fonts.measure(FONT, TIME_SIZE, &total);
             let at = Point::new(x, baseline);
             fonts.draw(canvas, FONT, TIME_SIZE, &total, at, &paint);
         }
 
-        for (i, action) in BUTTONS.iter().enumerate() {
-            let icon = match action {
-                PlayerAction::Previous => Icon::SkipPrevious,
-                PlayerAction::Next => Icon::SkipNext,
-                PlayerAction::PlayPause if shown.playing => Icon::Pause,
-                _ => Icon::Play,
-            };
-            icon.draw(canvas, shown.button_box(i), theme.on_surface);
-        }
-        if animating {
+        let centered = |rect: Rect| {
+            Rect::from_xywh(
+                rect.center_x() - BOX_SIZE / 2.0,
+                rect.center_y() - BOX_SIZE / 2.0,
+                BOX_SIZE,
+                BOX_SIZE,
+            )
+        };
+        Icon::SkipPrevious.draw(canvas, centered(shown.previous_rect()), colors.content);
+        Icon::SkipNext.draw(canvas, centered(shown.next_rect()), colors.content);
+
+        let play = shown.play_rect();
+        let radius = PLAY_SIZE / 2.0 + (PLAY_RADIUS_PLAYING - PLAY_SIZE / 2.0) * playing;
+        let mut paint = Paint::new(Color4f::from(colors.accent), None);
+        paint.set_anti_alias(true);
+        canvas.draw_rrect(RRect::new_rect_xy(play, radius, radius), &paint);
+        let icon = if shown.playing {
+            Icon::Pause
+        } else {
+            Icon::Play
+        };
+        icon.draw(canvas, centered(play), colors.on_accent);
+
+        // ponytail: repaints the whole surface every frame while a track plays with the
+        // card open. Damage only the card if that shows up on a profile.
+        if animating || self.playing.is_traveling() || (shown.playing && waving) {
             Redraw::Animating
         } else {
             Redraw::None
@@ -544,11 +734,12 @@ mod tests {
     fn shown_with(progress: Option<(Duration, Duration)>) -> Shown {
         Shown {
             bus_name: "player".to_string(),
+            art: None,
             title: Vec::new(),
             artist: String::new(),
             playing: true,
             progress,
-            size: (360.0, 100.0),
+            size: (400.0, 170.0),
         }
     }
 
@@ -559,13 +750,13 @@ mod tests {
         );
         let mut fonts = FontBook::new();
         fonts.register(FONT, "Noto Sans CJK JP", skia_safe::FontStyle::normal());
-        let mut surface = skia_safe::surfaces::raster_n32_premul((400, 200)).unwrap();
+        let mut surface = skia_safe::surfaces::raster_n32_premul((400, 170)).unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         let mut media = Media::new(tx);
         media.shown = Some(shown_with(progress));
         media.draw_island(
             surface.canvas(),
-            (360.0, 100.0),
+            (400.0, 170.0),
             &UIState::default(),
             &fonts,
             theme.theme(),
@@ -631,22 +822,23 @@ mod tests {
     #[test]
     fn presses_map_to_buttons_only_inside_them() {
         let shown = shown_with(None);
-        let (left, top) = shown.button_origin();
-        let (left, y) = (left as f64, top as f64 + 1.0);
-        let button = BUTTON_WIDTH as f64;
+        let center = |rect: Rect| (rect.center_x() as f64, rect.center_y() as f64);
+        let at = |rect: Rect| {
+            let (x, y) = center(rect);
+            shown.button_at(x, y)
+        };
 
-        assert_eq!(shown.button_at(left, y), Some(PlayerAction::Previous));
+        assert_eq!(at(shown.previous_rect()), Some(PlayerAction::Previous));
+        assert_eq!(at(shown.play_rect()), Some(PlayerAction::PlayPause));
+        assert_eq!(at(shown.next_rect()), Some(PlayerAction::Next));
+
+        let slider = shown.slider_rect();
+        let on_slider = (slider.x + slider.width / 2.0, slider.y + 1.0);
         assert_eq!(
-            shown.button_at(left + button * 1.5, y),
-            Some(PlayerAction::PlayPause)
+            shown.button_at(on_slider.0 as f64, on_slider.1 as f64),
+            None
         );
-        assert_eq!(
-            shown.button_at(left + button * 3.0 - 1.0, y),
-            Some(PlayerAction::Next)
-        );
-        assert_eq!(shown.button_at(left + button * 3.0, y), None);
-        assert_eq!(shown.button_at(left - 1.0, y), None);
-        assert_eq!(shown.button_at(left, top as f64 - 1.0), None, "the text");
+        assert_eq!(shown.button_at(30.0, 30.0), None, "the text");
     }
 
     #[test]

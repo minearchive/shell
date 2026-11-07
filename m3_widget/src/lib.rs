@@ -32,7 +32,7 @@ pub use divider::{Divider, Orientation};
 pub use icon::Icon;
 pub use list_item::ListItem;
 pub use navigation_rail::{NavigationRail, NavigationRailAlignment, NavigationRailItem};
-pub use slider::{Slider, SliderSize};
+pub use slider::{Slider, SliderSize, SliderWave};
 pub use switch::{Switch, SwitchIcons};
 pub use text_field::TextField;
 

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::color::Color;
 
-#[derive(Deserialize, Serialize, Default, PartialEq)]
+#[derive(Clone, Deserialize, Serialize, Default, PartialEq)]
 #[serde(default)]
 pub struct ColorTheme {
     pub primary: Color,
