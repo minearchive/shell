@@ -66,6 +66,7 @@ pub trait Widget {
     fn hit_rect(&self) -> LayoutRect { self.layout_rect() }
     fn focusable(&self) -> bool { false }
     fn set_focused(&mut self, focused: bool) {}
+    fn selected_text(&self) -> Option<String> { None }
 }
 ```
 
@@ -109,7 +110,7 @@ two shared paint helpers at the root:
 
 ```
 input/     buttons/{common,icon_button,radio_button,segmented},
-           checkbox, slider, switch, text_field
+           checkbox, chip, slider, switch, text_field
 layouts/   divider, list_item, navigation_rail
 tokens/    mod.rs (state-layer/disabled opacities), motion (durations, easings)
 drawing.rs, icon.rs
@@ -156,7 +157,8 @@ so `use m3_widget::{Widget, Row, CheckBox, ...}` is enough for most consumers.
 | `CheckBox` | `checked, indeterminate, enabled, hovered, pressed, focused, on_change, animations.selection: Animation<f32>` (SHORT4 + standard). `SIZE = 40.0` (touch target), `BOX_SIZE = 18.0`. API: `CheckBox::new(checked).indeterminate(true).on_change(cb)`, `set_checked`, `checked()`, `indeterminate_value()`. `hit_rect()` outsets the 18px box to the 40px touch target. |
 | `Switch` | `checked, icons: SwitchIcons{None,Selected,Both}, animations.{selection (MEDIUM1+emphasized), press (SHORT4+standard)}`. `TRACK_WIDTH = 52.0`, `TRACK_HEIGHT = 32.0`. API: `Switch::new(checked).icons(..).enabled(..).on_change(cb)`. |
 | `Slider` | `value, min, max, step: Option<f32>, size: SliderSize, labeled, animations.{handle_width, indicator}`. `SliderSize { ExtraSmall, Small, Medium, Large, ExtraLarge }` each with `track_height()`/`handle_height()`/`corner_radius()`. API: `Slider::new(min, max, value).size(..).step(5.0).labeled(true).on_change(cb)`. |
-| `TextField` | `text, cursor, font_key, enabled, hovered, focused, scroll_offset, on_change`. `HEIGHT = 56.0`. No animations. |
+| `TextField` | `text, cursor, anchor, font_key, enabled, hovered, focused, dragging, scroll_offset, on_change`. `HEIGHT = 56.0`. No animations. The selection is the range between `anchor` and `cursor` (equal when empty): Shift+arrows/Home/End and a left-button drag extend it, Ctrl+A (`Press { keysym: key::A }`) selects all, and typing, Backspace and Delete replace or remove it. It has no clipboard: the host implements copy via `Widget::selected_text`, cut as that plus a `Delete` press, and paste as `Commit`. `on_pointer` has no `FontBook`, so `draw` keeps a copy of its `Font` for hit-testing; a click before the first `draw` leaves the cursor in place. |
+| `Chip` | `Chip::assist(label)` (fires `on_click`) or `Chip::filter(label, selected)` (toggles and fires `on_change`, not on `set_selected`). `HEIGHT = 32.0`, radius 8. Optional `.icon(..)`; on a filter chip the check cross-fades over it. `measure` always reserves the check's slot on a filter chip, so selecting never reflows neighbours: the content slides inside a fixed width instead (`selection`, SHORT4 + standard). Input and suggestion chips are not implemented. |
 | `ListItem` | `headline, supporting, overline, trailing_text, leading/trailing: Option<IconDrawer>, on_click`, where `type IconDrawer = Box<dyn Fn(&Canvas, Rect, Color)>`. API: `ListItem::new("Headline").supporting(..).overline(..).trailing_text(..).leading(closure).on_click(cb)`. |
 | `buttons::Button` | `ButtonVariant { Filled(default), FilledTonal, Elevated, Outlined, Text }`, `ButtonShape { Round(default), Square }`, `ButtonSize { ExtraSmall, Small(default), Medium, Large, ExtraLarge }` with `height()`/`horizontal_padding()`/`label_size()`/`corner_radius(pressed)`. `animations.shape` (SHORT4+standard) morphs round→squarer on press. API: `Button::new("Label").variant(..).shape(..).size(..).font(key).on_click(cb)`. |
 | `buttons::IconButton` | `IconButtonVariant { Standard(default, no container), Filled, FilledTonal, Outlined }`. Has both `on_click` (non-toggle mode) and `on_change` (toggle mode) — mutually exclusive; `toggle(bool)`, `selected()`, `set_selected()`. Accepts either an `Icon` or a custom `icon_fn: Box<dyn Fn(&Canvas, Rect, Color)>`. |

@@ -47,4 +47,10 @@ pub trait Widget {
     }
 
     fn set_focused(&mut self, _focused: bool) {}
+
+    /// The currently selected text, for a host implementing copy: this crate
+    /// has no clipboard of its own. Cut is the same plus a `Delete` key press.
+    fn selected_text(&self) -> Option<String> {
+        None
+    }
 }

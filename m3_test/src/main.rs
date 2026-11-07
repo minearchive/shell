@@ -24,10 +24,11 @@ use winit::window::{Window, WindowId};
 use crate::layout::{build, leaf, resolve_layout_rects, Caption, LayoutNode, PendingWidget};
 use m3_widget::{
     buttons::{icon_button, radio_button, segmented},
-    checkbox, navigation_rail, switch, text_field, Button, ButtonSize, ButtonVariant, CheckBox,
-    Column, CrossAlign, Divider, Icon, IconButton, IconButtonVariant, ListItem, NavigationRail,
-    NavigationRailAlignment, NavigationRailItem, RadioButton, Row, ScrollableWidget, Segment,
-    SegmentedButton, SelectionMode, Slider, SliderSize, Switch, SwitchIcons, TextField, Widget,
+    checkbox, chip, navigation_rail, switch, text_field, Button, ButtonSize, ButtonVariant,
+    CheckBox, Chip, Column, CrossAlign, Divider, Icon, IconButton, IconButtonVariant, ListItem,
+    NavigationRail, NavigationRailAlignment, NavigationRailItem, RadioButton, Row,
+    ScrollableWidget, Segment, SegmentedButton, SelectionMode, Slider, SliderSize, Switch,
+    SwitchIcons, TextField, Widget,
 };
 use util::{button_code, keysym_from_named, load_theme};
 
@@ -403,6 +404,60 @@ fn switch_gallery() -> Vec<LayoutNode> {
     vec![LayoutNode::row(groups).gap(GROUP_GAP).caption("Switches")]
 }
 
+fn chip_gallery() -> Vec<LayoutNode> {
+    const CHIP_WIDTH: f32 = 112.0;
+
+    vec![
+        row![
+            leaf(
+                CHIP_WIDTH,
+                chip::HEIGHT,
+                Chip::assist("Favorite")
+                    .icon(Icon::Favorite)
+                    .on_click(|| println!("assist: favorite")),
+            ),
+            leaf(
+                CHIP_WIDTH,
+                chip::HEIGHT,
+                Chip::assist("Settings").on_click(|| println!("assist: settings")),
+            ),
+            leaf(
+                CHIP_WIDTH,
+                chip::HEIGHT,
+                Chip::assist("Disabled").icon(Icon::Add).enabled(false),
+            ),
+        ]
+        .gap(ITEM_GAP)
+        .caption("Assist chips"),
+        row![
+            leaf(
+                CHIP_WIDTH,
+                chip::HEIGHT,
+                Chip::filter("Wi-Fi", false).on_change(|v| println!("filter wifi: {v}")),
+            ),
+            leaf(
+                CHIP_WIDTH,
+                chip::HEIGHT,
+                Chip::filter("音声", true).on_change(|v| println!("filter audio: {v}")),
+            ),
+            leaf(
+                CHIP_WIDTH,
+                chip::HEIGHT,
+                Chip::filter("Favorite", false)
+                    .icon(Icon::Favorite)
+                    .on_change(|v| println!("filter favorite: {v}")),
+            ),
+            leaf(
+                CHIP_WIDTH,
+                chip::HEIGHT,
+                Chip::filter("Disabled", true).enabled(false),
+            ),
+        ]
+        .gap(ITEM_GAP)
+        .caption("Filter chips"),
+    ]
+}
+
 fn checkbox_gallery() -> Vec<LayoutNode> {
     let variants = [
         ("unchecked", false, false, true),
@@ -625,6 +680,7 @@ fn page_sections(page: usize) -> Vec<LayoutNode> {
         0 => vec![button_gallery(), icon_button_gallery()],
         1 => vec![
             segmented_gallery(),
+            chip_gallery(),
             checkbox_gallery(),
             radio_gallery(),
             switch_gallery(),
@@ -729,8 +785,8 @@ struct App {
     cursor: pointer::Point,
     modifiers: keyboard::Modifiers,
     focus: Option<usize>,
-    /// `None` if the platform has no clipboard we can reach; paste is then a
-    /// no-op rather than a hard failure.
+    /// `None` if the platform has no clipboard we can reach; copy, cut and
+    /// paste are then no-ops rather than a hard failure.
     clipboard: Option<arboard::Clipboard>,
     tree: TaffyTree,
     root: NodeId,
@@ -758,7 +814,7 @@ impl App {
             modifiers: keyboard::Modifiers::default(),
             focus: None,
             clipboard: arboard::Clipboard::new()
-                .map_err(|e| eprintln!("m3_test: clipboard unavailable, paste disabled: {e}"))
+                .map_err(|e| eprintln!("m3_test: clipboard unavailable: {e}"))
                 .ok(),
             tree,
             root,
@@ -859,6 +915,32 @@ impl App {
                 }
             }
             Err(e) => eprintln!("m3_test: clipboard read failed: {e}"),
+        }
+    }
+
+    /// Copies the focused widget's selection. A cut then deletes it through
+    /// the widget's ordinary Delete handling, but only once the clipboard
+    /// actually holds the text, so a failed cut loses nothing.
+    fn copy_selection(&mut self, cut: bool) {
+        let Some(text) = self
+            .focus
+            .and_then(|i| self.focus_widget_mut(i))
+            .and_then(|widget| widget.selected_text())
+        else {
+            return;
+        };
+        let Some(clipboard) = self.clipboard.as_mut() else {
+            return;
+        };
+        if let Err(e) = clipboard.set_text(text) {
+            eprintln!("m3_test: clipboard write failed: {e}");
+            return;
+        }
+        if cut {
+            self.dispatch_keyboard(KeyboardEventKind::Press {
+                keysym: keyboard::key::DELETE,
+                repeat: false,
+            });
         }
     }
 
@@ -1126,14 +1208,22 @@ impl ApplicationHandler for App {
                 let pressed = event.state == ElementState::Pressed;
                 let is_tab_press =
                     pressed && matches!(&event.logical_key, Key::Named(NamedKey::Tab));
-                let is_paste = pressed
-                    && self.modifiers.ctrl
-                    && matches!(&event.logical_key, Key::Character(c) if c.eq_ignore_ascii_case("v"));
+                let ctrl_key = match &event.logical_key {
+                    Key::Character(c) if pressed && self.modifiers.ctrl => c.to_ascii_lowercase(),
+                    _ => String::new(),
+                };
 
                 if is_tab_press {
                     self.cycle_focus(self.modifiers.shift);
-                } else if is_paste {
+                } else if ctrl_key == "v" {
                     self.paste();
+                } else if ctrl_key == "c" || ctrl_key == "x" {
+                    self.copy_selection(ctrl_key == "x");
+                } else if ctrl_key == "a" {
+                    self.dispatch_keyboard(KeyboardEventKind::Press {
+                        keysym: keyboard::key::A,
+                        repeat: event.repeat,
+                    });
                 } else {
                     if let Key::Named(named) = &event.logical_key {
                         if let Some(keysym) = keysym_from_named(named) {

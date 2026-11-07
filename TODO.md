@@ -63,11 +63,15 @@
   - [x] ListItem
   - [ ] Textbox
     - [x] keyboard input, cursor, paste
-    - [ ] selection range, cheapest before more edit ops land (state -> anchor + cursor)
-    - [ ] copy/cut, needs selection first
+    - [x] selection range
+    - [x] copy/cut
     - [ ] IME / preedit, adapters only since Commit is the one insertion path
   - [ ] DatePicker
-  - [ ] Chips
+  - [x] Chips
+    - [x] Assist
+    - [x] Filter
+    - [ ] Input
+    - [ ] Suggestion
   - [ ] Navigation
     - [ ] drawer
     - [ ] rail

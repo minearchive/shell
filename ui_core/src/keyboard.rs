@@ -1,5 +1,6 @@
 pub mod key {
     pub const SPACE: u32 = 0x0020;
+    pub const A: u32 = 0x0061;
     pub const BACKSPACE: u32 = 0xff08;
     pub const TAB: u32 = 0xff09;
     pub const RETURN: u32 = 0xff0d;

@@ -3,6 +3,7 @@
 
 pub mod buttons;
 pub mod checkbox;
+pub mod chip;
 pub mod slider;
 pub mod switch;
 pub mod text_field;

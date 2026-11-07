@@ -19,7 +19,7 @@ pub mod drawing;
 pub mod icon;
 pub mod tokens;
 
-pub use input::{buttons, checkbox, slider, switch, text_field};
+pub use input::{buttons, checkbox, chip, slider, switch, text_field};
 pub use layouts::{divider, list_item, navigation_rail};
 
 pub use buttons::{
@@ -27,6 +27,7 @@ pub use buttons::{
     Segment, SegmentedButton, SelectionMode,
 };
 pub use checkbox::CheckBox;
+pub use chip::Chip;
 pub use divider::{Divider, Orientation};
 pub use icon::Icon;
 pub use list_item::ListItem;

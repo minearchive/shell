@@ -1,6 +1,6 @@
-//! Material 3 filled text field: single line, cursor only (no selection).
+//! Material 3 filled text field: single line, with keyboard and drag selection.
 
-use skia_safe::{Canvas, ClipOp, Color4f, Paint, Point, RRect, Rect, Vector};
+use skia_safe::{Canvas, ClipOp, Color4f, Font, Paint, Point, RRect, Rect, Vector};
 
 use ui_core::{
     font::FontBook,
@@ -27,6 +27,7 @@ const INDICATOR_HEIGHT: f32 = 1.0;
 const INDICATOR_HEIGHT_FOCUSED: f32 = 2.0;
 
 const CURSOR_WIDTH: f32 = 1.5;
+const SELECTION_OPACITY: f32 = 0.4;
 
 /// Disabled treatments.
 const DISABLED_CONTAINER_OPACITY: f32 = 0.04;
@@ -36,10 +37,18 @@ pub struct TextField {
     text: String,
     /// Byte offset into `text`. Always on a char boundary.
     cursor: usize,
+    /// The fixed end of the selection; equal to `cursor` when nothing is
+    /// selected. Same invariant as `cursor`.
+    anchor: usize,
     font_key: String,
     enabled: bool,
     hovered: bool,
     focused: bool,
+    /// A left-button drag is extending the selection.
+    dragging: bool,
+    /// The font of the last `draw`: `on_pointer` has no [`FontBook`], but
+    /// needs text metrics to turn a click into a cursor position.
+    measure_font: Option<Font>,
     /// Horizontal scroll so the cursor stays visible when text overflows.
     scroll_offset: f32,
     /// Assigned by the layout system via [`Widget::set_layout_rect`]; zero
@@ -53,10 +62,13 @@ impl TextField {
         Self {
             text: String::new(),
             cursor: 0,
+            anchor: 0,
             font_key: "noto_sans".to_string(),
             enabled: true,
             hovered: false,
             focused: false,
+            dragging: false,
+            measure_font: None,
             scroll_offset: 0.0,
             layout_rect: LayoutRect::empty(),
             on_change: None,
@@ -78,6 +90,7 @@ impl TextField {
     pub fn text(mut self, text: impl Into<String>) -> Self {
         self.text = text.into();
         self.cursor = self.text.len();
+        self.anchor = self.cursor;
         self
     }
 
@@ -169,6 +182,11 @@ impl TextField {
         }
     }
 
+    /// The selected byte range, ordered; empty when nothing is selected.
+    fn selection(&self) -> (usize, usize) {
+        (self.cursor.min(self.anchor), self.cursor.max(self.anchor))
+    }
+
     /// Filters again rather than trusting the backend: a control character in
     /// the buffer is unrecoverable, and [`keyboard::insertable_text`] is the
     /// adapter's job to apply, not ours to assume.
@@ -176,63 +194,69 @@ impl TextField {
         let Some(text) = keyboard::insertable_text(text) else {
             return false;
         };
-        self.text.insert_str(self.cursor, &text);
-        self.cursor += text.len();
+        let (start, end) = self.selection();
+        self.text.replace_range(start..end, &text);
+        self.cursor = start + text.len();
+        self.anchor = self.cursor;
+        self.changed();
+        true
+    }
+
+    fn delete_range(&mut self, start: usize, end: usize) -> bool {
+        if start == end {
+            return false;
+        }
+        self.text.drain(start..end);
+        self.cursor = start;
+        self.anchor = start;
         self.changed();
         true
     }
 
     fn backspace(&mut self) -> bool {
-        if self.cursor == 0 {
-            return false;
+        let (start, end) = self.selection();
+        if start != end {
+            return self.delete_range(start, end);
         }
-        let start = self.prev_char_boundary(self.cursor);
-        self.text.drain(start..self.cursor);
-        self.cursor = start;
-        self.changed();
-        true
+        self.delete_range(self.prev_char_boundary(self.cursor), self.cursor)
     }
 
     fn delete_forward(&mut self) -> bool {
-        if self.cursor >= self.text.len() {
-            return false;
+        let (start, end) = self.selection();
+        if start != end {
+            return self.delete_range(start, end);
         }
-        let end = self.next_char_boundary(self.cursor);
-        self.text.drain(self.cursor..end);
-        self.changed();
-        true
+        self.delete_range(self.cursor, self.next_char_boundary(self.cursor))
     }
 
-    fn move_left(&mut self) -> bool {
-        if self.cursor == 0 {
-            return false;
+    /// Moves the cursor, dragging the anchor along unless `extend`. Returns
+    /// whether anything moved.
+    fn move_to(&mut self, index: usize, extend: bool) -> bool {
+        let before = (self.cursor, self.anchor);
+        self.cursor = index;
+        if !extend {
+            self.anchor = index;
         }
-        self.cursor = self.prev_char_boundary(self.cursor);
-        true
+        before != (self.cursor, self.anchor)
     }
 
-    fn move_right(&mut self) -> bool {
-        if self.cursor >= self.text.len() {
-            return false;
-        }
-        self.cursor = self.next_char_boundary(self.cursor);
-        true
-    }
-
-    fn move_home(&mut self) -> bool {
-        if self.cursor == 0 {
-            return false;
-        }
-        self.cursor = 0;
-        true
-    }
-
-    fn move_end(&mut self) -> bool {
-        if self.cursor >= self.text.len() {
-            return false;
-        }
+    fn select_all(&mut self) -> bool {
+        let before = (self.cursor, self.anchor);
+        self.anchor = 0;
         self.cursor = self.text.len();
-        true
+        before != (self.cursor, self.anchor)
+    }
+
+    /// The char boundary closest to a widget-space `x`. Before the first
+    /// `draw` there are no metrics, so the cursor stays where it is.
+    fn offset_at(&self, x: f32) -> usize {
+        let Some(font) = &self.measure_font else {
+            return self.cursor;
+        };
+        let text_x = x - self.content_rect().left + self.scroll_offset;
+        nearest_boundary(&self.text, text_x, |prefix| {
+            font.measure_str(prefix, None).0
+        })
     }
 
     fn changed(&mut self) {
@@ -256,6 +280,21 @@ impl TextField {
             .scroll_offset
             .clamp(0.0, (total_width - content_width).max(0.0));
     }
+}
+
+/// The char boundary of `text` whose prefix advance is closest to `x`.
+///
+// ponytail: re-measures every prefix, O(n²) per pointer event; fine at
+// single-line lengths, cache the edges if a field ever holds long text.
+fn nearest_boundary(text: &str, x: f32, measure: impl Fn(&str) -> f32) -> usize {
+    text.char_indices()
+        .map(|(i, _)| i)
+        .chain([text.len()])
+        .min_by(|&a, &b| {
+            let distance = |i: usize| (measure(&text[..i]) - x).abs();
+            distance(a).total_cmp(&distance(b))
+        })
+        .unwrap_or(0)
 }
 
 impl Default for TextField {
@@ -294,6 +333,7 @@ impl Widget for TextField {
         self.update_scroll(fonts, content.width());
 
         let font = fonts.sized(&self.font_key, TEXT_SIZE);
+        self.measure_font = Some(font.clone());
         let metrics = font.metrics().1;
         let baseline = content.center_y() - (metrics.ascent + metrics.descent) / 2.0;
 
@@ -301,12 +341,30 @@ impl Widget for TextField {
         canvas.clip_rect(content, ClipOp::Intersect, true);
 
         let text_x = content.left - self.scroll_offset;
+        let (selection_start, selection_end) = self.selection();
+        let has_selection = selection_start != selection_end;
+
+        if self.focused && self.enabled && has_selection {
+            let left = text_x + font.measure_str(&self.text[..selection_start], None).0;
+            let right = text_x + font.measure_str(&self.text[..selection_end], None).0;
+            let mut selection_paint = Paint::default();
+            selection_paint.set_anti_alias(true);
+            selection_paint.set_color4f(
+                Color4f::from(theme.primary.with_alpha(SELECTION_OPACITY)),
+                None,
+            );
+            canvas.draw_rect(
+                Rect::from_ltrb(left, content.top, right, content.bottom),
+                &selection_paint,
+            );
+        }
+
         let mut text_paint = Paint::default();
         text_paint.set_anti_alias(true);
         text_paint.set_color4f(Color4f::from(self.text_color(theme)), None);
         canvas.draw_str(&self.text, Point::new(text_x, baseline), &font, &text_paint);
 
-        if self.focused && self.enabled {
+        if self.focused && self.enabled && !has_selection {
             let cursor_x = text_x + font.measure_str(&self.text[..self.cursor], None).0;
             let cursor_rect = Rect::from_ltrb(
                 cursor_x,
@@ -329,6 +387,7 @@ impl Widget for TextField {
         if !self.enabled {
             let dirty = self.hovered;
             self.hovered = false;
+            self.dragging = false;
             return dirty;
         }
 
@@ -336,16 +395,30 @@ impl Widget for TextField {
 
         match event.kind {
             PointerEventKind::Enter | PointerEventKind::Motion => {
-                let changed = self.hovered != inside;
+                let mut changed = self.hovered != inside;
                 self.hovered = inside;
+                if self.dragging {
+                    changed |= self.move_to(self.offset_at(event.x() as f32), true);
+                }
                 changed
             }
             PointerEventKind::Leave => {
                 let dirty = self.hovered;
                 self.hovered = false;
+                self.dragging = false;
                 dirty
             }
-            PointerEventKind::Press { button } if button == pointer::button::LEFT => inside,
+            PointerEventKind::Press { button } if button == pointer::button::LEFT => {
+                if inside {
+                    self.move_to(self.offset_at(event.x() as f32), false);
+                    self.dragging = true;
+                }
+                inside
+            }
+            PointerEventKind::Release { button } if button == pointer::button::LEFT => {
+                self.dragging = false;
+                false
+            }
             _ => false,
         }
     }
@@ -365,15 +438,29 @@ impl Widget for TextField {
                 true
             }
             KeyboardEventKind::Commit(text) => self.insert(text),
-            KeyboardEventKind::Press { keysym, .. } => match *keysym {
-                keyboard::key::BACKSPACE => self.backspace(),
-                keyboard::key::DELETE => self.delete_forward(),
-                keyboard::key::LEFT => self.move_left(),
-                keyboard::key::RIGHT => self.move_right(),
-                keyboard::key::HOME => self.move_home(),
-                keyboard::key::END => self.move_end(),
-                _ => false,
-            },
+            KeyboardEventKind::Press { keysym, .. } => {
+                let extend = event.modifiers.shift;
+                let (start, end) = self.selection();
+                // A plain arrow collapses a selection onto its edge rather
+                // than stepping from the cursor.
+                let collapse = start != end && !extend;
+                match *keysym {
+                    keyboard::key::BACKSPACE => self.backspace(),
+                    keyboard::key::DELETE => self.delete_forward(),
+                    keyboard::key::LEFT if collapse => self.move_to(start, false),
+                    keyboard::key::RIGHT if collapse => self.move_to(end, false),
+                    keyboard::key::LEFT => {
+                        self.move_to(self.prev_char_boundary(self.cursor), extend)
+                    }
+                    keyboard::key::RIGHT => {
+                        self.move_to(self.next_char_boundary(self.cursor), extend)
+                    }
+                    keyboard::key::HOME => self.move_to(0, extend),
+                    keyboard::key::END => self.move_to(self.text.len(), extend),
+                    keyboard::key::A if event.modifiers.ctrl => self.select_all(),
+                    _ => false,
+                }
+            }
             KeyboardEventKind::Release { .. } | KeyboardEventKind::Preedit { .. } => false,
         }
     }
@@ -392,6 +479,11 @@ impl Widget for TextField {
 
     fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
+    }
+
+    fn selected_text(&self) -> Option<String> {
+        let (start, end) = self.selection();
+        (start != end).then(|| self.text[start..end].to_string())
     }
 }
 
@@ -479,7 +571,7 @@ mod tests {
     fn delete_forward_removes_one_char_after_cursor() {
         let mut field = TextField::new();
         commit(&mut field, "日本語");
-        field.cursor = 0;
+        press(&mut field, keyboard::key::HOME);
         assert!(press(&mut field, keyboard::key::DELETE));
         assert_eq!(field.text_value(), "本語");
         assert_eq!(field.cursor, 0);
@@ -509,7 +601,8 @@ mod tests {
     fn insert_in_middle_of_multibyte_text() {
         let mut field = TextField::new();
         commit(&mut field, "日本語");
-        field.cursor = "日".len();
+        press(&mut field, keyboard::key::HOME);
+        press(&mut field, keyboard::key::RIGHT);
         commit(&mut field, "X");
         assert_eq!(field.text_value(), "日X本語");
     }
@@ -540,6 +633,157 @@ mod tests {
             KeyboardEventKind::Commit(text.to_string()),
             keyboard::Modifiers::default(),
         ))
+    }
+
+    fn press_with(field: &mut TextField, keysym: u32, modifiers: keyboard::Modifiers) -> bool {
+        field.on_keyboard(&KeyboardEvent::new(
+            KeyboardEventKind::Press {
+                keysym,
+                repeat: false,
+            },
+            modifiers,
+        ))
+    }
+
+    const SHIFT: keyboard::Modifiers = keyboard::Modifiers {
+        ctrl: false,
+        alt: false,
+        shift: true,
+        logo: false,
+        caps_lock: false,
+        num_lock: false,
+    };
+
+    const CTRL: keyboard::Modifiers = keyboard::Modifiers {
+        ctrl: true,
+        alt: false,
+        shift: false,
+        logo: false,
+        caps_lock: false,
+        num_lock: false,
+    };
+
+    #[test]
+    fn shift_arrows_extend_by_char_in_either_direction() {
+        let mut field = TextField::new().text("日本語");
+        assert!(press_with(&mut field, keyboard::key::LEFT, SHIFT));
+        assert_eq!(field.selected_text().as_deref(), Some("語"));
+        press_with(&mut field, keyboard::key::LEFT, SHIFT);
+        assert_eq!(field.selected_text().as_deref(), Some("本語"));
+        press_with(&mut field, keyboard::key::RIGHT, SHIFT);
+        press_with(&mut field, keyboard::key::RIGHT, SHIFT);
+        assert_eq!(field.selected_text(), None);
+    }
+
+    #[test]
+    fn shift_home_end_select_to_bounds() {
+        let mut field = TextField::new().text("hello");
+        press_with(&mut field, keyboard::key::HOME, SHIFT);
+        assert_eq!(field.selected_text().as_deref(), Some("hello"));
+        press_with(&mut field, keyboard::key::END, SHIFT);
+        assert_eq!(field.selected_text(), None);
+    }
+
+    #[test]
+    fn plain_arrow_collapses_selection_onto_its_edge() {
+        let mut field = TextField::new().text("hello");
+        press_with(&mut field, keyboard::key::A, CTRL);
+        assert!(press(&mut field, keyboard::key::LEFT));
+        assert_eq!((field.cursor, field.selected_text()), (0, None));
+
+        press_with(&mut field, keyboard::key::A, CTRL);
+        assert!(press(&mut field, keyboard::key::RIGHT));
+        assert_eq!((field.cursor, field.selected_text()), (5, None));
+    }
+
+    #[test]
+    fn plain_a_without_ctrl_does_not_select() {
+        let mut field = TextField::new().text("hello");
+        assert!(!press(&mut field, keyboard::key::A));
+        assert_eq!(field.selected_text(), None);
+    }
+
+    #[test]
+    fn select_all_when_already_selected_requests_no_redraw() {
+        let mut field = TextField::new().text("hello");
+        assert!(press_with(&mut field, keyboard::key::A, CTRL));
+        assert!(!press_with(&mut field, keyboard::key::A, CTRL));
+    }
+
+    #[test]
+    fn commit_replaces_selection_and_reports_once() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let seen_clone = seen.clone();
+        let mut field = TextField::new()
+            .text("日本語")
+            .on_change(move |text| seen_clone.borrow_mut().push(text));
+        press_with(&mut field, keyboard::key::LEFT, SHIFT);
+        commit(&mut field, "X");
+        assert_eq!(field.text_value(), "日本X");
+        assert_eq!(field.selected_text(), None);
+        assert_eq!(*seen.borrow(), vec!["日本X".to_string()]);
+    }
+
+    #[test]
+    fn rejected_commit_keeps_the_selection() {
+        let mut field = TextField::new().text("abc");
+        press_with(&mut field, keyboard::key::A, CTRL);
+        commit(&mut field, "\u{8}");
+        assert_eq!(field.text_value(), "abc");
+        assert_eq!(field.selected_text().as_deref(), Some("abc"));
+    }
+
+    /// Backspace and Delete remove the whole selection, not a char beside it.
+    /// A host implements cut as copy + Delete, so this is cut's contract too.
+    #[test]
+    fn backspace_and_delete_remove_only_the_selection() {
+        for key in [keyboard::key::BACKSPACE, keyboard::key::DELETE] {
+            let mut field = TextField::new().text("abcd");
+            press(&mut field, keyboard::key::LEFT);
+            press_with(&mut field, keyboard::key::LEFT, SHIFT);
+            assert!(press(&mut field, key));
+            assert_eq!(field.text_value(), "abd");
+            assert_eq!((field.cursor, field.anchor), (2, 2));
+        }
+    }
+
+    #[test]
+    fn nearest_boundary_rounds_to_the_closest_char_edge() {
+        // Every char 10px wide, so "日本語" has edges at 0, 10, 20, 30.
+        let measure = |s: &str| s.chars().count() as f32 * 10.0;
+        assert_eq!(nearest_boundary("日本語", -5.0, measure), 0);
+        assert_eq!(nearest_boundary("日本語", 4.0, measure), 0);
+        assert_eq!(nearest_boundary("日本語", 6.0, measure), "日".len());
+        assert_eq!(nearest_boundary("日本語", 99.0, measure), "日本語".len());
+        assert_eq!(nearest_boundary("", 5.0, measure), 0);
+    }
+
+    fn pointer(field: &mut TextField, x: f64, kind: PointerEventKind) -> bool {
+        field.on_pointer(&PointerEvent::new((x, 30.0), kind))
+    }
+
+    const LEFT_PRESS: PointerEventKind = PointerEventKind::Press {
+        button: pointer::button::LEFT,
+    };
+    const LEFT_RELEASE: PointerEventKind = PointerEventKind::Release {
+        button: pointer::button::LEFT,
+    };
+
+    /// A real font is needed for positions, so this only drives the state
+    /// machine: motion extends during a drag, and only during a drag.
+    #[test]
+    fn drag_state_ends_on_release_and_leave() {
+        for end in [LEFT_RELEASE, PointerEventKind::Leave] {
+            let mut field = TextField::new().text("hello");
+            field.set_layout_rect(LayoutRect::new(0.0, 0.0, 200.0, HEIGHT));
+            pointer(&mut field, 50.0, LEFT_PRESS);
+            assert!(field.dragging);
+            pointer(&mut field, 50.0, end);
+            assert!(!field.dragging);
+        }
     }
 
     /// The assigned rect must be readable before the first `draw`.
