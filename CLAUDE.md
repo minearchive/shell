@@ -8,25 +8,37 @@ A Wayland desktop bar/shell (`wlr-layer-shell`) rendered with Skia. Despite the
 crate name (`gtk_learn`), the directory name (`gtk_shell`), and GTK packages in
 the Nix files, the running code uses **no GTK** — it talks raw Wayland through
 `smithay-client-toolkit` and draws with `skia-safe` into SHM buffers. Treat the
-GTK references in `flake.nix`/`devenv.nix` as stale scaffolding, not as the
-architecture.
+GTK dependencies in `flake.nix` as stale scaffolding, not the architecture.
 
 ## Build & run
 
-The dev environment is provided by **devenv** (auto-loaded via direnv / `.envrc`).
-The `LIBCLANG_PATH`, `LD_LIBRARY_PATH`, and EGL env vars set in `devenv.nix` are
-required for the `skia-bindings` build and for GL/Wayland at runtime — build and
-run from inside the devenv shell (direnv handles this automatically in this dir).
+The development environment is `devShells.default` in **flake.nix**, pinned by
+`flake.lock`. Enable Nix's `nix-command` and `flakes` experimental features, then
+enter it with `nix develop`. With direnv installed and hooked into your shell,
+run `direnv allow` once; `.envrc` uses `use flake` to load the same environment.
+No devenv installation is needed.
+
+The shell provides Rust/Cargo, Clippy, rustfmt, rust-analyzer and native build
+dependencies, plus `LIBCLANG_PATH`, `LD_LIBRARY_PATH` and the EGL vendor path
+needed by Skia and GL/Wayland. The EGL vendor path assumes NixOS's
+`/run/opengl-driver`; running the graphical binaries requires a Wayland session.
 
 ```sh
+nix develop
 cargo build
 RUST_LOG=debug cargo run      # env_logger reads RUST_LOG; use info/debug
 cargo test                    # runs the mpris event-stream test in src/dbus/mpris.rs
 cargo test test_run -- --nocapture   # the single integration-ish test (needs a live MPRIS player)
 ```
 
-Note `flake.nix` builds the `default` package via `rustPlatform.buildRustPackage`,
-but day-to-day work uses devenv + cargo, not `nix build`.
+For a non-interactive build (also used by CI):
+
+```sh
+nix develop --command cargo build --locked
+```
+
+`flake.nix` also exposes a `default` package via `rustPlatform.buildRustPackage`;
+day-to-day development uses the devShell and Cargo, not `nix build`.
 
 ## Architecture
 
