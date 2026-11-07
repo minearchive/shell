@@ -95,9 +95,9 @@ parsed map at runtime.
 returns `UiEvent::AnimationUpdated(self.easings.clone())`, not
 `RequestRedrawAll`. `main()`'s `UiEvent` handler forwards each `(id, easing)`
 pair to every screen's `UserInterface::on_easing_updated`, which fans out to
-`Component::on_easing_updated` — this lets a component (e.g. `Clock`, keyed
-on `"a"`) swap the `Easing` an in-flight `Animation` uses without restarting
-the app. `is_changed` compares only `raw`, so re-saving a file with the same
+`Component::on_easing_updated` — this lets a component swap the `Easing` an in-flight `Animation` uses without restarting
+the app. `UserInterface` itself listens for `"island"`, the easing for island morphs.
+`is_changed` compares only `raw`, so re-saving a file with the same
 easing strings doesn't trigger a spurious broadcast.
 
 ### Example animation TOML
@@ -119,6 +119,8 @@ channel closures update it just before dispatching the event (e.g.
 pub struct UIState {
     pub players: HashMap<String, PlayerState>,
     pub warp: Option<WarpStatus>,
+    pub notifications: NotificationStore,
+    pub system: SystemStatus,
 }
 ```
 
@@ -126,6 +128,8 @@ pub struct UIState {
 |-------|------|-----------|-------|
 | `players` | `HashMap<String, PlayerState>` | MPRIS channel closure | Keyed by bus name; inactive players (`state.active == false`) are removed |
 | `warp` | `Option<WarpStatus>` | WARP channel closure | Latest Cloudflare WARP status, if any |
+| `system` | `SystemStatus` | System channel closure | Polled status for the toolbox |
+| `notifications` | `NotificationStore` | Notification channel closure, clock tick, `DismissNotification` | Notifications on display; removes expired ones on the tick |
 
 ### Adding a field
 

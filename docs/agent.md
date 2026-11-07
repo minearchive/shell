@@ -18,6 +18,7 @@ The bar binary (`my_shell`, `src/`):
 |------|---------|
 | `src/main.rs` | Event loop wiring (`main`); `Shell`; `Shell::draw`/`request_redraw` |
 | `src/output.rs`, `src/seat.rs`, `src/dnd.rs` | SCTK handlers: outputs and layer surfaces; seat and pointer; drag-and-drop |
+| `src/catcher.rs` | Transparent full-screen surface that detects presses outside the bar |
 | `src/ui.rs` | `Component` trait; `Redraw` enum; `UserInterface`; `UIState`; `UiEvent` |
 | `src/ipc/mod.rs` | `listen`: picks the backend from `$XDG_CURRENT_DESKTOP` |
 | `src/ipc/events.rs` | `IPCEvent` enum |
@@ -26,6 +27,9 @@ The bar binary (`my_shell`, `src/`):
 | `src/dbus/mpris.rs` | `start_listener` background thread; `PlayerState` |
 | `src/dbus/warp.rs`, `src/dbus/kdeconnect/`, `src/dbus/notification.rs` | Other D-Bus providers |
 | `src/components/clock.rs` | Reference `Component` implementation |
+| `src/components/notifications.rs` | Reference island implementation |
+| `src/components/toolbox/` | Status icons and their detail panel; add entries in `items.rs` |
+| `src/system.rs` | `SystemStatus`: polls network, Bluetooth, audio, backlight, battery |
 | `src/config/mod.rs`, `theme.rs`, `animation.rs`, `watchable.rs` | `config_path`, `Theme`, `AnimationConfig` + hot-reload |
 
 The workspace widget crates (not yet used by the bar — see

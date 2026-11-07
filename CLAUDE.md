@@ -44,8 +44,7 @@ day-to-day development uses the devShell and Cargo, not `nix build`.
 
 This is a **Cargo workspace** of five crates plus the bar binary. The binary
 (`my_shell`, root `Cargo.toml`, `src/`) is the only thing that talks Wayland;
-the other four are a layered, presentation-only widget toolkit that the binary
-does **not** currently depend on:
+the others are a layered, presentation-only widget toolkit:
 
 ```
 ui_core   → no internal deps (skia-safe, serde)      geometry, pointer/keyboard
@@ -55,18 +54,18 @@ ui_widget → ui_core                                   Widget trait, Row/Column
 m3_widget → ui_core, ui_widget                         Material 3 widgets
 m3_test   → ui_core, m3_widget (dev harness, winit)    `cargo run -p m3_test`
 macros    → nothing                                    boxed!(a, b, c) -> Vec<Box<..>>
-my_shell  → ui_core, macros (+ calloop, wayland, zbus, tokio, …)  the bar
+my_shell  → ui_core, m3_widget, macros (+ calloop, wayland, zbus, tokio, …)  the bar
 ```
 
-**`my_shell` depends on `ui_core` only** — it does not yet pull in `ui_widget`
-or `m3_widget`. The M3 widget stack is developed and demoed standalone via
+The bar's own UI is built from `Component`s. It uses `m3_widget` for icons and the
+toolbox's sliders. The M3 widget stack is developed and demoed standalone via
 `cargo run -p m3_test` (a winit+softbuffer gallery), not inside the bar. See
 [docs/widgets.md](docs/widgets.md) for the full crate/trait reference.
 
 **Two different, easily-confused traits exist:**
 - `Component` (`src/ui.rs`, bar-only) — what the bar's UI is built from today.
-- `Widget` (`ui_widget::Widget`, workspace-only) — what `m3_widget` implements.
-  Not used by the bar (yet).
+- `Widget` (`ui_widget::Widget`) — what `m3_widget` implements. The bar uses one
+  directly only for the toolbox's sliders.
 They are not related and do not share a supertrait. See
 [docs/widgets.md](docs/widgets.md) for the distinction in detail.
 
@@ -74,7 +73,8 @@ The bar itself is one event loop (`calloop`) driving N `Screen`s (one per
 Wayland output). `Shell` (in `src/main.rs`) owns all Wayland/SCTK state; its SCTK
 handlers live in `src/output.rs` (compositor, output, layer), `src/seat.rs` (seat,
 pointer) and `src/dnd.rs` (data device). Per output it creates a `Top`-layer surface anchored to the
-bottom/left/right edges with a 60px exclusive zone.
+bottom/left/right edges with a 60px exclusive zone. The surface is taller than that:
+the headroom above the bar is transparent and click-through, and islands grow into it.
 
 ### Rendering is event-driven, not a render loop
 There is no redraw flag on `UIState`. Each `Screen` tracks `needs_redraw` and
@@ -83,7 +83,7 @@ draws immediately unless a `wl_surface.frame` callback is still outstanding
 (`frame_pending`), in which case the frame callback (`CompositorHandler::frame`)
 redraws once it fires. `Shell::draw` sets `frame_pending = true`, wraps the SHM
 buffer's pixels directly with Skia (`surfaces::wrap_pixels` — no GPU surface),
-calls `screen.ui.draw(canvas, &state, &font)`, sets `needs_redraw` to whether that
+calls `screen.ui.draw(canvas, &state, &font, width)`, sets `needs_redraw` to whether that
 returned `Animating`, requests a new frame callback, and commits.
 
 Component handlers report whether a redraw is needed via `Redraw { None, Now,
@@ -92,7 +92,15 @@ Animating }` (`src/ui.rs`); `UserInterface` folds every component's result with
 `draw` makes that screen's next frame callback repaint it — this is how a running
 `Animation` keeps repainting itself every frame without any handler having to
 reschedule it explicitly. A `CLOCK_TICK` calloop timer in `main()` also repaints
-every screen once a second.
+every screen once a second and expires notifications.
+
+### Islands (Dynamic Island-style UI)
+`UserInterface::draw` paints the bar and at most one island as a single silhouette
+(`ui_core::island`), morphing it with `IslandMorph` and scaling its content along with it. A component bids by
+returning an `IslandRequest` from `Component::island`; the highest `priority` wins.
+The owner draws its content in `draw_island` and receives pointer events in
+`on_island_cursor`. `Shell::update_input_region` limits input to the bar and island.
+See [docs/components.md](docs/components.md).
 
 ### The five async input channels (wired in `main()`)
 Background threads/providers feed the calloop event loop through
@@ -108,15 +116,19 @@ calls `shell.dispatch`, which fans the message out to every `Screen` and calls
 | `KDEConnectEvent` | `screen.ui.on_kde_connect_event` |
 | `WarpStatus` | `screen.ui.on_warp` |
 
-A sixth channel, `UiEvent` (`RequestRedrawAll`/`AnimationUpdated`), drives `Shell` directly rather than going through a
+`SystemStatus` (`src/system.rs`) has its own channel too: its closure updates
+`UIState.system` and repaints every screen, since the toolbox always shows it.
+
+A sixth channel, `UiEvent` (`RequestRedrawAll`/`AnimationUpdated`/`DismissNotification`), drives `Shell` directly rather than going through a
 `Component` method.
 
 `UserInterface` (`src/ui.rs`) holds `Vec<Box<dyn Component>>`; every `on_*` handler
 fans out to every `Component`. `Shell` holds the one `UIState` shared by all screens
-(currently `players: HashMap<String, PlayerState>` and `warp: Option<WarpStatus>`),
+(currently `players: HashMap<String, PlayerState>`, `warp: Option<WarpStatus>` and
+`notifications: NotificationStore`),
 updated in the channel closures in `main()` before dispatching. **All drawing lives in components** — `UserInterface::draw`
-only clears the canvas to `theme.surface_container` and calls each
-`Component::draw`; there is no inline text drawing left in `main.rs`/`ui.rs`.
+only paints the bar and island background and calls each
+`Component::draw`/`draw_island`; there is no inline text drawing left in `main.rs`/`ui.rs`.
 
 ### Window-manager IPC abstraction (`src/ipc/`)
 `ipc::listen` selects a backend at runtime from `$XDG_CURRENT_DESKTOP` (`niri` or
@@ -141,4 +153,4 @@ there is no silent fallback. Register every key you use before the first draw.
 event-mapping work. Current live state: niri IPC handles workspace + window-focus
 changes; MPRIS events arrive and update `UIState.players`. Hyprland IPC is a parked
 stub. The M3 widget stack (`ui_widget`/`m3_widget`) is under active
-development against the `m3_test` gallery and is not yet wired into the bar.
+development against the `m3_test` gallery.

@@ -34,15 +34,16 @@ versions (`[workspace.dependencies]` in the root `Cargo.toml`): `skia-safe`/
 ## `ui_core` — presentation-only primitives
 
 No layout-engine dependency (deliberately no `taffy`), no Wayland/windowing
-dependency. `ui_core::lib.rs` re-exports: `animation`, `font`, `geometry`,
+dependency. `ui_core::lib.rs` re-exports: `animation`, `font`, `geometry`, `island`,
 `keyboard`, `pointer`, `scheme`, `util`.
 
 | Module | Contents |
 |---|---|
 | `geometry` | `LayoutRect { x, y, width, height: f32 }` — the single source of truth for a widget's assigned position/size, layout-engine-agnostic. `new`, `empty`, `contains(x,y)`, `inset`/`outset`, `to_skia`. `Size { width, height }` — a widget's *intrinsic* measured footprint (distinct concept: what it wants vs. where it was placed). |
+| `island` | `island_path(bar, island, corner, fillet) -> Path` — the continuous outline of a bar with an island growing from its top edge, valid down to zero height, with a side flush with the bar's end left square. `IslandMorph` — animates an island between rectangles, leaving from and returning to a resting one: `morph_to(target, rest)` and `collapse` are safe to call every frame, `rect()` returns its current `LayoutRect`, or `None` at rest. |
 | `pointer` | `type Point = (f64, f64)`; `PointerEventKind { Enter, Leave, Motion, Press{button}, Release{button}, Axis{horizontal, vertical} }`; `PointerEvent { position, kind }` with `x()`/`y()`/`button()`/`is_press()`/`is_release()`; `AxisScroll { absolute, discrete, stop }`; `button::{LEFT, RIGHT, MIDDLE}` constants. |
 | `keyboard` | `KeyboardEvent { kind, modifiers }`; `KeyboardEventKind { Focus, Blur, Press{keysym,repeat}, Release{keysym}, Preedit{text,cursor}, Commit(String) }`; `Modifiers { ctrl, alt, shift, logo, caps_lock, num_lock }`; `insertable_text(&str) -> Option<String>` (filters the XKB control chars Backspace/Return/Escape/Delete map onto); `key::*` keysym constants. |
-| `util` | `BoundingBox { x, y, width, height }` — ink/text-extent measurement, distinct from `LayoutRect` (allocated space). `from_text(x, y, text, font)`, `zero()`, `is_cover(x, y)`. This is what `src/components/clock.rs` uses for hit-testing, not `LayoutRect`. |
+| `util` | `wrap_text(text, max_width, max_lines, measure)` — wraps at spaces or between chars, with an ellipsis when text is dropped. `BoundingBox { x, y, width, height }` — ink/text-extent measurement, distinct from `LayoutRect` (allocated space). `from_text(x, y, text, font)`, `zero()`, `is_cover(x, y)`. This is what `src/components/clock.rs` uses for hit-testing, not `LayoutRect`. |
 | `font` | `FontBook { typefaces: HashMap<String, Typeface> }`. `new()`, `register(key, family, style) -> &mut Self` (panics if the family can't be resolved), `sized(key, size) -> Font` — **panics if `key` was never registered**, no silent fallback. |
 | `animation::animation` | `Animation<T>` (only `Animation<f32>` implemented). `new(from, to, Duration, Easing)`, `value()`, `is_done()`, `is_traveling()` (not done AND `from != to`), `reset(from,to)`, `set_target(to)`, `transition_easing(e)`, `set_easing`, `set_duration`, `from()`/`to()`. Submodule `easing` with ~30 standard curves (`ease_in/out/in_out_{sine,quad,cubic,quart,quint,expo,circ,back,elastic,bounce}`). |
 | `animation::parser` | `type Easing = Arc<dyn Fn(f32) -> f32>`; `cubic_bezier(x1,y1,x2,y2) -> Easing`; `css_to_easing` parses CSS timing-function syntax (consumed by `src/config/animation`). |
@@ -79,9 +80,9 @@ them:
 | `draw` signature | `(&mut self, canvas, &UIState, &FontBook, &ColorTheme) -> Redraw` | `(&mut self, canvas, &ColorTheme, &FontBook) -> bool` |
 | draw return meaning | `Redraw::{None,Now,Animating}` | `bool` = "still animating, schedule another frame" |
 | pointer/keyboard | `on_cursor(&PointerEvent) -> Redraw` only | `on_pointer` / `on_keyboard`, both `-> bool` (consumed) |
-| positioning | components position themselves ad hoc inside `draw` | host assigns via `set_layout_rect`; widgets must not own position independently |
-| who constructs it | `UserInterface::new` in the bar | `m3_test`'s gallery / any future bar integration |
-| currently used by the bar? | yes, exclusively | **no** |
+| positioning | `UserInterface` places them from `bar_slot`/`bar_width` and translates the canvas | host assigns via `set_layout_rect`; widgets must not own position independently |
+| who constructs it | `UserInterface::new` in the bar | `m3_test`'s gallery; the bar's toolbox for its sliders |
+| currently used by the bar? | yes, for all of its UI | only `Slider`, inside a `ToolboxItem` |
 
 Contract for `Widget::draw`: return `true` when an animation is still
 traveling, so the host knows to schedule another frame (this is the `Widget`

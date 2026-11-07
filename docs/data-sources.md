@@ -148,7 +148,9 @@ fn on_battery(&mut self, _event: &BatteryEvent) -> Redraw {
 
 Only `draw` is required; every other trait method has a default `Redraw::None`
 body. The full trait today: `draw`, `on_cursor`, `on_ipc`, `on_mpris`,
-`on_kde_connect_event`, `on_warp`, `on_notification`, `on_easing_updated`.
+`on_kde_connect_event`, `on_warp`, `on_notification`, `on_easing_updated`, the
+`on_drag_*`/`on_drop` handlers, and the island methods `island`, `draw_island`,
+`on_island_cursor`.
 **Never leave `todo!()` in a default body** — these are called unconditionally
 as events arrive and will crash the process.
 

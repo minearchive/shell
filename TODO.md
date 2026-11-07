@@ -8,13 +8,13 @@
 - [ ] From file
 
 ## Audio
-- [ ] status provider
+- [x] status provider
 - [ ] setting for each process
 - [ ] EQ
 - [ ] OSD
 
 ## Battery
-- [ ] status provider
+- [x] status provider
 - [ ] alert
 
 ## Monitor

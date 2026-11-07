@@ -1,10 +1,8 @@
 # Adding a Component
 
 Components are the primary UI extension point **for the bar binary**. Each
-lives in `src/components/`. `src/components/clock.rs` is the canonical
-reference implementation (animated, reacts to pointer input and easing
-reloads); `src/components/warp.rs` is the minimal reference (state-only,
-no animation).
+lives in `src/components/`. `src/components/clock.rs` is the minimal reference
+(state-only, no animation); `src/components/notifications.rs` shows an island.
 
 `Component` is unrelated to `ui_widget::Widget` — see
 [docs/widgets.md](widgets.md) if you were looking for the M3 widget stack
@@ -35,7 +33,7 @@ pub trait Component {
 ```
 
 `draw` takes `&mut self` (components mutate their own state while drawing —
-e.g. `Clock` updates its hit-test `BoundingBox` there) and returns `Redraw`
+e.g. a hit-test rect) and returns `Redraw`
 (`None` / `Now` / `Animating`), not `()`. `theme: &ColorTheme` is the resolved
 active-mode M3 palette (see [docs/config.md](config.md)); `fonts: &FontBook`
 comes from `ui_core::font`.
@@ -58,10 +56,11 @@ impl Component for MyWidget {
         Redraw::None
     }
 
-    // The rest have default Redraw::None bodies in the trait — implement only
-    // the ones your component reacts to. The full set beyond draw:
-    //   on_cursor, on_ipc, on_mpris, on_kde_connect_event,
-    //   on_warp, on_notification, on_easing_updated
+    // Everything has a default body in the trait — implement only what your
+    // component needs. The full set beyond draw: bar_slot, bar_width, island,
+    // draw_island, on_island_cursor, on_cursor, on_ipc, on_mpris,
+    // on_kde_connect_event, on_warp, on_notification, on_easing_updated,
+    // on_drag_enter, on_drag_motion, on_drag_leave, on_drop
     fn on_mpris(&mut self, _: &PlayerState, _: &MprisEvent) -> Redraw { Redraw::None }
 }
 ```
@@ -73,7 +72,7 @@ every event and will crash the process.
 
 Return `Redraw::Now` when something changed and needs one repaint, and
 `Redraw::Animating` while an `Animation` is still traveling (see
-`Clock::draw`, which returns `Animating` until `self.animation.is_done()`) —
+`UserInterface::draw` does for an island's morph) —
 `Animating` is what keeps a running animation's frames coming: `Shell::draw`
 leaves that screen's `needs_redraw` set, so its next frame callback repaints it.
 
@@ -88,15 +87,112 @@ pub mod my_widget;
 a `macro_rules!` that expands `boxed!(a, b)` to `vec![Box::new(a), Box::new(b)]`):
 ```rust
 let components: Vec<Box<dyn Component>> = boxed!(
-    Clock::new(animation),
-    Warp,
+    Clock,
+    Notifications::new(ui_tx),
+    Toolbox::new(system_commands, warp_commands),
     MyWidget::new(/* … */),
 );
 ```
-`UserInterface::new` itself takes `(theme: Arc<RwLock<Theme>>, animation: &RwLock<AnimationConfig>)`
-— pass whichever your new component needs through to its constructor from there.
+`UserInterface::new` itself takes `(theme, animation, ui_tx, system_commands, warp_commands)` — pass
+whichever your new component needs through to its constructor from there.
 
-## 3. Triggering redraws
+Bar placement comes from `bar_slot` (`Left`, `Right`, or the default `None`) and
+`bar_width`. `Right` slots run to the screen's edge, so add your own padding. `UserInterface`
+packs each end and translates the canvas, so `draw`'s
+origin is your slot's top-left corner, and `on_cursor` positions are relative to it.
+`ui::bar_baseline(&font)` centers text vertically.
+
+## 3. Growing an island
+
+`Notifications` (`src/components/notifications.rs`) is the reference. A bar has one
+island, so components bid for it:
+
+```rust
+fn island(&mut self, state: &UIState, fonts: &FontBook, max_width: f32) -> Option<IslandRequest> {
+    state.my_thing.as_ref()?;
+    Some(IslandRequest {
+        width: 300.0,
+        height: 80.0,
+        placement: IslandPlacement::Joined { center_x: None },
+        priority: 100,
+    })
+}
+
+fn draw_island(&mut self, canvas: &Canvas, size: (f32, f32), state: &UIState,
+               fonts: &FontBook, theme: &ColorTheme) -> Redraw {
+    // Origin is the content's top-left corner at full size.
+    Redraw::None
+}
+
+fn on_island_cursor(&mut self, event: &PointerEvent) -> Redraw {
+    // `event.position` is relative to the content's origin.
+    Redraw::None
+}
+```
+
+- `island` runs before every draw. Keep returning a request while you want the
+  island, and return `None` to collapse it. Changing the size morphs it.
+- The highest `priority` wins. On a tie, the later component does. `Notifications`
+  uses 100, or 200 for critical.
+- `draw_island` keeps being called while the island collapses, after `island` has
+  returned `None`, so keep a copy of what you were showing.
+- Draw at full size. The island scales and fades your content while it morphs, so
+  text never reflows mid-animation.
+- Size your request from the text with `ui_core::util::wrap_text` and draw it with
+  `FontBook::draw`, which falls back for glyphs the font lacks.
+- `height` is clamped to `ISLAND_MAX_HEIGHT` (`src/ui.rs`).
+- Islands rise from the bar's top edge in the bar's color, joined to it by curves.
+  `IslandPlacement::Joined` sits over a point on the bar and scales from nothing at its
+  bottom center. `IslandPlacement::Corner { from_width }` is flush with the screen's right
+  edge, widening from `from_width`, with content scaling from the bottom-right.
+- `draw_overlay` draws over the island's content, unscaled, at your bar slot's origin.
+  While you hold the island it receives an `IslandFrame` with `progress` and the content's
+  final rect, so something can move between the bar and the island. The toolbox's icons
+  do this.
+- To dismiss on a press outside the bar, return `true` from `captures_outside_press` while
+  open and handle `on_outside_press`. `src/catcher.rs` puts a transparent surface over that
+  screen meanwhile, so the press doesn't reach the window under it.
+- A press inside the island keeps delivering pointer events to its owner until release,
+  so a slider drag can leave the island.
+- Every screen runs its own island from the shared `UIState`. A component that changes
+  shared state from a click sends a `UiEvent`, as `DismissNotification` does.
+
+The morph's easing comes from the `island` key in `animation.toml`.
+
+## 4. Adding to the toolbox
+
+The toolbox (`src/components/toolbox/`) shows a row of icons in the bar's bottom-right
+corner. Clicking it opens a panel of details above it, as a `Corner` island, and each icon
+flies to its entry in the panel. Clicking the row again, the rest of the bar, or anywhere
+else on that screen closes it. `Caption` entries go across the top of the panel,
+half-width entries pair up in rows below them, and full-width entries stack below those. To add one, push it to
+`default_items` in `items.rs`; its position there sets its order in the bar and panel:
+
+```rust
+// A read-only tile. The closure returns its icon and line of detail.
+Box::new(InfoItem::new(DetailWidth::Half, "VPN", |status| {
+    (Icon::Check, status.vpn_name.clone())
+})),
+
+// A slider. Arguments: minimum, icon, current value (None disables it), on change.
+Box::new(SliderItem::new(
+    0.0,
+    |_| Icon::Brightness,
+    |status| status.mic_level,
+    move |value| { let _ = tx.send(SystemCommand::MicLevel(value)); },
+)),
+```
+
+`CaptionItem` is a small right-aligned line that the bar's icon fades into, as the battery
+does, and takes no space while it has nothing to say. `ChoiceItem` picks one of several options with a `SegmentedButton`; see the power profile
+entry. `SliderItem::panel_only()` leaves an entry's icon out of the bar. Anything else
+implements `ToolboxItem` directly. Add new glyphs to `m3_widget::Icon`.
+
+`SystemStatus` and its polling live in `src/system.rs`. Add a field, read it in
+`read_fast` (what the user adjusts, 1s) or `read_slow` (5s), and add a `SystemCommand`
+if it can be changed.
+
+## 5. Triggering redraws
 
 Components own no threads. Data arrives through a provider channel (see
 [docs/data-sources.md](data-sources.md)) and the `on_*` handler's `Redraw` return
@@ -109,7 +205,7 @@ unless a `wl_surface.frame` callback is still outstanding. There is no separate
 dirty flag on `UIState`. See CLAUDE.md's "Rendering is event-driven" section for
 the full model.
 
-## 4. Using fonts
+## 6. Using fonts
 
 `fonts.sized("noto_sans", 32.)` is always available — it is the only font
 registered by default, in `main()` right after `FontBook::new()` (Noto Sans
@@ -121,7 +217,7 @@ To use another font, add a `book.register(..)` call next to it.
 `FontBook::sized`) — there is no silent fallback. Register the key before any
 `draw` call can reach it.
 
-## 5. Reading shared state
+## 7. Reading shared state
 
 `UIState` (passed to `draw`) exposes:
 
@@ -129,6 +225,8 @@ To use another font, add a `book.register(..)` call next to it.
 |-------|------|---------|
 | `players` | `HashMap<String, PlayerState>` | Active MPRIS players, keyed by bus name |
 | `warp` | `Option<WarpStatus>` | Latest Cloudflare WARP status, if connected |
+| `notifications` | `NotificationStore` | Notifications on display; `current()` is the one to show |
+| `system` | `SystemStatus` | Network, Bluetooth, volume, backlight, battery and power profile |
 
 To surface new data to components, add a field to `UIState` and update it in the
 provider's channel closure in `main()`, before dispatching. See
