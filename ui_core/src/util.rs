@@ -44,3 +44,88 @@ impl Display for BoundingBox {
         )
     }
 }
+
+/// Breaks `text` into lines no wider than `max_width`, preferring spaces and
+/// otherwise breaking between chars (CJK has no spaces). Blank lines are dropped.
+/// Past `max_lines`, the last line ends in an ellipsis. A single char wider than `max_width` keeps its
+/// own line rather than being lost.
+pub fn wrap_text(
+    text: &str,
+    max_width: f32,
+    max_lines: usize,
+    measure: impl Fn(&str) -> f32,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    for paragraph in text.lines() {
+        if lines.len() > max_lines {
+            break;
+        }
+        let mut line = String::new();
+        for c in paragraph.chars() {
+            line.push(c);
+            if measure(&line) <= max_width || line.chars().count() == 1 {
+                continue;
+            }
+            line.pop();
+            let rest = match line.rfind(' ') {
+                Some(space) if space > 0 && c != ' ' => {
+                    let rest = line[space + 1..].to_string();
+                    line.truncate(space);
+                    rest
+                }
+                _ => String::new(),
+            };
+            lines.push(std::mem::replace(&mut line, rest));
+            if c != ' ' {
+                line.push(c);
+            }
+            if lines.len() > max_lines {
+                break;
+            }
+        }
+        if !line.is_empty() {
+            lines.push(line);
+        }
+    }
+
+    if lines.len() > max_lines {
+        lines.truncate(max_lines);
+        if let Some(last) = lines.last_mut() {
+            while !last.is_empty() && measure(&format!("{last}…")) > max_width {
+                last.pop();
+            }
+            last.push('…');
+        }
+    }
+    lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Every char is 1 wide.
+    fn wrap(text: &str, max_width: f32, max_lines: usize) -> Vec<String> {
+        wrap_text(text, max_width, max_lines, |s| s.chars().count() as f32)
+    }
+
+    #[test]
+    fn prefers_spaces_and_breaks_cjk_between_chars() {
+        assert_eq!(wrap("hello big world", 9.0, 5), ["hello big", "world"]);
+        assert_eq!(wrap("日本語の通知", 4.0, 5), ["日本語の", "通知"]);
+        assert_eq!(wrap("first\nsecond", 9.0, 5), ["first", "second"]);
+    }
+
+    #[test]
+    fn ellipsizes_only_when_text_was_dropped() {
+        assert_eq!(wrap("aaaa bbbb cccc", 4.0, 2), ["aaaa", "bbb…"]);
+        assert_eq!(wrap("one\ntwo\nthree", 5.0, 2), ["one", "two…"]);
+        assert_eq!(wrap("aaaa bbbb", 4.0, 2), ["aaaa", "bbbb"]);
+    }
+
+    #[test]
+    fn handles_empty_and_oversized_input() {
+        assert!(wrap("", 4.0, 2).is_empty());
+        assert_eq!(wrap("ab", 0.5, 5), ["a", "b"]);
+    }
+}

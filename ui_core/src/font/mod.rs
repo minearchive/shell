@@ -3,6 +3,32 @@ use std::collections::HashMap;
 
 use skia_safe::{Canvas, Font, FontMgr, FontStyle, Paint, Point, Typeface};
 
+/// Chars with no ink of their own: controls and Unicode's default-ignorable code
+/// points. Fonts usually lack glyphs for them, so looking them up would draw tofu.
+fn is_invisible(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{AD}'
+                | '\u{34F}'
+                | '\u{61C}'
+                | '\u{115F}'..='\u{1160}'
+                | '\u{17B4}'..='\u{17B5}'
+                | '\u{180B}'..='\u{180F}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2060}'..='\u{206F}'
+                | '\u{3164}'
+                | '\u{FE00}'..='\u{FE0F}'
+                | '\u{FEFF}'
+                | '\u{FFA0}'
+                | '\u{FFF0}'..='\u{FFF8}'
+                | '\u{1BCA0}'..='\u{1BCA3}'
+                | '\u{1D173}'..='\u{1D17A}'
+                | '\u{E0000}'..='\u{E0FFF}'
+        )
+}
+
 struct Entry {
     typeface: Typeface,
     style: FontStyle,
@@ -50,7 +76,8 @@ impl FontBook {
     }
 
     /// Splits `text` into stretches drawable by a single typeface. Chars the
-    /// registered font has no glyph for are filled in from system fonts.
+    /// registered font has no glyph for are filled in from system fonts, and
+    /// invisible chars are dropped.
     ///
     /// ponytail: no shaping (splits per char). ZWJ emoji, combining marks and
     /// Arabic will break. Move to skia-safe's textlayout feature (skparagraph)
@@ -58,7 +85,7 @@ impl FontBook {
     pub fn runs(&self, key: &str, size: f32, text: &str) -> Vec<(String, Font)> {
         let entry = self.entry(key);
         let mut runs: Vec<(String, Font)> = Vec::new();
-        for c in text.chars() {
+        for c in text.chars().filter(|&c| !is_invisible(c)) {
             let typeface = if entry.typeface.unichar_to_glyph(c as i32) != 0 {
                 entry.typeface.clone()
             } else {
@@ -151,5 +178,25 @@ mod tests {
 
         // CJK measures non-zero once fallback kicks in.
         assert!(book.measure("t", 16.0, "日本語") > 0.0);
+    }
+
+    #[test]
+    fn invisible_chars_take_no_space() {
+        let book = book();
+        for text in [
+            "\u{2068}abc\u{2069}", // bidi isolates, as Discord sends around names
+            "a\u{200B}b\u{FEFF}c", // zero-width space, BOM
+            "abc\u{FE0F}",         // variation selector
+            "a\tb\rc",             // control chars
+        ] {
+            let runs = book.runs("t", 16.0, text);
+            let texts: Vec<&str> = runs.iter().map(|(s, _)| s.as_str()).collect();
+            assert_eq!(texts, ["abc"], "{text:?}");
+            assert_eq!(
+                book.measure("t", 16.0, text),
+                book.measure("t", 16.0, "abc")
+            );
+        }
+        assert!(book.runs("t", 16.0, "\u{2068}\u{2069}").is_empty());
     }
 }
