@@ -1,10 +1,10 @@
 use std::{
     sync::{Arc, RwLock},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use calloop::{
-    channel::{self, Channel},
+    channel::{self, Channel, Sender},
     timer::{TimeoutAction, Timer},
     EventLoop, LoopHandle,
 };
@@ -12,7 +12,7 @@ use calloop_wayland_source::WaylandSource;
 use log::{debug, info, warn};
 use skia_safe::{surfaces, ImageInfo};
 use smithay_client_toolkit::{
-    compositor::CompositorState,
+    compositor::{CompositorState, Region},
     data_device_manager::{data_device::DataDevice, data_offer::DragOffer, DataDeviceManagerState},
     delegate_compositor, delegate_data_device, delegate_layer, delegate_output, delegate_pointer,
     delegate_registry, delegate_seat, delegate_shm,
@@ -43,11 +43,11 @@ use crate::{
     dbus::{
         kdeconnect::{KDEConnectClient, KDEConnectCommand, KDEConnectEvent},
         mpris::PlayerState,
-        notification::{NotificationEvent, NotificationHandle},
+        notification::{CloseReason, NotificationEvent, NotificationHandle},
         warp::{WarpClient, WarpCommand, WarpStatus},
     },
     ipc::events::IPCEvent,
-    ui::{Redraw, UIState, UiEvent, UserInterface},
+    ui::{Redraw, UIState, UiEvent, UserInterface, BAR_HEIGHT, ISLAND_MAX_HEIGHT},
 };
 
 use ui_core::font::FontBook;
@@ -79,6 +79,8 @@ pub struct Screen {
     first_configure: bool,
     needs_redraw: bool,
     frame_pending: bool,
+    /// What the input region was last set from: `[width, ..island rect]`.
+    input_region: [i32; 5],
     ui: UserInterface,
     output: WlOutput,
 }
@@ -102,6 +104,8 @@ pub struct Shell {
     state: UIState,
     theme: Arc<RwLock<Theme>>,
     animation_config: Arc<RwLock<AnimationConfig>>,
+    ui_tx: Sender<UiEvent>,
+    notification_handle: Option<NotificationHandle>,
     _commands: Commands,
 }
 
@@ -137,11 +141,12 @@ fn main() {
 
     let (notification_tx, notification_rx) = channel::channel::<NotificationEvent>();
     // Losing the name to another notification daemon costs only this feature.
-    let _notification_handle = NotificationHandle::init(notification_tx)
+    let notification_handle = NotificationHandle::init(notification_tx)
         .map_err(|e| warn!("Notification server unavailable: {e}"))
         .ok();
     on_msg(&loop_handle, notification_rx, |event, shell| {
         debug!("{event:?}");
+        shell.state.notifications.apply(&event, Instant::now());
         shell.dispatch(|ui| ui.on_notification(&event));
     });
 
@@ -181,10 +186,21 @@ fn main() {
                 .max()
                 .unwrap_or_default()
         }),
+        UiEvent::DismissNotification(id) => {
+            if shell.state.notifications.remove(id) {
+                shell.notify_closed(id, CloseReason::Dismissed);
+                shell.request_redraw_all();
+            }
+        }
     });
 
     loop_handle
         .insert_source(Timer::from_duration(CLOCK_TICK), |_, _, shell| {
+            // ponytail: expiry is only as precise as this tick. Give it its own
+            // timer if a notification ever needs sub-second timing.
+            for id in shell.state.notifications.take_expired(Instant::now()) {
+                shell.notify_closed(id, CloseReason::Expired);
+            }
             shell.request_redraw_all();
             TimeoutAction::ToDuration(CLOCK_TICK)
         })
@@ -204,7 +220,8 @@ fn main() {
 
     let theme = Theme::load_and_watch(&config_path("theme.toml"), ui_tx.clone());
 
-    let animation_config = AnimationConfig::load_and_watch(&config_path("animation.toml"), ui_tx);
+    let animation_config =
+        AnimationConfig::load_and_watch(&config_path("animation.toml"), ui_tx.clone());
 
     let mut application = Shell {
         pool,
@@ -231,6 +248,8 @@ fn main() {
         state: UIState::default(),
         theme,
         animation_config,
+        ui_tx,
+        notification_handle,
         _commands: Commands {
             kdeconnect: kde_command_sender,
             warp: warp_command_sender,
@@ -295,6 +314,40 @@ impl Shell {
         }
     }
 
+    /// Tell the notification's sender it is gone.
+    fn notify_closed(&self, id: u32, reason: CloseReason) {
+        if let Some(handle) = &self.notification_handle {
+            if let Err(e) = handle.close(id, reason) {
+                warn!("Failed to signal notification {id} closed: {e}");
+            }
+        }
+    }
+
+    /// Limit input to what is visible, so the headroom above the bar clicks
+    /// through to the windows underneath.
+    fn update_input_region(&mut self, idx: usize, width: i32) {
+        let island = self.screen[idx].ui.island_rect().map_or([0; 4], |r| {
+            [
+                r.x.floor() as i32,
+                r.y.floor() as i32,
+                r.width.ceil() as i32,
+                r.height.ceil() as i32,
+            ]
+        });
+        let current = [width, island[0], island[1], island[2], island[3]];
+        if self.screen[idx].input_region == current {
+            return;
+        }
+        let Ok(region) = Region::new(&self.compositor_state) else {
+            return;
+        };
+        region.add(0, ISLAND_MAX_HEIGHT as i32, width, BAR_HEIGHT as i32);
+        region.add(island[0], island[1], island[2], island[3]);
+        let surface = self.screen[idx].layer.wl_surface();
+        surface.set_input_region(Some(region.wl_region()));
+        self.screen[idx].input_region = current;
+    }
+
     /// The drag offer currently being held over this bar, if any.
     fn drag_offer(&self) -> Option<DragOffer> {
         self.data_device
@@ -343,11 +396,13 @@ impl Shell {
         let info = ImageInfo::new_n32_premul((width as i32, height as i32), None);
         let mut skia_surface = surfaces::wrap_pixels(&info, canvas, stride as usize, None).unwrap();
 
-        let redraw = self.screen[idx]
-            .ui
-            .draw(skia_surface.canvas(), &self.state, &self.font);
+        let redraw =
+            self.screen[idx]
+                .ui
+                .draw(skia_surface.canvas(), &self.state, &self.font, width as f32);
         // An animating screen repaints itself from its next frame callback.
         self.screen[idx].needs_redraw = redraw == Redraw::Animating;
+        self.update_input_region(idx, width as i32);
 
         let surface = self.screen[idx].layer.wl_surface();
         surface.frame(&self.qh, surface.clone());

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use calloop::channel::Sender;
 use zbus::connection;
@@ -9,8 +10,11 @@ use zbus::{interface, Connection};
 const NAME: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
 
+/// How long a notification stays up when its sender leaves the choice to us.
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Urgency level carried in the `urgency` hint (a byte).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Urgency {
     Low,
     #[default]
@@ -58,6 +62,73 @@ pub struct NotificationSnapshot {
 pub enum NotificationEvent {
     Posted { id: u32, data: NotificationSnapshot },
     Closed { id: u32 },
+}
+
+pub struct ActiveNotification {
+    pub id: u32,
+    pub data: NotificationSnapshot,
+    expires: Option<Instant>,
+}
+
+/// The notifications currently on display, oldest first.
+#[derive(Default)]
+pub struct NotificationStore {
+    active: Vec<ActiveNotification>,
+}
+
+impl NotificationStore {
+    pub fn apply(&mut self, event: &NotificationEvent, now: Instant) {
+        match event {
+            NotificationEvent::Posted { id, data } => {
+                // Per spec, critical notifications never expire on their own.
+                let expires = match (data.urgency, data.expire_timeout) {
+                    (Urgency::Critical, _) | (_, 0) => None,
+                    (_, timeout) if timeout < 0 => Some(now + DEFAULT_TIMEOUT),
+                    (_, timeout) => Some(now + Duration::from_millis(timeout as u64)),
+                };
+                let entry = ActiveNotification {
+                    id: *id,
+                    data: data.clone(),
+                    expires,
+                };
+                match self.active.iter_mut().find(|n| n.id == *id) {
+                    Some(existing) => *existing = entry,
+                    None => self.active.push(entry),
+                }
+            }
+            NotificationEvent::Closed { id } => {
+                self.remove(*id);
+            }
+        }
+    }
+
+    /// The one to show: most urgent first, then newest.
+    pub fn current(&self) -> Option<&ActiveNotification> {
+        self.active.iter().max_by_key(|n| n.data.urgency)
+    }
+
+    pub fn len(&self) -> usize {
+        self.active.len()
+    }
+
+    /// Returns whether `id` was on display.
+    pub fn remove(&mut self, id: u32) -> bool {
+        let before = self.active.len();
+        self.active.retain(|n| n.id != id);
+        self.active.len() != before
+    }
+
+    /// Removes and returns the ids whose time is up.
+    pub fn take_expired(&mut self, now: Instant) -> Vec<u32> {
+        let expired: Vec<u32> = self
+            .active
+            .iter()
+            .filter(|n| n.expires.is_some_and(|at| at <= now))
+            .map(|n| n.id)
+            .collect();
+        self.active.retain(|n| n.expires.is_none_or(|at| at > now));
+        expired
+    }
 }
 
 pub struct NotificationServer {
@@ -160,12 +231,10 @@ impl NotificationServer {
     ) -> zbus::Result<()>;
 }
 
-#[allow(unused)]
 pub struct NotificationHandle {
     conn: Connection,
 }
 
-#[allow(unused)]
 impl NotificationHandle {
     pub fn init(sender: Sender<NotificationEvent>) -> zbus::Result<Self> {
         let conn = zbus::block_on(async move {
@@ -190,6 +259,7 @@ impl NotificationHandle {
     }
 
     /// Tell the sender the user clicked one of the notification's actions.
+    #[allow(unused)]
     pub fn invoke_action(&self, id: u32, action_key: &str) -> zbus::Result<()> {
         zbus::block_on(async {
             let iface = self
@@ -200,5 +270,81 @@ impl NotificationHandle {
             NotificationServer::action_invoked(iface.signal_emitter(), id, action_key.to_string())
                 .await
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn posted(id: u32, urgency: Urgency, expire_timeout: i32) -> NotificationEvent {
+        NotificationEvent::Posted {
+            id,
+            data: NotificationSnapshot {
+                urgency,
+                expire_timeout,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn shows_most_urgent_then_newest() {
+        let now = Instant::now();
+        let mut store = NotificationStore::default();
+        assert!(store.current().is_none());
+
+        store.apply(&posted(1, Urgency::Normal, -1), now);
+        store.apply(&posted(2, Urgency::Normal, -1), now);
+        assert_eq!(store.current().unwrap().id, 2);
+
+        store.apply(&posted(3, Urgency::Critical, -1), now);
+        store.apply(&posted(4, Urgency::Normal, -1), now);
+        assert_eq!(store.current().unwrap().id, 3);
+    }
+
+    #[test]
+    fn expiry_follows_timeout_and_urgency() {
+        let now = Instant::now();
+        let mut store = NotificationStore::default();
+        store.apply(&posted(1, Urgency::Normal, -1), now);
+        store.apply(&posted(2, Urgency::Normal, 0), now);
+        store.apply(&posted(3, Urgency::Normal, 100), now);
+        store.apply(&posted(4, Urgency::Critical, 100), now);
+
+        assert_eq!(
+            store.take_expired(now + Duration::from_millis(99)),
+            [0u32; 0]
+        );
+        assert_eq!(store.take_expired(now + Duration::from_millis(100)), [3]);
+        assert_eq!(store.take_expired(now + DEFAULT_TIMEOUT), [1]);
+        assert_eq!(
+            store.take_expired(now + Duration::from_secs(3600)),
+            [0u32; 0]
+        );
+        assert_eq!(store.len(), 2);
+    }
+
+    #[test]
+    fn replacing_keeps_one_entry_and_restarts_expiry() {
+        let now = Instant::now();
+        let later = now + DEFAULT_TIMEOUT;
+        let mut store = NotificationStore::default();
+        store.apply(&posted(1, Urgency::Normal, -1), now);
+        store.apply(&posted(1, Urgency::Normal, -1), later);
+
+        assert_eq!(store.len(), 1);
+        assert!(store.take_expired(later).is_empty());
+    }
+
+    #[test]
+    fn closing_removes_it() {
+        let now = Instant::now();
+        let mut store = NotificationStore::default();
+        store.apply(&posted(1, Urgency::Normal, -1), now);
+        store.apply(&NotificationEvent::Closed { id: 1 }, now);
+
+        assert_eq!(store.len(), 0);
+        assert!(!store.remove(1));
     }
 }

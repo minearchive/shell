@@ -19,9 +19,10 @@ use wayland_client::{
     Connection, QueueHandle,
 };
 
-use crate::{ui::UserInterface, Screen, Shell};
-
-const BAR_HEIGHT: u32 = 60;
+use crate::{
+    ui::{UserInterface, BAR_HEIGHT, ISLAND_MAX_HEIGHT},
+    Screen, Shell,
+};
 
 impl CompositorHandler for Shell {
     fn scale_factor_changed(
@@ -86,7 +87,7 @@ impl OutputHandler for Shell {
         );
 
         layer.set_anchor(Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
-        layer.set_size(0, BAR_HEIGHT);
+        layer.set_size(0, BAR_HEIGHT + ISLAND_MAX_HEIGHT);
         layer.set_exclusive_zone(BAR_HEIGHT as i32);
         // The bar must never steal keyboard focus from the user's window.
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
@@ -99,7 +100,12 @@ impl OutputHandler for Shell {
             first_configure: true,
             needs_redraw: false,
             frame_pending: false,
-            ui: UserInterface::new(Arc::clone(&self.theme), &self.animation_config),
+            input_region: [0; 5],
+            ui: UserInterface::new(
+                Arc::clone(&self.theme),
+                &self.animation_config,
+                self.ui_tx.clone(),
+            ),
             output,
         });
     }
