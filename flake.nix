@@ -38,6 +38,11 @@
           libxkbcommon
         ];
 
+        # Programs the bar runs: curl fetches players' remote cover art.
+        runtimePackages = with pkgs; [
+          curl
+        ];
+
         env = {
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
@@ -55,7 +60,12 @@
           version = "0.1.0";
           src = ./.;
 
-          cargoLock.lockFile = ./Cargo.lock;
+          cargoLock = {
+            lockFile = ./Cargo.lock;
+            outputHashes = {
+              "hyprland-0.4.0-beta.3" = "sha256-uhCZylXf81fvlBd6ToIOrlr3InVXLzv25LyvxxpmLWo=";
+            };
+          };
 
           nativeBuildInputs = with pkgs; [
             pkg-config
@@ -64,9 +74,15 @@
             cmake
             ninja
             python3
+            makeWrapper
           ];
 
           buildInputs = packages;
+
+          postFixup = ''
+            wrapProgram $out/bin/my_shell \
+              --suffix PATH : ${pkgs.lib.makeBinPath runtimePackages}
+          '';
 
           inherit (env) LIBCLANG_PATH;
         };
@@ -81,7 +97,8 @@
                 rustfmt
                 rust-analyzer
               ])
-              ++ packages;
+              ++ packages
+              ++ runtimePackages;
           }
           // env
         );
