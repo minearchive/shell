@@ -22,13 +22,13 @@ use ui_core::{
 };
 
 use crate::{
-    components::{clock::Clock, notifications::Notifications, toolbox::Toolbox, warp::Warp},
+    components::{clock::Clock, notifications::Notifications, toolbox::Toolbox},
     config::{animation::AnimationConfig, theme::Theme},
     dbus::{
         kdeconnect::KDEConnectEvent,
         mpris::PlayerState,
         notification::{NotificationEvent, NotificationStore},
-        warp::WarpStatus,
+        warp::{WarpCommand, WarpStatus},
     },
     ipc::events::IPCEvent,
     system::{SystemCommand, SystemStatus},
@@ -40,7 +40,7 @@ pub const BAR_HEIGHT: u32 = 60;
 ///
 /// ponytail: every repaint fills the full-width headroom too. Resize the surface
 /// with the island if that shows up on a profile.
-pub const ISLAND_MAX_HEIGHT: u32 = 300;
+pub const ISLAND_MAX_HEIGHT: u32 = 360;
 
 const BAR_TOP: f32 = ISLAND_MAX_HEIGHT as f32;
 const ISLAND_CORNER: f32 = 28.0;
@@ -335,12 +335,12 @@ impl UserInterface {
         animation: &RwLock<AnimationConfig>,
         ui_tx: Sender<UiEvent>,
         system_commands: UnboundedSender<SystemCommand>,
+        warp_commands: UnboundedSender<WarpCommand>,
     ) -> Self {
         let components: Vec<Box<dyn Component>> = boxed!(
             Clock,
-            Warp,
             Notifications::new(ui_tx),
-            Toolbox::new(system_commands)
+            Toolbox::new(system_commands, warp_commands)
         );
         let easing = animation
             .read()
@@ -681,6 +681,7 @@ mod tests {
             Arc::new(RwLock::new(theme)),
             &RwLock::new(AnimationConfig::default()),
             tx,
+            tokio::sync::mpsc::unbounded_channel().0,
             tokio::sync::mpsc::unbounded_channel().0,
         );
         let mut fonts = FontBook::new();

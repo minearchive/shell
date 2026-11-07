@@ -1,5 +1,5 @@
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use calloop::channel::Sender;
 use futures_util::StreamExt;
@@ -32,14 +32,29 @@ impl WarpStatus {
     pub fn is_connected(&self) -> bool {
         self.status.eq_ignore_ascii_case("connected")
     }
+
+    pub fn is_connecting(&self) -> bool {
+        self.status.eq_ignore_ascii_case("connecting")
+    }
+
+    fn connecting() -> Self {
+        Self {
+            status: "Connecting".to_string(),
+            reason: None,
+        }
+    }
 }
 
-#[allow(unused)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WarpCommand {
     Connect,
     Disconnect,
 }
+
+/// How soon to look again after a command, while the connection is still changing.
+const SETTLING_POLL: Duration = Duration::from_secs(1);
+/// The daemon may still read as disconnected this long after accepting a connect.
+const CONNECT_GRACE: Duration = Duration::from_secs(3);
 
 pub struct WarpClient;
 
@@ -79,22 +94,54 @@ impl WarpClient {
         poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         let mut last: Option<WarpStatus> = None;
+        let mut grace_until: Option<Instant> = None;
 
         // The first poll tick fires immediately, delivering the initial status.
         loop {
+            let mut settling = false;
             tokio::select! {
-                Some(cmd) = cmd_rx.recv() => run_command(cmd).await,
+                Some(cmd) = cmd_rx.recv() => {
+                    // Shown right away: the command itself can take a moment.
+                    let connecting = cmd == WarpCommand::Connect;
+                    if connecting {
+                        let _ = sender.send(WarpStatus::connecting());
+                        last = Some(WarpStatus::connecting());
+                    }
+                    let accepted = run_command(cmd).await;
+                    grace_until = (connecting && accepted).then(|| Instant::now() + CONNECT_GRACE);
+                    settling = true;
+                }
                 Some(_) = sni.next() => {}
                 _ = poll.tick() => {}
             }
 
             if let Some(status) = query_status().await {
+                let status = hide_stale_disconnect(status, grace_until, Instant::now());
+                settling |= status.is_connecting();
                 if last.as_ref() != Some(&status) {
                     let _ = sender.send(status.clone());
                     last = Some(status);
                 }
             }
+            if settling {
+                poll.reset_after(SETTLING_POLL);
+            }
         }
+    }
+}
+
+/// Keeps a connect that was just accepted from flickering back to disconnected.
+fn hide_stale_disconnect(
+    status: WarpStatus,
+    grace_until: Option<Instant>,
+    now: Instant,
+) -> WarpStatus {
+    let stale = status.status.eq_ignore_ascii_case("disconnected")
+        && grace_until.is_some_and(|until| now < until);
+    if stale {
+        WarpStatus::connecting()
+    } else {
+        status
     }
 }
 
@@ -122,7 +169,8 @@ async fn query_status() -> Option<WarpStatus> {
     }
 }
 
-async fn run_command(cmd: WarpCommand) {
+/// Returns whether the daemon accepted the command.
+async fn run_command(cmd: WarpCommand) -> bool {
     let arg = match cmd {
         WarpCommand::Connect => "connect",
         WarpCommand::Disconnect => "disconnect",
@@ -133,12 +181,18 @@ async fn run_command(cmd: WarpCommand) {
         .output()
         .await
     {
-        Ok(out) if !out.status.success() => log::warn!(
-            "warp: `warp-cli {arg}` failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ),
-        Err(e) => log::warn!("warp: could not run `warp-cli {arg}`: {e}"),
-        _ => {}
+        Ok(out) if out.status.success() => true,
+        Ok(out) => {
+            log::warn!(
+                "warp: `warp-cli {arg}` failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+            false
+        }
+        Err(e) => {
+            log::warn!("warp: could not run `warp-cli {arg}`: {e}");
+            false
+        }
     }
 }
 
@@ -170,6 +224,24 @@ mod tests {
         let status: WarpStatus = serde_json::from_slice(json).unwrap();
         assert_eq!(status.reason.as_deref(), Some("SettingsChanged"));
         assert!(!status.is_connected());
+    }
+
+    #[test]
+    fn disconnected_reads_as_connecting_only_during_the_grace() {
+        let now = Instant::now();
+        let read = |status: &str, until| {
+            let status = WarpStatus {
+                status: status.to_string(),
+                reason: None,
+            };
+            hide_stale_disconnect(status, until, now).status
+        };
+        let later = Some(now + CONNECT_GRACE);
+
+        assert_eq!(read("Disconnected", later), "Connecting");
+        assert_eq!(read("Connected", later), "Connected");
+        assert_eq!(read("Disconnected", Some(now)), "Disconnected");
+        assert_eq!(read("Disconnected", None), "Disconnected");
     }
 
     #[tokio::test]

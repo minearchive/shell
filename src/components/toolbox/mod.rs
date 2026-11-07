@@ -18,6 +18,7 @@ use ui_core::{
 
 use self::items::{default_items, DetailWidth, ToolboxItem};
 use crate::{
+    dbus::warp::{WarpCommand, WarpStatus},
     system::{SystemCommand, SystemStatus},
     ui::{
         BarSlot, Component, IslandFrame, IslandPlacement, IslandRequest, Redraw, UIState,
@@ -107,9 +108,12 @@ pub struct Toolbox {
 }
 
 impl Toolbox {
-    pub fn new(commands: UnboundedSender<SystemCommand>) -> Self {
+    pub fn new(
+        commands: UnboundedSender<SystemCommand>,
+        warp_commands: UnboundedSender<WarpCommand>,
+    ) -> Self {
         let mut toolbox = Self {
-            items: default_items(commands),
+            items: default_items(commands, warp_commands),
             rects: Vec::new(),
             panel_height: 0.0,
             open: false,
@@ -218,6 +222,14 @@ impl Component for Toolbox {
         }
     }
 
+    fn on_warp(&mut self, _status: &WarpStatus) -> Redraw {
+        if self.open {
+            Redraw::Now
+        } else {
+            Redraw::None
+        }
+    }
+
     fn captures_outside_press(&self) -> bool {
         self.open
     }
@@ -317,7 +329,7 @@ mod tests {
     #[test]
     fn battery_caption_appears_with_a_battery() {
         let (tx, _rx) = mpsc::unbounded_channel();
-        let mut toolbox = Toolbox::new(tx);
+        let mut toolbox = Toolbox::new(tx, mpsc::unbounded_channel().0);
 
         toolbox.lay_out(&SystemStatus::default());
         let without = toolbox.panel_height;
@@ -355,9 +367,20 @@ mod tests {
     }
 
     #[test]
+    fn warp_status_repaints_only_an_open_panel() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut toolbox = Toolbox::new(tx, mpsc::unbounded_channel().0);
+        let status = WarpStatus::default();
+
+        assert_eq!(toolbox.on_warp(&status), Redraw::None);
+        toolbox.open = true;
+        assert_eq!(toolbox.on_warp(&status), Redraw::Now);
+    }
+
+    #[test]
     fn row_toggles_and_presses_elsewhere_only_close() {
         let (tx, _rx) = mpsc::unbounded_channel();
-        let mut toolbox = Toolbox::new(tx);
+        let mut toolbox = Toolbox::new(tx, mpsc::unbounded_channel().0);
         toolbox.row_width = 100.0;
 
         assert_eq!(
@@ -386,7 +409,7 @@ mod tests {
     #[test]
     fn bar_shows_the_four_icons_and_the_panel_fits_the_headroom() {
         let (tx, _rx) = mpsc::unbounded_channel();
-        let toolbox = Toolbox::new(tx);
+        let toolbox = Toolbox::new(tx, mpsc::unbounded_channel().0);
 
         let status = SystemStatus {
             battery: Some(Battery {

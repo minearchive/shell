@@ -72,7 +72,6 @@ const CLOCK_TICK: Duration = Duration::from_secs(1);
 #[allow(unused)]
 pub struct Commands {
     kdeconnect: UnboundedSender<KDEConnectCommand>,
-    warp: UnboundedSender<WarpCommand>,
 }
 
 pub struct Screen {
@@ -110,6 +109,7 @@ pub struct Shell {
     animation_config: Arc<RwLock<AnimationConfig>>,
     ui_tx: Sender<UiEvent>,
     system_commands: UnboundedSender<SystemCommand>,
+    warp_commands: UnboundedSender<WarpCommand>,
     notification_handle: Option<NotificationHandle>,
     _commands: Commands,
 }
@@ -175,7 +175,7 @@ fn main() {
     });
 
     let (warp_tx, warp_rx) = channel::channel::<WarpStatus>();
-    let warp_command_sender = WarpClient::init(warp_tx);
+    let warp_commands = WarpClient::init(warp_tx);
     on_msg(&loop_handle, warp_rx, |status, shell| {
         shell.state.warp = Some(status.clone());
         shell.dispatch(|ui| ui.on_warp(&status));
@@ -262,10 +262,10 @@ fn main() {
         animation_config,
         ui_tx,
         system_commands,
+        warp_commands,
         notification_handle,
         _commands: Commands {
             kdeconnect: kde_command_sender,
-            warp: warp_command_sender,
         },
         data_device: None,
         dragging: None,

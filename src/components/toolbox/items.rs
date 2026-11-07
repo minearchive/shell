@@ -1,7 +1,9 @@
 //! What the toolbox shows. To add an entry, push one to [`default_items`]: most are
 //! an [`InfoItem`] or a [`SliderItem`], and anything else implements [`ToolboxItem`].
 
-use m3_widget::{icon::BatteryMark, Icon, Segment, SegmentedButton, Slider, Widget};
+use m3_widget::{
+    icon::BatteryMark, switch, Icon, Segment, SegmentedButton, Slider, Switch, Widget,
+};
 use skia_safe::{Canvas, Color4f, Paint, Point, RRect, Rect};
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -11,6 +13,7 @@ use ui_core::{
 };
 
 use crate::{
+    dbus::warp::WarpCommand,
     system::{BatteryState, Network, PowerProfile, SystemCommand, SystemStatus},
     ui::UIState,
 };
@@ -117,6 +120,94 @@ impl ToolboxItem for InfoItem {
         let text_right = rect.x + rect.width - INFO_PADDING;
         draw_tile(canvas, rect, text_right, self.title, &detail, fonts, theme);
         false
+    }
+}
+
+/// What a [`ToggleItem`] shows.
+pub struct ToggleState {
+    on: bool,
+    /// Mid-change: the switch can't be touched until it settles.
+    busy: bool,
+    detail: String,
+}
+
+/// A full-width tile with a switch, and no icon in the bar. What it shows always comes
+/// from `read`, so a failed change snaps back to the real state. Disabled while `read`
+/// returns `None`.
+pub struct ToggleItem {
+    title: &'static str,
+    icon: Icon,
+    read: fn(&UIState) -> Option<ToggleState>,
+    switch: Switch,
+}
+
+impl ToggleItem {
+    pub fn new(
+        title: &'static str,
+        icon: Icon,
+        read: fn(&UIState) -> Option<ToggleState>,
+        on_change: impl FnMut(bool) + 'static,
+    ) -> Self {
+        Self {
+            title,
+            icon,
+            read,
+            switch: Switch::new(false).on_change(on_change),
+        }
+    }
+}
+
+impl ToolboxItem for ToggleItem {
+    fn bar_icon(&self, _status: &SystemStatus) -> Option<Icon> {
+        None
+    }
+
+    fn icon_box(&self, rect: LayoutRect) -> Rect {
+        tile_icon_box(rect)
+    }
+
+    fn width(&self) -> DetailWidth {
+        DetailWidth::Full
+    }
+
+    fn height(&self, _status: &SystemStatus) -> f32 {
+        INFO_HEIGHT
+    }
+
+    fn draw(
+        &mut self,
+        canvas: &Canvas,
+        rect: LayoutRect,
+        state: &UIState,
+        fonts: &FontBook,
+        theme: &ColorTheme,
+    ) -> bool {
+        let read = (self.read)(state).unwrap_or(ToggleState {
+            on: false,
+            busy: true,
+            detail: "利用不可".to_string(),
+        });
+        self.switch.set_enabled(!read.busy);
+        self.switch.set_checked(read.on);
+        let detail = read.detail;
+
+        let switch_x = rect.x + rect.width - INFO_PADDING - switch::TRACK_WIDTH;
+        let text_right = switch_x - INFO_PADDING;
+        draw_tile(canvas, rect, text_right, self.title, &detail, fonts, theme);
+        self.icon
+            .draw(canvas, self.icon_box(rect), theme.on_surface);
+
+        self.switch.set_layout_rect(LayoutRect::new(
+            switch_x,
+            rect.y + (rect.height - switch::TRACK_HEIGHT) / 2.0,
+            switch::TRACK_WIDTH,
+            switch::TRACK_HEIGHT,
+        ));
+        self.switch.draw(canvas, theme, fonts)
+    }
+
+    fn on_pointer(&mut self, event: &PointerEvent) -> bool {
+        self.switch.on_pointer(event)
     }
 }
 
@@ -394,7 +485,10 @@ impl ToolboxItem for ChoiceItem {
 
 /// The toolbox's contents. Their order is the order in the bar, and in the panel
 /// within each [`DetailWidth`].
-pub fn default_items(commands: UnboundedSender<SystemCommand>) -> Vec<Box<dyn ToolboxItem>> {
+pub fn default_items(
+    commands: UnboundedSender<SystemCommand>,
+    warp_commands: UnboundedSender<WarpCommand>,
+) -> Vec<Box<dyn ToolboxItem>> {
     let (volume_tx, brightness_tx, profile_tx) = (commands.clone(), commands.clone(), commands);
     vec![
         Box::new(InfoItem::new(
@@ -404,6 +498,31 @@ pub fn default_items(commands: UnboundedSender<SystemCommand>) -> Vec<Box<dyn To
                 Network::Wifi(name) => (Icon::Wifi, name.clone()),
                 Network::Wired(name) => (Icon::Ethernet, format!("有線: {name}")),
                 Network::Disconnected => (Icon::WifiOff, "未接続".to_string()),
+            },
+        )),
+        Box::new(ToggleItem::new(
+            "WARP",
+            Icon::Shield,
+            |state| {
+                let warp = state.warp.as_ref()?;
+                let detail = match warp.status.as_str() {
+                    "Connected" => "接続済み",
+                    "Connecting" => "接続中",
+                    "Disconnected" => "未接続",
+                    other => other,
+                };
+                Some(ToggleState {
+                    on: warp.is_connected() || warp.is_connecting(),
+                    busy: warp.is_connecting(),
+                    detail: detail.to_string(),
+                })
+            },
+            move |on| {
+                let _ = warp_commands.send(if on {
+                    WarpCommand::Connect
+                } else {
+                    WarpCommand::Disconnect
+                });
             },
         )),
         Box::new(SliderItem::new(
@@ -479,6 +598,7 @@ mod tests {
     use super::*;
     use crate::{
         config::{theme::Theme, WatchableConfig},
+        dbus::warp::WarpStatus,
         system::Volume,
     };
 
@@ -487,6 +607,92 @@ mod tests {
             system: system.clone(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn toggle_sends_a_command_and_shows_only_the_confirmed_state() {
+        let theme = Theme::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("example/theme.toml"));
+        let mut fonts = FontBook::new();
+        fonts.register(FONT, "Noto Sans CJK JP", FontStyle::normal());
+        let mut surface = surfaces::raster_n32_premul((400, 100)).unwrap();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut item = default_items(mpsc::unbounded_channel().0, tx)
+            .into_iter()
+            .nth(1)
+            .unwrap();
+        let rect = LayoutRect::new(0.0, 0.0, 348.0, INFO_HEIGHT);
+        let warp = |status: &str| UIState {
+            warp: Some(WarpStatus {
+                status: status.to_string(),
+                reason: None,
+            }),
+            ..Default::default()
+        };
+        let click = |item: &mut Box<dyn ToolboxItem>| {
+            for kind in [
+                PointerEventKind::Press {
+                    button: button::LEFT,
+                },
+                PointerEventKind::Release {
+                    button: button::LEFT,
+                },
+            ] {
+                item.on_pointer(&PointerEvent::new((300.0, 28.0), kind));
+            }
+        };
+
+        // No status yet: `warp-cli` may not even exist, so the switch does nothing.
+        item.draw(
+            surface.canvas(),
+            rect,
+            &UIState::default(),
+            &fonts,
+            theme.theme(),
+        );
+        click(&mut item);
+        assert!(rx.try_recv().is_err());
+
+        item.draw(
+            surface.canvas(),
+            rect,
+            &warp("Disconnected"),
+            &fonts,
+            theme.theme(),
+        );
+        click(&mut item);
+        assert_eq!(rx.try_recv(), Ok(WarpCommand::Connect));
+
+        // Status still says disconnected: clicking again connects again, not disconnects.
+        item.draw(
+            surface.canvas(),
+            rect,
+            &warp("Disconnected"),
+            &fonts,
+            theme.theme(),
+        );
+        click(&mut item);
+        assert_eq!(rx.try_recv(), Ok(WarpCommand::Connect));
+
+        // Mid-connect the switch shows on, but can't be touched.
+        item.draw(
+            surface.canvas(),
+            rect,
+            &warp("Connecting"),
+            &fonts,
+            theme.theme(),
+        );
+        click(&mut item);
+        assert!(rx.try_recv().is_err());
+
+        item.draw(
+            surface.canvas(),
+            rect,
+            &warp("Connected"),
+            &fonts,
+            theme.theme(),
+        );
+        click(&mut item);
+        assert_eq!(rx.try_recv(), Ok(WarpCommand::Disconnect));
     }
 
     fn volume(level: f32) -> SystemStatus {
@@ -506,7 +712,9 @@ mod tests {
         fonts.register(FONT, "Noto Sans CJK JP", FontStyle::normal());
         let mut surface = surfaces::raster_n32_premul((400, 100)).unwrap();
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let mut item = default_items(tx).pop().unwrap();
+        let mut item = default_items(tx, mpsc::unbounded_channel().0)
+            .pop()
+            .unwrap();
 
         let status = SystemStatus {
             power_profile: Some(PowerProfile::Balanced),
@@ -564,8 +772,8 @@ mod tests {
         fonts.register(FONT, "Noto Sans CJK JP", FontStyle::normal());
         let mut surface = surfaces::raster_n32_premul((400, 100)).unwrap();
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let items = default_items(tx);
-        let mut item = items.into_iter().nth(1).unwrap();
+        let items = default_items(tx, mpsc::unbounded_channel().0);
+        let mut item = items.into_iter().nth(2).unwrap();
 
         let rect = LayoutRect::new(0.0, 0.0, 400.0, SLIDER_HEIGHT);
         let mut draw = |item: &mut Box<dyn ToolboxItem>, status: &SystemStatus| {
