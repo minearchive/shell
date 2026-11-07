@@ -17,7 +17,7 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
 
-        # Runtime/build deps (migrated from devenv.nix).
+        # Shared native build and runtime dependencies.
         packages = with pkgs; [
           gtk3
           gtk4
@@ -40,7 +40,12 @@
 
         env = {
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
-          LD_LIBRARY_PATH = "${pkgs.mesa}/lib:${pkgs.libGL}/lib:${pkgs.wayland}/lib:${pkgs.libxkbcommon}/lib";
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
+            pkgs.mesa
+            pkgs.libGL
+            pkgs.wayland
+            pkgs.libxkbcommon
+          ];
           __EGL_VENDOR_LIBRARY_DIRS = "/run/opengl-driver/share/glvnd/egl_vendor.d";
         };
       in

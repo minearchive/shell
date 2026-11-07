@@ -7,9 +7,6 @@ on:
       - "src/**.rs"
       - "Cargo.toml"
       - "Cargo.lock"
-      - "devenv.nix"
-      - "devenv.yaml"
-      - "devenv.lock"
       - "flake.nix"
       - "flake.lock"
   pull_request:
@@ -17,9 +14,6 @@ on:
       - "src/**.rs"
       - "Cargo.toml"
       - "Cargo.lock"
-      - "devenv.nix"
-      - "devenv.yaml"
-      - "devenv.lock"
       - "flake.nix"
       - "flake.lock"
   workflow_dispatch:
@@ -31,7 +25,7 @@ concurrency:
 
 jobs:
   build:
-    name: cargo build (devenv)
+    name: cargo build (Nix devShell)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -43,14 +37,6 @@ jobs:
           extra_nix_config: |
             accept-flake-config = true
             experimental-features = nix-command flakes
-
-      - name: Set up Cachix
-        uses: cachix/cachix-action@v16
-        with:
-          name: devenv
-
-      - name: Install devenv
-        run: nix profile install nixpkgs#devenv
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -65,4 +51,4 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Build
-        run: devenv shell -- cargo build --locked
+        run: nix develop --command cargo build --locked
