@@ -4,7 +4,7 @@
 //! a button-specific concept: icon buttons, segmented buttons and list items
 //! (see `list_item.rs`'s `IconDrawer`) all draw from the same set.
 
-use skia_safe::{Canvas, Color4f, Paint, PaintCap, PaintJoin, PathBuilder, Point, Rect};
+use skia_safe::{BlendMode, Canvas, Color4f, Paint, PaintCap, PaintJoin, PathBuilder, Point, Rect};
 
 use ui_core::scheme::color::Color;
 
@@ -12,6 +12,16 @@ use ui_core::scheme::color::Color;
 /// place the box themselves.
 pub const BOX_SIZE: f32 = 24.0;
 const ICON_STROKE_WIDTH: f32 = 2.0;
+
+/// What a battery icon says about the power supply, on top of its level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatteryMark {
+    None,
+    /// Charging.
+    Bolt,
+    /// Plugged in and full.
+    Check,
+}
 
 /// A small, built-in vector icon set, drawn as strokes/fills in a 24x24 box
 /// via [`skia_safe::PathBuilder`] — the same technique `switch.rs` uses for
@@ -31,6 +41,22 @@ pub enum Icon {
     /// Three dots (an overflow/"more" affordance).
     More,
     ArrowBack,
+    Wifi,
+    WifiOff,
+    Ethernet,
+    VolumeUp,
+    VolumeOff,
+    Bluetooth,
+    BluetoothOff,
+    /// `level` is a percentage; the fill tracks it.
+    Battery {
+        level: u8,
+        mark: BatteryMark,
+    },
+    /// An empty battery outline with a slash: there is no battery to report on.
+    BatteryMissing,
+    Brightness,
+    Shield,
 }
 
 impl Icon {
@@ -49,6 +75,35 @@ impl Icon {
             Icon::Settings => draw_settings(canvas, box_rect, color),
             Icon::More => draw_more(canvas, box_rect, color),
             Icon::ArrowBack => draw_arrow_back(canvas, box_rect, color),
+            Icon::Wifi => draw_wifi(canvas, box_rect, color),
+            Icon::WifiOff => {
+                draw_wifi(canvas, box_rect, color);
+                draw_slash(canvas, box_rect, color);
+            }
+            Icon::Ethernet => draw_ethernet(canvas, box_rect, color),
+            Icon::VolumeUp => {
+                draw_speaker(canvas, box_rect, color);
+                draw_sound_waves(canvas, box_rect, color);
+            }
+            Icon::VolumeOff => {
+                draw_speaker(canvas, box_rect, color);
+                draw_slash(canvas, box_rect, color);
+            }
+            Icon::Bluetooth => draw_bluetooth(canvas, box_rect, color),
+            Icon::BluetoothOff => {
+                draw_bluetooth(canvas, box_rect, color);
+                draw_slash(canvas, box_rect, color);
+            }
+            Icon::Battery { level, mark } => {
+                draw_battery_outline(canvas, box_rect, color);
+                draw_battery_level(canvas, box_rect, color, level, mark);
+            }
+            Icon::BatteryMissing => {
+                draw_battery_outline(canvas, box_rect, color);
+                draw_slash(canvas, box_rect, color);
+            }
+            Icon::Brightness => draw_brightness(canvas, box_rect, color),
+            Icon::Shield => draw_shield(canvas, box_rect, color),
         }
     }
 }
@@ -69,6 +124,167 @@ fn fill_paint(color: Color) -> Paint {
     paint.set_anti_alias(true);
     paint.set_color4f(Color4f::from(color), None);
     paint
+}
+
+/// A corner-to-corner stroke, marking an icon as off.
+fn draw_slash(canvas: &Canvas, box_rect: Rect, color: Color) {
+    let at = |x: f32, y: f32| Point::new(box_rect.left + x, box_rect.top + y);
+    canvas.draw_line(at(4.0, 4.0), at(20.0, 20.0), &stroke_paint(color));
+}
+
+/// Three arcs fanning up from a dot.
+fn draw_wifi(canvas: &Canvas, box_rect: Rect, color: Color) {
+    let center = Point::new(box_rect.left + 12.0, box_rect.top + 18.5);
+    let paint = stroke_paint(color);
+    for radius in [5.0, 10.0, 15.0] {
+        let oval = Rect::new(
+            center.x - radius,
+            center.y - radius,
+            center.x + radius,
+            center.y + radius,
+        );
+        canvas.draw_arc(oval, 225.0, 90.0, false, &paint);
+    }
+    canvas.draw_circle(center, 1.5, &fill_paint(color));
+}
+
+/// A box on top, branching down to three more: a network drop.
+fn draw_ethernet(canvas: &Canvas, box_rect: Rect, color: Color) {
+    let at = |x: f32, y: f32| Point::new(box_rect.left + x, box_rect.top + y);
+    let node = |x: f32, y: f32, size: f32| {
+        Rect::from_xywh(box_rect.left + x, box_rect.top + y, size, size)
+    };
+    let paint = stroke_paint(color);
+    let mut builder = PathBuilder::new();
+    builder.move_to(at(12.0, 9.0)).line_to(at(12.0, 16.0));
+    builder
+        .move_to(at(5.0, 16.0))
+        .line_to(at(5.0, 12.5))
+        .line_to(at(19.0, 12.5))
+        .line_to(at(19.0, 16.0));
+    canvas.draw_path(&builder.detach(), &paint);
+    canvas.draw_rect(node(9.0, 3.0, 6.0), &paint);
+    for x in [3.0, 10.0, 17.0] {
+        canvas.draw_rect(node(x, 16.0, 4.0), &paint);
+    }
+}
+
+/// A filled speaker cone, on the icon's left.
+fn draw_speaker(canvas: &Canvas, box_rect: Rect, color: Color) {
+    let at = |x: f32, y: f32| Point::new(box_rect.left + x, box_rect.top + y);
+    let mut builder = PathBuilder::new();
+    builder
+        .move_to(at(3.0, 9.0))
+        .line_to(at(7.0, 9.0))
+        .line_to(at(12.0, 4.5))
+        .line_to(at(12.0, 19.5))
+        .line_to(at(7.0, 15.0))
+        .line_to(at(3.0, 15.0))
+        .close();
+    canvas.draw_path(&builder.detach(), &fill_paint(color));
+}
+
+/// Two arcs coming off [`draw_speaker`].
+fn draw_sound_waves(canvas: &Canvas, box_rect: Rect, color: Color) {
+    let center = Point::new(box_rect.left + 12.0, box_rect.top + 12.0);
+    let paint = stroke_paint(color);
+    for radius in [4.0, 8.0] {
+        let oval = Rect::new(
+            center.x - radius,
+            center.y - radius,
+            center.x + radius,
+            center.y + radius,
+        );
+        canvas.draw_arc(oval, -50.0, 100.0, false, &paint);
+    }
+}
+
+/// The Bluetooth rune.
+fn draw_bluetooth(canvas: &Canvas, box_rect: Rect, color: Color) {
+    let at = |x: f32, y: f32| Point::new(box_rect.left + x, box_rect.top + y);
+    let mut builder = PathBuilder::new();
+    builder
+        .move_to(at(6.5, 7.5))
+        .line_to(at(17.5, 16.5))
+        .line_to(at(12.0, 21.0))
+        .line_to(at(12.0, 3.0))
+        .line_to(at(17.5, 7.5))
+        .line_to(at(6.5, 16.5));
+    canvas.draw_path(&builder.detach(), &stroke_paint(color));
+}
+
+fn draw_shield(canvas: &Canvas, box_rect: Rect, color: Color) {
+    let at = |x: f32, y: f32| Point::new(box_rect.left + x, box_rect.top + y);
+    let mut builder = PathBuilder::new();
+    builder
+        .move_to(at(12.0, 3.0))
+        .line_to(at(19.5, 6.0))
+        .line_to(at(19.5, 11.5))
+        .quad_to(at(19.5, 17.5), at(12.0, 21.0))
+        .quad_to(at(4.5, 17.5), at(4.5, 11.5))
+        .line_to(at(4.5, 6.0))
+        .close();
+    canvas.draw_path(&builder.detach(), &stroke_paint(color));
+}
+
+/// A horizontal cell with a terminal nub on its right.
+fn draw_battery_outline(canvas: &Canvas, box_rect: Rect, color: Color) {
+    let cell = Rect::from_xywh(box_rect.left + 2.0, box_rect.top + 7.0, 17.0, 10.0);
+    canvas.draw_round_rect(cell, 2.5, 2.5, &stroke_paint(color));
+    let nub = Rect::from_xywh(box_rect.left + 20.0, box_rect.top + 10.0, 2.0, 4.0);
+    canvas.draw_rect(nub, &fill_paint(color));
+}
+
+/// Fills [`draw_battery_outline`]'s cell to `level`, with any `mark` over it. The mark
+/// is carved out of the fill first, so it stays legible in one color at any level.
+fn draw_battery_level(canvas: &Canvas, box_rect: Rect, color: Color, level: u8, mark: BatteryMark) {
+    let at = |x: f32, y: f32| Point::new(box_rect.left + x, box_rect.top + y);
+    let width = 13.0 * f32::from(level.min(100)) / 100.0;
+    let fill = Rect::from_xywh(box_rect.left + 4.0, box_rect.top + 9.0, width, 6.0);
+
+    let mut builder = PathBuilder::new();
+    match mark {
+        BatteryMark::None => {
+            canvas.draw_rect(fill, &fill_paint(color));
+            return;
+        }
+        BatteryMark::Bolt => builder
+            .move_to(at(11.5, 8.0))
+            .line_to(at(8.5, 12.5))
+            .line_to(at(12.5, 11.5))
+            .line_to(at(9.5, 16.0)),
+        BatteryMark::Check => builder
+            .move_to(at(7.5, 12.0))
+            .line_to(at(9.5, 14.0))
+            .line_to(at(13.5, 10.0)),
+    };
+    let glyph = builder.detach();
+
+    canvas.save_layer_alpha_f(None, 1.0);
+    canvas.draw_rect(fill, &fill_paint(color));
+    let mut carve = stroke_paint(color);
+    carve.set_blend_mode(BlendMode::Clear);
+    carve.set_stroke_width(3.5);
+    canvas.draw_path(&glyph, &carve);
+    let mut stroke = stroke_paint(color);
+    stroke.set_stroke_width(1.5);
+    canvas.draw_path(&glyph, &stroke);
+    canvas.restore();
+}
+
+/// A filled disc with eight rays.
+fn draw_brightness(canvas: &Canvas, box_rect: Rect, color: Color) {
+    let center = Point::new(box_rect.left + 12.0, box_rect.top + 12.0);
+    canvas.draw_circle(center, 4.0, &fill_paint(color));
+    let paint = stroke_paint(color);
+    for ray in 0..8 {
+        let (sin, cos) = (ray as f32 * std::f32::consts::FRAC_PI_4).sin_cos();
+        canvas.draw_line(
+            Point::new(center.x + 7.0 * cos, center.y + 7.0 * sin),
+            Point::new(center.x + 9.5 * cos, center.y + 9.5 * sin),
+            &paint,
+        );
+    }
 }
 
 /// A checkmark, in the manner of `switch.rs`'s `draw_icon`.

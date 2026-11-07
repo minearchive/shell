@@ -194,6 +194,12 @@ impl Slider {
         self.value
     }
 
+    /// Whether a drag is under way. A host feeding in values from elsewhere should
+    /// hold off until it ends.
+    pub fn is_pressed(&self) -> bool {
+        self.pressed
+    }
+
     fn quantize(&self, value: f32) -> f32 {
         let value = value.clamp(self.min, self.max);
         match self.step {
