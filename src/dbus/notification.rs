@@ -2,10 +2,13 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use calloop::channel::Sender;
+use skia_safe::Image;
 use zbus::connection;
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::Value;
 use zbus::{interface, Connection};
+
+use super::notification_icon;
 
 const NAME: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
@@ -48,6 +51,8 @@ pub enum CloseReason {
 pub struct NotificationSnapshot {
     pub app_name: String,
     pub app_icon: String,
+    /// Already icon-sized, from whichever of the sender's sources worked.
+    pub icon: Option<Image>,
     pub summary: String,
     pub body: String,
     /// (key, label) pairs the user can invoke; the flat `as` list is paired up.
@@ -179,8 +184,11 @@ impl NotificationServer {
             .map(|pair| (pair[0].clone(), pair[1].clone()))
             .collect();
 
+        let icon = notification_icon::resolve(&app_icon, &hints);
+
         let data = NotificationSnapshot {
             app_name,
+            icon,
             app_icon,
             summary,
             body,
@@ -204,7 +212,7 @@ impl NotificationServer {
     }
 
     fn get_capabilities(&self) -> Vec<String> {
-        vec!["body".to_string()]
+        vec!["body".to_string(), "icon-static".to_string()]
     }
 
     fn get_server_information(&self) -> (String, String, String, String) {

@@ -1,17 +1,21 @@
 use calloop::channel::Sender;
-use skia_safe::{Canvas, Color4f, Paint, Point};
+use skia_safe::{Canvas, Color4f, Image, Paint, Point};
 use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind};
 
 use ui_core::{font::FontBook, pointer::button, scheme::ColorTheme, util::wrap_text};
 
 use crate::{
-    dbus::notification::{NotificationEvent, Urgency},
+    dbus::{
+        notification::{NotificationEvent, Urgency},
+        notification_icon::ICON_SIZE,
+    },
     ui::{Component, IslandPlacement, IslandRequest, Redraw, UIState, UiEvent, ISLAND_SIDE_MARGIN},
 };
 
 const FONT: &str = "noto_sans";
 const WIDTH: f32 = 460.0;
 const PADDING: f32 = 18.0;
+const ICON_GAP: f32 = 14.0;
 const APP_SIZE: f32 = 12.0;
 const SUMMARY_SIZE: f32 = 16.0;
 const BODY_SIZE: f32 = 14.0;
@@ -31,6 +35,7 @@ fn priority(urgency: Urgency) -> u8 {
 struct Shown {
     id: u32,
     urgency: Urgency,
+    icon: Option<Image>,
     app_name: String,
     summary: Vec<String>,
     body: Vec<String>,
@@ -38,13 +43,27 @@ struct Shown {
     others: usize,
 }
 
+/// Where the text starts, which is past the icon if there is one.
+fn text_x(has_icon: bool) -> f32 {
+    if has_icon {
+        PADDING + ICON_SIZE as f32 + ICON_GAP
+    } else {
+        PADDING
+    }
+}
+
 impl Shown {
     fn height(&self) -> f32 {
-        PADDING * 2.0
-            + (APP_SIZE
-                + SUMMARY_SIZE * self.summary.len() as f32
-                + BODY_SIZE * self.body.len() as f32)
-                * LINE_HEIGHT
+        let text = (APP_SIZE
+            + SUMMARY_SIZE * self.summary.len() as f32
+            + BODY_SIZE * self.body.len() as f32)
+            * LINE_HEIGHT;
+        let icon = if self.icon.is_some() {
+            ICON_SIZE as f32
+        } else {
+            0.0
+        };
+        PADDING * 2.0 + text.max(icon)
     }
 }
 
@@ -72,7 +91,8 @@ impl Component for Notifications {
     ) -> Option<IslandRequest> {
         let current = state.notifications.current()?;
         let width = WIDTH.min(bar_width - ISLAND_SIDE_MARGIN * 2.0);
-        let text_width = width - PADDING * 2.0;
+        let icon = current.data.icon.clone();
+        let text_width = width - text_x(icon.is_some()) - PADDING;
         let wrap = |text: &str, size: f32, lines: usize| {
             wrap_text(text, text_width, lines, |s| fonts.measure(FONT, size, s))
         };
@@ -80,6 +100,7 @@ impl Component for Notifications {
         let shown = Shown {
             id: current.id,
             urgency: current.data.urgency,
+            icon,
             app_name: current.data.app_name.clone(),
             summary: wrap(&current.data.summary, SUMMARY_SIZE, 1),
             body: wrap(&current.data.body, BODY_SIZE, MAX_BODY_LINES),
@@ -119,9 +140,14 @@ impl Component for Notifications {
             theme.on_surface
         });
 
+        if let Some(icon) = &shown.icon {
+            canvas.draw_image(icon, (PADDING, PADDING), None);
+        }
+
+        let x = text_x(shown.icon.is_some());
         let mut y = PADDING;
         let mut line = |text: &str, text_size: f32, paint: &Paint| {
-            let baseline = Point::new(PADDING, y + text_size);
+            let baseline = Point::new(x, y + text_size);
             fonts.draw(canvas, FONT, text_size, text, baseline, paint);
             y += text_size * LINE_HEIGHT;
         };
