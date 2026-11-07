@@ -1,13 +1,13 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, RwLock},
+    sync::{mpsc, Arc, RwLock},
     time::Duration,
 };
 
 use calloop::channel::Sender;
 use macros::boxed;
 
-use skia_safe::{Canvas, Color, Color4f, Font, Paint, Rect};
+use skia_safe::{Canvas, Color, Color4f, Font, Paint, PathBuilder, Rect};
 use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind};
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -18,15 +18,16 @@ use ui_core::{
     font::FontBook,
     geometry::LayoutRect,
     island::{island_path, IslandMorph},
+    pointer::{PointerEvent as CorePointerEvent, PointerEventKind as CoreKind},
     scheme::ColorTheme,
 };
 
 use crate::{
-    components::{clock::Clock, notifications::Notifications, toolbox::Toolbox},
+    components::{clock::Clock, media::Media, notifications::Notifications, toolbox::Toolbox},
     config::{animation::AnimationConfig, theme::Theme},
     dbus::{
         kdeconnect::KDEConnectEvent,
-        mpris::PlayerState,
+        mpris::{PlayerCommand, PlayerState},
         notification::{NotificationEvent, NotificationStore},
         warp::{WarpCommand, WarpStatus},
     },
@@ -68,12 +69,15 @@ pub enum IslandPlacement {
     /// Over a point on the bar, scaling up from nothing at its bottom center.
     /// `center_x` of `None` centers it on the bar.
     Joined { center_x: Option<f32> },
+    /// Centered like `Joined`, but reaching down over the bar to the screen's edge, taking
+    /// over the middle of the bar's row for as long as it is open.
+    OverBar,
     /// Flush with the screen's right edge, widening from `from_width` and scaling its
     /// content from the bottom-right.
     Corner { from_width: f32 },
 }
 
-/// A component's bid for the bar's island. Clamped to the available space.
+/// A component's bid for the bar's main island. Clamped to the available space.
 pub struct IslandRequest {
     /// The size of the content passed to `draw_island`.
     pub width: f32,
@@ -83,7 +87,7 @@ pub struct IslandRequest {
     pub priority: u8,
 }
 
-/// An island as of this frame, in the coordinates of its owner's bar slot.
+/// A component's island as of this frame, in the coordinates of its bar slot.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct IslandFrame {
     /// How far open it is: 0 at rest, 1 fully open.
@@ -92,10 +96,9 @@ pub struct IslandFrame {
     pub content: LayoutRect,
 }
 
-/// Who holds the island, and where it is going.
+/// Where an island is going.
 #[derive(Clone, Copy, Debug)]
 struct IslandSlot {
-    owner: usize,
     target: LayoutRect,
     placement: IslandPlacement,
 }
@@ -108,10 +111,27 @@ impl IslandSlot {
         let (width, height) = (self.target.width, self.target.height);
         let scale = (rect.width / width).min(rect.height / height).min(1.0);
         let x = match self.placement {
-            IslandPlacement::Joined { .. } => rect.x + (rect.width - width * scale) / 2.0,
+            IslandPlacement::Joined { .. } | IslandPlacement::OverBar => {
+                rect.x + (rect.width - width * scale) / 2.0
+            }
             IslandPlacement::Corner { .. } => rect.x + rect.width - width * scale,
         };
         (x, rect.y + rect.height - height * scale, scale)
+    }
+}
+
+/// A component's own island, which opens and collapses where it is, whatever the other
+/// components' islands are doing.
+struct Island {
+    morph: IslandMorph,
+    slot: Option<IslandSlot>,
+    /// Where it was on the last draw.
+    rect: Option<LayoutRect>,
+}
+
+impl Island {
+    fn visible(&self) -> Option<(IslandSlot, LayoutRect)> {
+        self.slot.zip(self.rect)
     }
 }
 
@@ -122,7 +142,22 @@ pub enum BarSlot {
     #[default]
     None,
     Left,
+    /// Centered on the bar, whatever is at either end.
+    Center,
     Right,
+}
+
+/// A bar pointer event as `m3_widget` wants it. Scrolling has no equivalent.
+pub fn to_core_event(event: &PointerEvent) -> Option<CorePointerEvent> {
+    let kind = match event.kind {
+        PointerEventKind::Enter { .. } => CoreKind::Enter,
+        PointerEventKind::Leave { .. } => CoreKind::Leave,
+        PointerEventKind::Motion { .. } => CoreKind::Motion,
+        PointerEventKind::Press { button, .. } => CoreKind::Press { button },
+        PointerEventKind::Release { button, .. } => CoreKind::Release { button },
+        PointerEventKind::Axis { .. } => return None,
+    };
+    Some(CorePointerEvent::new(event.position, kind))
 }
 
 /// The baseline that vertically centers `font` in the bar.
@@ -150,8 +185,8 @@ pub trait Component {
     ) -> Redraw {
         Redraw::None
     }
-    /// Asked before every draw. Return a request for as long as you want the
-    /// island.
+    /// Asked before every draw. Return a request for as long as you want the main
+    /// island. Only the winner's stays open: the others collapse until they win again.
     fn island(
         &mut self,
         _state: &UIState,
@@ -174,9 +209,9 @@ pub trait Component {
     ) -> Redraw {
         Redraw::None
     }
-    /// Draws over the island's content, unscaled, with the origin at your bar slot.
-    /// `island` is set while you hold the island, so something can move between the
-    /// bar and the island.
+    /// Draws over the island's content, unscaled, with the origin at your bar slot, and
+    /// clipped to the bar and islands so that nothing shows outside them. `island` is set
+    /// while your island is visible, so something can move between the bar and the island.
     fn draw_overlay(
         &mut self,
         _canvas: &Canvas,
@@ -263,8 +298,9 @@ impl UIState {
     }
 }
 
-/// Each component's x in the bar: `Left` slots run in order from the left end,
-/// `Right` slots end flush with the screen's edge, and empty ones take no gap.
+/// Each component's x in the bar: `Left` slots run in order from the left end, `Center`
+/// slots are centered as a group, `Right` slots end flush with the screen's edge, and
+/// empty ones take no gap.
 fn bar_origins(slots: &[(BarSlot, f32)], bar_width: f32) -> Vec<f32> {
     let mut origins = vec![0.0; slots.len()];
     let mut x = BAR_PADDING;
@@ -272,6 +308,21 @@ fn bar_origins(slots: &[(BarSlot, f32)], bar_width: f32) -> Vec<f32> {
         .iter_mut()
         .zip(slots)
         .filter(|(_, (slot, width))| *slot == BarSlot::Left && *width > 0.0)
+    {
+        *origin = x;
+        x += width + BAR_GAP;
+    }
+    let centered = slots
+        .iter()
+        .filter(|(slot, width)| *slot == BarSlot::Center && *width > 0.0);
+    let (count, total) = centered.fold((0.0, 0.0), |(count, total), (_, width)| {
+        (count + 1.0, total + width)
+    });
+    let mut x = (bar_width - total - BAR_GAP * (count - 1.0_f32).max(0.0)) / 2.0;
+    for (origin, (_, width)) in origins
+        .iter_mut()
+        .zip(slots)
+        .filter(|(_, (slot, width))| *slot == BarSlot::Center && *width > 0.0)
     {
         *origin = x;
         x += width + BAR_GAP;
@@ -290,6 +341,13 @@ fn bar_origins(slots: &[(BarSlot, f32)], bar_width: f32) -> Vec<f32> {
     origins
 }
 
+/// The part of an island that sticks out above the bar, which is all that shapes the
+/// silhouette: an island over the bar is the bar's color already.
+fn above_bar(rect: LayoutRect) -> LayoutRect {
+    let y = rect.y.min(BAR_TOP);
+    LayoutRect::new(rect.x, y, rect.width, BAR_TOP - y)
+}
+
 /// An island's destination and resting rectangles on a bar `width` wide.
 fn island_rects(request: &IslandRequest, width: f32) -> (LayoutRect, LayoutRect) {
     let h = request.height.min(BAR_TOP);
@@ -300,6 +358,15 @@ fn island_rects(request: &IslandRequest, width: f32) -> (LayoutRect, LayoutRect)
             (
                 LayoutRect::new(center_x - w / 2.0, BAR_TOP - h, w, h),
                 LayoutRect::new(center_x, BAR_TOP, 0.0, 0.0),
+            )
+        }
+        IslandPlacement::OverBar => {
+            let bottom = BAR_TOP + BAR_HEIGHT as f32;
+            let h = request.height.min(bottom);
+            let w = request.width.min(width - ISLAND_SIDE_MARGIN * 2.0);
+            (
+                LayoutRect::new((width - w) / 2.0, bottom - h, w, h),
+                LayoutRect::new(width / 2.0, bottom, 0.0, 0.0),
             )
         }
         IslandPlacement::Corner { from_width } => {
@@ -315,11 +382,10 @@ fn island_rects(request: &IslandRequest, width: f32) -> (LayoutRect, LayoutRect)
 pub struct UserInterface {
     components: Vec<Box<dyn Component>>,
     theme: Arc<RwLock<Theme>>,
-    morph: IslandMorph,
-    /// Who the island belongs to.
-    island_slot: Option<IslandSlot>,
-    /// Where the island was on the last draw.
-    island_rect: Option<LayoutRect>,
+    /// Each component's island.
+    islands: Vec<Island>,
+    /// The component whose island is open, the only one that stays that way.
+    main_island: Option<usize>,
     /// The component holding a press that began in its island, which keeps
     /// receiving the pointer until release so a drag can leave the island.
     island_grab: Option<usize>,
@@ -336,9 +402,11 @@ impl UserInterface {
         ui_tx: Sender<UiEvent>,
         system_commands: UnboundedSender<SystemCommand>,
         warp_commands: UnboundedSender<WarpCommand>,
+        player_commands: mpsc::Sender<PlayerCommand>,
     ) -> Self {
         let components: Vec<Box<dyn Component>> = boxed!(
             Clock,
+            Media::new(player_commands),
             Notifications::new(ui_tx),
             Toolbox::new(system_commands, warp_commands)
         );
@@ -349,21 +417,35 @@ impl UserInterface {
             .cloned()
             .unwrap_or(Arc::new(ease_out_cubic));
 
+        let islands = components
+            .iter()
+            .map(|_| Island {
+                morph: IslandMorph::new(ISLAND_MORPH, easing.clone()),
+                slot: None,
+                rect: None,
+            })
+            .collect();
+
         Self {
             components,
             theme,
-            morph: IslandMorph::new(ISLAND_MORPH, easing),
-            island_slot: None,
-            island_rect: None,
+            islands,
+            main_island: None,
             island_grab: None,
             island_hover: None,
             bar_origins: Vec::new(),
         }
     }
 
-    /// Where the island was on the last draw, in surface coordinates.
+    /// The island taking the pointer: the main one, or one still collapsing without one.
+    fn input_island(&self) -> Option<usize> {
+        self.main_island
+            .or_else(|| self.islands.iter().position(|i| i.rect.is_some()))
+    }
+
+    /// Where the island taking the pointer was on the last draw, in surface coordinates.
     pub fn island_rect(&self) -> Option<LayoutRect> {
-        self.island_rect
+        self.islands[self.input_island()?].rect
     }
 
     fn fan_out(&mut self, f: impl FnMut(&mut Box<dyn Component>) -> Redraw) -> Redraw {
@@ -415,32 +497,43 @@ impl UserInterface {
             .enumerate()
             .filter_map(|(i, c)| Some((i, c.island(state, fonts, width)?)))
             .max_by_key(|(_, request)| request.priority);
-        match request {
-            Some((owner, request)) => {
-                let (target, rest) = island_rects(&request, width);
-                self.morph.morph_to(target, rest);
-                self.island_slot = Some(IslandSlot {
-                    owner,
-                    target,
-                    placement: request.placement,
-                });
+        self.main_island = request.as_ref().map(|(owner, _)| *owner);
+        if let Some((owner, request)) = request {
+            let (target, rest) = island_rects(&request, width);
+            let island = &mut self.islands[owner];
+            island.morph.morph_to(target, rest);
+            island.slot = Some(IslandSlot {
+                target,
+                placement: request.placement,
+            });
+        }
+        for (i, island) in self.islands.iter_mut().enumerate() {
+            if self.main_island != Some(i) {
+                island.morph.collapse();
             }
-            None => self.morph.collapse(),
+            island.rect = island.morph.rect();
+            if island.rect.is_none() {
+                island.slot = None;
+            }
         }
-        self.island_rect = self.morph.rect();
-        if self.island_rect.is_none() {
-            self.island_slot = None;
-        }
-        let visible = self.island_slot.zip(self.island_rect);
 
-        let scale = visible.map_or(0.0, |(slot, rect)| slot.content_transform(rect).2);
-        let silhouette = island_path(
-            LayoutRect::new(0.0, BAR_TOP, width, BAR_HEIGHT as f32),
-            self.island_rect
-                .unwrap_or(LayoutRect::new(width / 2.0, BAR_TOP, 0.0, 0.0)),
-            ISLAND_CORNER * scale,
-            ISLAND_FILLET * scale,
-        );
+        let bar = LayoutRect::new(0.0, BAR_TOP, width, BAR_HEIGHT as f32);
+        let flat = LayoutRect::new(width / 2.0, BAR_TOP, 0.0, 0.0);
+        let mut silhouette = PathBuilder::new();
+        silhouette.add_path(&island_path(bar, flat, 0.0, 0.0), None);
+        for (slot, rect) in self.islands.iter().filter_map(Island::visible) {
+            let scale = slot.content_transform(rect).2;
+            silhouette.add_path(
+                &island_path(
+                    bar,
+                    above_bar(rect),
+                    ISLAND_CORNER * scale,
+                    ISLAND_FILLET * scale,
+                ),
+                None,
+            );
+        }
+        let silhouette = silhouette.detach();
         let mut paint = Paint::new(Color4f::from(theme.surface_container), None);
         paint.set_anti_alias(true);
         canvas.draw_path(&silhouette, &paint);
@@ -460,41 +553,46 @@ impl UserInterface {
             canvas.restore();
         }
 
-        if let Some((slot, rect)) = visible {
+        // The main island goes last, on top of any collapsing into the same place.
+        let others = (0..self.islands.len()).filter(|i| self.main_island != Some(*i));
+        for i in others.chain(self.main_island).collect::<Vec<_>>() {
+            let Some((slot, rect)) = self.islands[i].visible() else {
+                continue;
+            };
             let (x, y, scale) = slot.content_transform(rect);
             let size = (slot.target.width, slot.target.height);
             let saved = canvas.save();
             canvas.translate((x, y));
             canvas.scale((scale, scale));
             canvas.save_layer_alpha_f(Rect::from_wh(size.0, size.1), scale);
-            redraw = redraw
-                .max(self.components[slot.owner].draw_island(canvas, size, state, fonts, theme));
+            redraw = redraw.max(self.components[i].draw_island(canvas, size, state, fonts, theme));
             canvas.restore_to_count(saved);
         }
 
-        for (i, (c, origin)) in self
+        let saved = canvas.save();
+        canvas.clip_path(&silhouette, None, true);
+        for ((c, origin), island) in self
             .components
             .iter_mut()
             .zip(&self.bar_origins)
-            .enumerate()
+            .zip(&self.islands)
         {
-            let island = visible
-                .filter(|(slot, _)| slot.owner == i)
-                .map(|(slot, _)| IslandFrame {
-                    progress: scale,
-                    content: LayoutRect {
-                        x: slot.target.x - origin,
-                        y: slot.target.y - BAR_TOP,
-                        ..slot.target
-                    },
-                });
+            let island = island.visible().map(|(slot, rect)| IslandFrame {
+                progress: slot.content_transform(rect).2,
+                content: LayoutRect {
+                    x: slot.target.x - origin,
+                    y: slot.target.y - BAR_TOP,
+                    ..slot.target
+                },
+            });
             canvas.save();
             canvas.translate((*origin, BAR_TOP));
             redraw = redraw.max(c.draw_overlay(canvas, island, state, fonts, theme));
             canvas.restore();
         }
+        canvas.restore_to_count(saved);
 
-        if self.morph.is_traveling() {
+        if self.islands.iter().any(|i| i.morph.is_traveling()) {
             redraw = Redraw::Animating;
         }
         redraw
@@ -509,10 +607,11 @@ impl UserInterface {
             None
         } else {
             self.island_grab.or_else(|| {
-                self.island_slot
-                    .zip(self.island_rect)
-                    .filter(|(_, rect)| rect.contains(x as f32, y as f32))
-                    .map(|(slot, _)| slot.owner)
+                self.input_island().filter(|i| {
+                    self.islands[*i]
+                        .rect
+                        .is_some_and(|rect| rect.contains(x as f32, y as f32))
+                })
             })
         };
         if let Some(owner) = target {
@@ -522,14 +621,14 @@ impl UserInterface {
                 _ => {}
             }
             self.island_hover = Some(owner);
-            local.position = self.to_island_coords(x, y);
+            local.position = self.to_island_coords(owner, x, y);
             return self.components[owner].on_island_cursor(&local);
         }
 
         let mut redraw = Redraw::None;
         self.island_grab = None;
         if let Some(owner) = self.island_hover.take() {
-            local.position = self.to_island_coords(x, y);
+            local.position = self.to_island_coords(owner, x, y);
             local.kind = PointerEventKind::Leave { serial: 0 };
             redraw = self.components[owner].on_island_cursor(&local);
             local.kind = event.kind.clone();
@@ -541,9 +640,9 @@ impl UserInterface {
         redraw
     }
 
-    /// Maps a surface position into the island content's coordinates.
-    fn to_island_coords(&self, x: f64, y: f64) -> (f64, f64) {
-        match self.island_slot.zip(self.island_rect) {
+    /// Maps a surface position into the coordinates of `owner`'s island content.
+    fn to_island_coords(&self, owner: usize, x: f64, y: f64) -> (f64, f64) {
+        match self.islands[owner].visible() {
             Some((slot, rect)) => {
                 let (origin_x, origin_y, scale) = slot.content_transform(rect);
                 let scale = f64::from(scale.max(f32::EPSILON));
@@ -558,7 +657,9 @@ impl UserInterface {
 
     pub fn on_easing_updated(&mut self, id: &str, easing: &Easing) -> Redraw {
         if id == ISLAND_EASING_ID {
-            self.morph.set_easing(easing.clone());
+            for island in &mut self.islands {
+                island.morph.set_easing(easing.clone());
+            }
         }
         self.fan_out(|c| c.on_easing_updated(id, easing))
     }
@@ -582,7 +683,9 @@ impl UserInterface {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::path::Path;
+    use std::rc::Rc;
     use std::thread;
 
     use skia_safe::{surfaces, FontStyle, Surface};
@@ -596,6 +699,22 @@ mod tests {
     const SIZE: (i32, i32) = (800, (ISLAND_MAX_HEIGHT + BAR_HEIGHT) as i32);
     const ABOVE_BAR: i32 = BAR_TOP as i32 - 5;
     const IN_BAR: i32 = BAR_TOP as i32 + 50;
+
+    #[test]
+    fn center_slots_stay_centered_on_the_bar() {
+        let slots = [
+            (BarSlot::Left, 300.0),
+            (BarSlot::Center, 100.0),
+            (BarSlot::Center, 0.0),
+            (BarSlot::Right, 50.0),
+        ];
+        assert_eq!(bar_origins(&slots, 1000.0)[1], 450.0);
+
+        let slots = [(BarSlot::Center, 100.0), (BarSlot::Center, 200.0)];
+        let origins = bar_origins(&slots, 1000.0);
+        assert_eq!(origins[0], (1000.0 - 300.0 - BAR_GAP) / 2.0);
+        assert_eq!(origins[1], origins[0] + 100.0 + BAR_GAP);
+    }
 
     #[test]
     fn bar_origins_pack_each_end() {
@@ -617,7 +736,6 @@ mod tests {
 
     fn slot(placement: IslandPlacement) -> IslandSlot {
         IslandSlot {
-            owner: 0,
             target: LayoutRect::new(0.0, 0.0, 400.0, 100.0),
             placement,
         }
@@ -669,8 +787,141 @@ mod tests {
         assert_eq!(rest, LayoutRect::new(850.0, BAR_TOP, 150.0, 0.0));
     }
 
+    #[test]
+    fn over_bar_island_reaches_the_screen_edge_and_only_shapes_what_is_above_the_bar() {
+        let bottom = BAR_TOP + BAR_HEIGHT as f32;
+        let request = IslandRequest {
+            width: 300.0,
+            height: 200.0,
+            placement: IslandPlacement::OverBar,
+            priority: 0,
+        };
+        let (target, rest) = island_rects(&request, 1000.0);
+        assert_eq!(target, LayoutRect::new(350.0, bottom - 200.0, 300.0, 200.0));
+        assert_eq!(rest, LayoutRect::new(500.0, bottom, 0.0, 0.0));
+
+        assert_eq!(
+            above_bar(target),
+            LayoutRect::new(350.0, bottom - 200.0, 300.0, 200.0 - BAR_HEIGHT as f32)
+        );
+        let inside = LayoutRect::new(450.0, BAR_TOP + 10.0, 100.0, 50.0);
+        assert_eq!(
+            above_bar(inside),
+            LayoutRect::new(450.0, BAR_TOP, 100.0, 0.0)
+        );
+    }
+
     fn alpha(surface: &mut Surface, x: i32, y: i32) -> u8 {
         surface.peek_pixels().unwrap().get_color((x, y)).a()
+    }
+
+    /// Bids for the island at `center_x` when told to, and tries to paint the whole
+    /// headroom from the overlay.
+    struct Bidder {
+        center_x: f32,
+        bidding: Rc<Cell<bool>>,
+        frame: Rc<Cell<Option<IslandFrame>>>,
+    }
+
+    impl Component for Bidder {
+        fn island(&mut self, _: &UIState, _: &FontBook, _: f32) -> Option<IslandRequest> {
+            self.bidding.get().then_some(IslandRequest {
+                width: 200.0,
+                height: 200.0,
+                placement: IslandPlacement::Joined {
+                    center_x: Some(self.center_x),
+                },
+                priority: 0,
+            })
+        }
+
+        fn draw_overlay(
+            &mut self,
+            canvas: &Canvas,
+            island: Option<IslandFrame>,
+            _: &UIState,
+            _: &FontBook,
+            _: &ColorTheme,
+        ) -> Redraw {
+            self.frame.set(island);
+            canvas.draw_rect(
+                Rect::from_xywh(0.0, -BAR_TOP, SIZE.0 as f32, BAR_TOP),
+                &Paint::new(Color4f::new(1.0, 0.0, 0.0, 1.0), None),
+            );
+            Redraw::None
+        }
+    }
+
+    #[test]
+    fn a_new_main_island_opens_while_the_old_one_collapses_in_its_own_place() {
+        const A: i32 = 150;
+        const B: i32 = 650;
+        let theme = Theme::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("example/theme.toml"));
+        let (tx, _rx) = calloop::channel::channel();
+        let mut ui = UserInterface::new(
+            Arc::new(RwLock::new(theme)),
+            &RwLock::new(AnimationConfig::default()),
+            tx,
+            tokio::sync::mpsc::unbounded_channel().0,
+            tokio::sync::mpsc::unbounded_channel().0,
+            mpsc::channel().0,
+        );
+        let bidder = |center_x: i32| Bidder {
+            center_x: center_x as f32,
+            bidding: Rc::default(),
+            frame: Rc::default(),
+        };
+        let (a, b) = (bidder(A), bidder(B));
+        let (a_bids, a_frame, b_bids, b_frame) = (
+            a.bidding.clone(),
+            a.frame.clone(),
+            b.bidding.clone(),
+            b.frame.clone(),
+        );
+        ui.components = vec![Box::new(a), Box::new(b)];
+        ui.islands.truncate(2);
+
+        let fonts = FontBook::new();
+        let state = UIState::default();
+        let mut surface = surfaces::raster_n32_premul(SIZE).unwrap();
+        let settle = ISLAND_MORPH + Duration::from_millis(20);
+
+        a_bids.set(true);
+        ui.draw(surface.canvas(), &state, &fonts, SIZE.0 as f32);
+        thread::sleep(settle);
+        ui.draw(surface.canvas(), &state, &fonts, SIZE.0 as f32);
+        assert_eq!(a_frame.get().unwrap().progress, 1.0);
+        assert_eq!(b_frame.get(), None);
+        assert_ne!(alpha(&mut surface, A, ABOVE_BAR), 0);
+        assert_eq!(
+            alpha(&mut surface, 400, ABOVE_BAR),
+            0,
+            "the overlay doesn't show outside the island"
+        );
+
+        a_bids.set(false);
+        b_bids.set(true);
+        ui.draw(surface.canvas(), &state, &fonts, SIZE.0 as f32);
+        assert!(a_frame.get().unwrap().progress > 0.5, "a is still open");
+        let started = b_frame.get().map_or(0.0, |frame| frame.progress);
+        assert!(started < 0.5, "b opens from nothing: {started}");
+        let input = ui.island_rect().unwrap();
+        assert!(
+            (input.x + input.width / 2.0 - B as f32).abs() < 1.0,
+            "b takes input"
+        );
+
+        thread::sleep(ISLAND_MORPH / 3);
+        ui.draw(surface.canvas(), &state, &fonts, SIZE.0 as f32);
+        assert_ne!(alpha(&mut surface, A, ABOVE_BAR), 0, "both show at once");
+        assert_ne!(alpha(&mut surface, B, ABOVE_BAR), 0, "both show at once");
+        assert_eq!(alpha(&mut surface, 400, ABOVE_BAR), 0, "as two islands");
+
+        thread::sleep(settle);
+        ui.draw(surface.canvas(), &state, &fonts, SIZE.0 as f32);
+        assert_eq!(a_frame.get(), None);
+        assert_eq!(b_frame.get().unwrap().progress, 1.0);
+        assert_eq!(alpha(&mut surface, A, ABOVE_BAR), 0, "only one stays open");
     }
 
     #[test]
@@ -683,6 +934,7 @@ mod tests {
             tx,
             tokio::sync::mpsc::unbounded_channel().0,
             tokio::sync::mpsc::unbounded_channel().0,
+            mpsc::channel().0,
         );
         let mut fonts = FontBook::new();
         fonts.register("noto_sans", "Noto Sans CJK JP", FontStyle::normal());
@@ -733,7 +985,7 @@ mod tests {
         state.notifications.remove(1);
         let mut closed = draw(&mut ui, &state);
         assert_eq!(ui.island_rect(), None);
-        assert!(ui.island_slot.is_none());
+        assert!(ui.islands.iter().all(|island| island.slot.is_none()));
         assert_eq!(alpha(&mut closed, 400, ABOVE_BAR), 0);
     }
 }

@@ -88,12 +88,13 @@ a `macro_rules!` that expands `boxed!(a, b)` to `vec![Box::new(a), Box::new(b)]`
 ```rust
 let components: Vec<Box<dyn Component>> = boxed!(
     Clock,
+    Media::new(player_commands),
     Notifications::new(ui_tx),
     Toolbox::new(system_commands, warp_commands),
     MyWidget::new(/* … */),
 );
 ```
-`UserInterface::new` itself takes `(theme, animation, ui_tx, system_commands, warp_commands)` — pass
+`UserInterface::new` itself takes `(theme, animation, ui_tx, system_commands, warp_commands, player_commands)` — pass
 whichever your new component needs through to its constructor from there.
 
 Bar placement comes from `bar_slot` (`Left`, `Right`, or the default `None`) and
@@ -132,8 +133,10 @@ fn on_island_cursor(&mut self, event: &PointerEvent) -> Redraw {
 
 - `island` runs before every draw. Keep returning a request while you want the
   island, and return `None` to collapse it. Changing the size morphs it.
-- The highest `priority` wins. On a tie, the later component does. `Notifications`
-  uses 100, or 200 for critical.
+- The highest `priority` wins the main island, the only one that stays open, and takes
+  the pointer. On a tie, the later component does. `Notifications` uses 100, or 200 for
+  critical. Every component has its own island, so one that loses collapses where it is
+  while the winner opens where it is, and opens again when it next wins.
 - `draw_island` keeps being called while the island collapses, after `island` has
   returned `None`, so keep a copy of what you were showing.
 - Draw at full size. The island scales and fades your content while it morphs, so
@@ -143,12 +146,14 @@ fn on_island_cursor(&mut self, event: &PointerEvent) -> Redraw {
 - `height` is clamped to `ISLAND_MAX_HEIGHT` (`src/ui.rs`).
 - Islands rise from the bar's top edge in the bar's color, joined to it by curves.
   `IslandPlacement::Joined` sits over a point on the bar and scales from nothing at its
-  bottom center. `IslandPlacement::Corner { from_width }` is flush with the screen's right
+  bottom center. `IslandPlacement::OverBar` does the same but reaches down over the bar to
+  the screen's edge, so presses on that part of the bar's row go to the island.
+  `IslandPlacement::Corner { from_width }` is flush with the screen's right
   edge, widening from `from_width`, with content scaling from the bottom-right.
-- `draw_overlay` draws over the island's content, unscaled, at your bar slot's origin.
-  While you hold the island it receives an `IslandFrame` with `progress` and the content's
-  final rect, so something can move between the bar and the island. The toolbox's icons
-  do this.
+- `draw_overlay` draws over the island's content, unscaled, at your bar slot's origin, and
+  clipped to the bar and islands. While your island is visible it receives an `IslandFrame`
+  with `progress` and the content's final rect, so something can move between the bar and
+  the island. The toolbox's icons and the media player's icon and text do this.
 - To dismiss on a press outside the bar, return `true` from `captures_outside_press` while
   open and handle `on_outside_press`. `src/catcher.rs` puts a transparent surface over that
   screen meanwhile, so the press doesn't reach the window under it.

@@ -1,10 +1,25 @@
 use std::collections::HashSet;
+use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use calloop::channel::Sender;
 use log::{debug, error, info};
-use mpris::{Event, LoopStatus, PlaybackStatus, Player, PlayerFinder};
+use mpris::{DBusError, Event, LoopStatus, PlaybackStatus, Player, PlayerFinder};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlayerAction {
+    Previous,
+    PlayPause,
+    Next,
+    SeekTo(Duration),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlayerCommand {
+    pub bus_name: String,
+    pub action: PlayerAction,
+}
 
 #[derive(Debug, Clone)]
 pub struct PlayerState {
@@ -14,6 +29,11 @@ pub struct PlayerState {
     pub status: PlaybackStatus,
     pub title: Option<String>,
     pub artists: Option<Vec<String>>,
+    /// Not every player reports one: without it there is nothing to seek through.
+    pub length: Option<Duration>,
+    /// Where playback was at `position_at`. Players don't announce it as it advances.
+    pub position: Duration,
+    pub position_at: Instant,
     pub volume: Option<f64>,
     pub shuffle: bool,
     pub loop_status: LoopStatus,
@@ -31,10 +51,24 @@ impl PlayerState {
                 .unwrap_or(PlaybackStatus::Stopped),
             title: None,
             artists: None,
+            length: None,
+            position: player.get_position().unwrap_or_default(),
+            position_at: Instant::now(),
             volume: player.get_volume().ok(),
             shuffle: player.get_shuffle().unwrap_or(false),
             loop_status: player.get_loop_status().unwrap_or(LoopStatus::None),
         }
+    }
+
+    /// `(position, length)` as of `now`, for a player that reports a length.
+    pub fn progress(&self, now: Instant) -> Option<(Duration, Duration)> {
+        let length = self.length.filter(|length| !length.is_zero())?;
+        let elapsed = if self.status == PlaybackStatus::Playing {
+            now.saturating_duration_since(self.position_at)
+        } else {
+            Duration::ZERO
+        };
+        Some(((self.position + elapsed).min(length), length))
     }
 
     pub fn apply(&mut self, event: &Event) {
@@ -54,13 +88,59 @@ impl PlayerState {
                 self.artists = meta
                     .artists()
                     .map(|v| v.into_iter().map(str::to_owned).collect());
+                self.length = meta.length();
             }
             _ => {}
         }
     }
 }
 
-pub fn start_listener(sender: Sender<(PlayerState, Event)>) {
+fn find_player(finder: &PlayerFinder, bus_name: &str) -> Option<Player> {
+    finder
+        .iter_players()
+        .ok()?
+        .filter_map(Result::ok)
+        .find(|player| player.bus_name() == bus_name)
+}
+
+fn seek(player: &Player, position: Duration) -> Result<(), DBusError> {
+    match player.get_metadata()?.track_id() {
+        Some(track) => player.set_position(track, &position),
+        None => Ok(()),
+    }
+}
+
+/// Commands block on the player's reply, so they get a thread of their own.
+fn start_commands() -> mpsc::Sender<PlayerCommand> {
+    let (tx, rx) = mpsc::channel::<PlayerCommand>();
+    thread::spawn(move || {
+        let finder = match PlayerFinder::new() {
+            Ok(finder) => finder,
+            Err(err) => {
+                error!("Failed to connect to D-Bus: {err}");
+                return;
+            }
+        };
+        for command in rx {
+            let Some(player) = find_player(&finder, &command.bus_name) else {
+                debug!("[{}] Player no longer present", command.bus_name);
+                continue;
+            };
+            let result = match command.action {
+                PlayerAction::Previous => player.previous(),
+                PlayerAction::PlayPause => player.play_pause(),
+                PlayerAction::Next => player.next(),
+                PlayerAction::SeekTo(position) => seek(&player, position),
+            };
+            if let Err(err) = result {
+                error!("[{}] {:?} failed: {err}", command.bus_name, command.action);
+            }
+        }
+    });
+    tx
+}
+
+pub fn start_listener(sender: Sender<(PlayerState, Event)>) -> mpsc::Sender<PlayerCommand> {
     thread::spawn(move || {
         let finder = match PlayerFinder::new() {
             Ok(f) => f,
@@ -117,6 +197,7 @@ pub fn start_listener(sender: Sender<(PlayerState, Event)>) {
             thread::sleep(Duration::from_millis(500));
         }
     });
+    start_commands()
 }
 
 fn read_events_for_player(bus_name: String, sender: Sender<(PlayerState, Event)>) {
@@ -128,23 +209,9 @@ fn read_events_for_player(bus_name: String, sender: Sender<(PlayerState, Event)>
         }
     };
 
-    let players = match finder.iter_players() {
-        Ok(players) => players,
-        Err(err) => {
-            error!("[{bus_name}] Could not list players: {err}");
-            return;
-        }
-    };
-
-    let player = match players
-        .filter_map(Result::ok)
-        .find(|p| p.bus_name() == bus_name)
-    {
-        Some(player) => player,
-        None => {
-            error!("[{bus_name}] Player no longer present");
-            return;
-        }
+    let Some(player) = find_player(&finder, &bus_name) else {
+        error!("[{bus_name}] Player no longer present");
+        return;
     };
 
     let events = match player.events() {
@@ -170,6 +237,9 @@ fn read_events_for_player(bus_name: String, sender: Sender<(PlayerState, Event)>
         match event {
             Ok(event) => {
                 state.apply(&event);
+                // Any change can move the position, and only a seek says where to.
+                state.position = player.get_position().unwrap_or(state.position);
+                state.position_at = Instant::now();
                 let _ = sender.send((state.clone(), event));
 
                 if !state.active {
@@ -188,9 +258,48 @@ fn read_events_for_player(bus_name: String, sender: Sender<(PlayerState, Event)>
 #[cfg(test)]
 mod tests {
     use std::thread;
-    use std::time::{Duration, Instant};
 
     use super::*;
+
+    fn state(status: PlaybackStatus, length: Option<u64>) -> PlayerState {
+        PlayerState {
+            bus_name: String::new(),
+            identity: String::new(),
+            active: true,
+            status,
+            title: None,
+            artists: None,
+            length: length.map(Duration::from_secs),
+            position: Duration::from_secs(10),
+            position_at: Instant::now(),
+            volume: None,
+            shuffle: false,
+            loop_status: LoopStatus::None,
+        }
+    }
+
+    #[test]
+    fn progress_advances_only_while_playing_and_stops_at_the_end() {
+        let in_5s = |state: &PlayerState| state.position_at + Duration::from_secs(5);
+        let secs = Duration::from_secs;
+
+        let playing = state(PlaybackStatus::Playing, Some(100));
+        assert_eq!(
+            playing.progress(in_5s(&playing)),
+            Some((secs(15), secs(100)))
+        );
+
+        let paused = state(PlaybackStatus::Paused, Some(100));
+        assert_eq!(paused.progress(in_5s(&paused)), Some((secs(10), secs(100))));
+
+        let ending = state(PlaybackStatus::Playing, Some(12));
+        assert_eq!(ending.progress(in_5s(&ending)), Some((secs(12), secs(12))));
+
+        let unknown = state(PlaybackStatus::Playing, None);
+        assert_eq!(unknown.progress(in_5s(&unknown)), None);
+        let empty = state(PlaybackStatus::Playing, Some(0));
+        assert_eq!(empty.progress(in_5s(&empty)), None);
+    }
 
     #[test]
     #[ignore = "needs a live MPRIS player and runs until it quits"]

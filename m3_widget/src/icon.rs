@@ -57,6 +57,11 @@ pub enum Icon {
     BatteryMissing,
     Brightness,
     Shield,
+    Play,
+    Pause,
+    SkipNext,
+    SkipPrevious,
+    MusicNote,
 }
 
 impl Icon {
@@ -104,6 +109,11 @@ impl Icon {
             }
             Icon::Brightness => draw_brightness(canvas, box_rect, color),
             Icon::Shield => draw_shield(canvas, box_rect, color),
+            Icon::Play => draw_play(canvas, box_rect, color),
+            Icon::Pause => draw_pause(canvas, box_rect, color),
+            Icon::SkipNext => draw_skip(canvas, box_rect, color, false),
+            Icon::SkipPrevious => draw_skip(canvas, box_rect, color, true),
+            Icon::MusicNote => draw_music_note(canvas, box_rect, color),
         }
     }
 }
@@ -225,6 +235,57 @@ fn draw_shield(canvas: &Canvas, box_rect: Rect, color: Color) {
         .line_to(at(4.5, 6.0))
         .close();
     canvas.draw_path(&builder.detach(), &stroke_paint(color));
+}
+
+fn draw_play(canvas: &Canvas, box_rect: Rect, color: Color) {
+    let at = |x: f32, y: f32| Point::new(box_rect.left + x, box_rect.top + y);
+    let mut builder = PathBuilder::new();
+    builder
+        .move_to(at(8.0, 5.0))
+        .line_to(at(19.0, 12.0))
+        .line_to(at(8.0, 19.0))
+        .close();
+    canvas.draw_path(&builder.detach(), &fill_paint(color));
+}
+
+fn draw_pause(canvas: &Canvas, box_rect: Rect, color: Color) {
+    let paint = fill_paint(color);
+    for x in [6.0, 14.0] {
+        let bar = Rect::from_xywh(box_rect.left + x, box_rect.top + 5.0, 4.0, 14.0);
+        canvas.draw_rect(bar, &paint);
+    }
+}
+
+fn draw_music_note(canvas: &Canvas, box_rect: Rect, color: Color) {
+    let at = |x: f32, y: f32| Point::new(box_rect.left + x, box_rect.top + y);
+    canvas.draw_circle(at(9.5, 17.0), 3.5, &fill_paint(color));
+    let mut builder = PathBuilder::new();
+    builder
+        .move_to(at(12.0, 17.0))
+        .line_to(at(12.0, 4.0))
+        .line_to(at(18.0, 7.0));
+    canvas.draw_path(&builder.detach(), &stroke_paint(color));
+}
+
+/// A triangle against a bar, pointing left when `backward`.
+fn draw_skip(canvas: &Canvas, box_rect: Rect, color: Color, backward: bool) {
+    let at = |x: f32, y: f32| {
+        let x = if backward { 24.0 - x } else { x };
+        Point::new(box_rect.left + x, box_rect.top + y)
+    };
+    let mut builder = PathBuilder::new();
+    builder
+        .move_to(at(6.0, 6.0))
+        .line_to(at(15.0, 12.0))
+        .line_to(at(6.0, 18.0))
+        .close();
+    builder
+        .move_to(at(16.0, 6.0))
+        .line_to(at(18.0, 6.0))
+        .line_to(at(18.0, 18.0))
+        .line_to(at(16.0, 18.0))
+        .close();
+    canvas.draw_path(&builder.detach(), &fill_paint(color));
 }
 
 /// A horizontal cell with a terminal nub on its right.

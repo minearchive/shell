@@ -45,6 +45,19 @@ impl Display for BoundingBox {
     }
 }
 
+/// The first line of `text`, cut off with an ellipsis at `max_width` wherever that falls.
+pub fn elide(text: &str, max_width: f32, measure: impl Fn(&str) -> f32) -> String {
+    let mut line = text.lines().next().unwrap_or_default().to_string();
+    if measure(&line) <= max_width {
+        return line;
+    }
+    while !line.is_empty() && measure(&format!("{line}…")) > max_width {
+        line.pop();
+    }
+    line.push('…');
+    line
+}
+
 /// Breaks `text` into lines no wider than `max_width`, preferring spaces and
 /// otherwise breaking between chars (CJK has no spaces). Blank lines are dropped.
 /// Past `max_lines`, the last line ends in an ellipsis. A single char wider than `max_width` keeps its
@@ -103,6 +116,15 @@ pub fn wrap_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn elide_cuts_at_the_width_rather_than_at_a_space() {
+        let measure = |s: &str| s.chars().count() as f32;
+        assert_eq!(elide("short", 10.0, measure), "short");
+        assert_eq!(elide("one two three", 10.0, measure), "one two t…");
+        assert_eq!(elide("first\nsecond", 10.0, measure), "first");
+        assert_eq!(elide("", 10.0, measure), "");
+    }
 
     // Every char is 1 wide.
     fn wrap(text: &str, max_width: f32, max_lines: usize) -> Vec<String> {

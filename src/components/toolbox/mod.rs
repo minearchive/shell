@@ -9,20 +9,15 @@ use smithay_client_toolkit::seat::pointer::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 
-use ui_core::{
-    font::FontBook,
-    geometry::LayoutRect,
-    pointer::{button, PointerEvent, PointerEventKind},
-    scheme::ColorTheme,
-};
+use ui_core::{font::FontBook, geometry::LayoutRect, pointer::button, scheme::ColorTheme};
 
 use self::items::{default_items, DetailWidth, ToolboxItem};
 use crate::{
     dbus::warp::{WarpCommand, WarpStatus},
     system::{SystemCommand, SystemStatus},
     ui::{
-        BarSlot, Component, IslandFrame, IslandPlacement, IslandRequest, Redraw, UIState,
-        BAR_HEIGHT,
+        to_core_event, BarSlot, Component, IslandFrame, IslandPlacement, IslandRequest, Redraw,
+        UIState, BAR_HEIGHT,
     },
 };
 
@@ -77,25 +72,13 @@ fn panel_layout(entries: &[(DetailWidth, f32)], panel_width: f32) -> (Vec<Layout
 }
 
 /// Where an icon `progress` of the way from `from` to `to` is.
-fn lerp_box(from: Rect, to: Rect, progress: f32) -> Rect {
+pub fn lerp_box(from: Rect, to: Rect, progress: f32) -> Rect {
     Rect::from_xywh(
         from.left + (to.left - from.left) * progress,
         from.top + (to.top - from.top) * progress,
         from.width(),
         from.height(),
     )
-}
-
-fn to_core_event(event: &SctkPointerEvent) -> Option<PointerEvent> {
-    let kind = match event.kind {
-        SctkKind::Enter { .. } => PointerEventKind::Enter,
-        SctkKind::Leave { .. } => PointerEventKind::Leave,
-        SctkKind::Motion { .. } => PointerEventKind::Motion,
-        SctkKind::Press { button, .. } => PointerEventKind::Press { button },
-        SctkKind::Release { button, .. } => PointerEventKind::Release { button },
-        SctkKind::Axis { .. } => return None,
-    };
-    Some(PointerEvent::new(event.position, kind))
 }
 
 pub struct Toolbox {

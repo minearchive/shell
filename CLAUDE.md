@@ -95,9 +95,10 @@ reschedule it explicitly. A `CLOCK_TICK` calloop timer in `main()` also repaints
 every screen once a second and expires notifications.
 
 ### Islands (Dynamic Island-style UI)
-`UserInterface::draw` paints the bar and at most one island as a single silhouette
-(`ui_core::island`), morphing it with `IslandMorph` and scaling its content along with it. A component bids by
-returning an `IslandRequest` from `Component::island`; the highest `priority` wins.
+`UserInterface::draw` paints the bar and every visible island as a single silhouette
+(`ui_core::island`). Each component has its own `IslandMorph` and its content scales along with it. A component bids by
+returning an `IslandRequest` from `Component::island`; the highest `priority` wins the one main island, and the
+others collapse in place meanwhile, so two can show at once while one opens as another closes.
 The owner draws its content in `draw_island` and receives pointer events in
 `on_island_cursor`. `Shell::update_input_region` limits input to the bar and island.
 See [docs/components.md](docs/components.md).

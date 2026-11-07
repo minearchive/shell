@@ -1,5 +1,5 @@
 use std::{
-    sync::{Arc, RwLock},
+    sync::{mpsc, Arc, RwLock},
     time::{Duration, Instant},
 };
 
@@ -42,7 +42,7 @@ use crate::{
     config::{animation::AnimationConfig, config_path, theme::Theme, WatchableConfig},
     dbus::{
         kdeconnect::{KDEConnectClient, KDEConnectCommand, KDEConnectEvent},
-        mpris::PlayerState,
+        mpris::{PlayerCommand, PlayerState},
         notification::{CloseReason, NotificationEvent, NotificationHandle},
         warp::{WarpClient, WarpCommand, WarpStatus},
     },
@@ -110,6 +110,7 @@ pub struct Shell {
     ui_tx: Sender<UiEvent>,
     system_commands: UnboundedSender<SystemCommand>,
     warp_commands: UnboundedSender<WarpCommand>,
+    player_commands: mpsc::Sender<PlayerCommand>,
     notification_handle: Option<NotificationHandle>,
     _commands: Commands,
 }
@@ -156,7 +157,7 @@ fn main() {
     });
 
     let (mpris_tx, mpris_rx) = channel::channel::<(PlayerState, MprisEvent)>();
-    dbus::mpris::start_listener(mpris_tx);
+    let player_commands = dbus::mpris::start_listener(mpris_tx);
     on_msg(&loop_handle, mpris_rx, |(state, event), shell| {
         shell.state.update_player(state.clone());
         shell.dispatch(|ui| ui.on_mpris(&state, &event));
@@ -263,6 +264,7 @@ fn main() {
         ui_tx,
         system_commands,
         warp_commands,
+        player_commands,
         notification_handle,
         _commands: Commands {
             kdeconnect: kde_command_sender,

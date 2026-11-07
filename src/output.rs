@@ -107,6 +107,7 @@ impl OutputHandler for Shell {
                 self.ui_tx.clone(),
                 self.system_commands.clone(),
                 self.warp_commands.clone(),
+                self.player_commands.clone(),
             ),
             output,
             catcher: None,
