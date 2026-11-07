@@ -79,6 +79,25 @@
 
           buildInputs = packages;
 
+          # The sandbox has no network for skia-bindings to fetch this itself.
+          # ponytail: x86_64-linux only, and tied to skia-safe's version and features: the
+          # key is in target/debug/build/skia-bindings-*/out/skia/key.txt after an update.
+          SKIA_BINARIES_URL = "file://${
+            pkgs.fetchurl {
+              url = "https://github.com/rust-skia/skia-binaries/releases/download/0.97.2/skia-binaries-da8fc6731fc439bc3b6a-x86_64-unknown-linux-gnu-jpegd-jpege-pdf.tar.gz";
+              hash = "sha256-IXTSyAg9Jv2STUtR6rKBzdWYkHK0dDZmenEVB4j2/js=";
+            }
+          }";
+
+          # ninja is here for skia's build, not ours: keep its hook off cargo's phases.
+          dontUseNinjaBuild = true;
+          dontUseNinjaInstall = true;
+          dontUseNinjaCheck = true;
+
+          # They need system fonts and a session bus, which the sandbox has neither of. Run
+          # them in the dev shell.
+          doCheck = false;
+
           postFixup = ''
             wrapProgram $out/bin/my_shell \
               --suffix PATH : ${pkgs.lib.makeBinPath runtimePackages}
