@@ -75,6 +75,7 @@ The workspace widget crates (not yet used by the bar — see
 - **Fonts must be pre-registered** — `FontBook::sized` (`ui_core/src/font/mod.rs`)
   panics on an unknown key; there is no silent fallback. Register in `main.rs`
   or via `UiEvent::RegisterFont` before the first draw that uses the key.
-- **Build requires devenv** — `skia-bindings` needs env vars from `devenv.nix`
-  (`LIBCLANG_PATH`, `LD_LIBRARY_PATH`, EGL). `cargo build` outside the devenv
-  shell will fail. direnv auto-activates this inside the repo.
+- **Build inside the Nix devShell** — `skia-bindings` needs env vars from
+  `flake.nix` (`LIBCLANG_PATH`, `LD_LIBRARY_PATH`, EGL). Use `nix develop`,
+  or `direnv allow` for automatic activation via `.envrc`. CI uses
+  `nix develop --command cargo build --locked`.
