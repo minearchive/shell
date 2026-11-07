@@ -5,9 +5,8 @@ use std::{
 
 use macros::boxed;
 
-use calloop::channel::Sender;
-use skia_safe::{Canvas, FontStyle};
-use smithay_client_toolkit::seat::{keyboard::Modifiers, pointer::PointerEvent};
+use skia_safe::Canvas;
+use smithay_client_toolkit::seat::pointer::PointerEvent;
 
 use mpris::Event as MprisEvent;
 
@@ -20,8 +19,7 @@ use crate::{
         kdeconnect::KDEConnectEvent, mpris::PlayerState, notification::NotificationEvent,
         warp::WarpStatus,
     },
-    ipc::{events::IPCEvent, WindowManagerIPC},
-    Commands,
+    ipc::events::IPCEvent,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
@@ -58,7 +56,7 @@ pub trait Component {
     fn on_notification(&mut self, _event: &NotificationEvent) -> Redraw {
         Redraw::None
     }
-    fn on_easing_updated(&mut self, _id: String, _easing: &Easing) -> Redraw {
+    fn on_easing_updated(&mut self, _id: &str, _easing: &Easing) -> Redraw {
         Redraw::None
     }
     fn on_drag_enter(&mut self, _mime_types: &[String]) -> Redraw {
@@ -75,116 +73,67 @@ pub trait Component {
     }
 }
 
-#[allow(unused)]
 pub enum UiEvent {
-    RequestRedraw(usize),
-    RegisterFont(String, String, FontStyle),
     RequestRedrawAll,
     AnimationUpdated(HashMap<String, Easing>),
 }
 
+/// Provider state shared by every screen, so a screen that appears late sees
+/// what the others already know.
+#[derive(Default)]
 pub struct UIState {
+    /// Keyed by bus name: two instances of a player share an identity.
     pub players: HashMap<String, PlayerState>,
     pub warp: Option<WarpStatus>,
 }
 
-pub struct UserInterface {
-    pub components: Vec<Box<dyn Component>>,
-    _idx: usize,
-    modifier: Modifiers,
-    state: UIState,
-    theme: Arc<RwLock<Theme>>,
-    sender: Sender<UiEvent>,
-}
-
 impl UIState {
-    pub fn new() -> Self {
-        Self {
-            players: HashMap::new(),
-            warp: None,
+    pub fn update_player(&mut self, state: PlayerState) {
+        if state.active {
+            self.players.insert(state.bus_name.clone(), state);
+        } else {
+            self.players.remove(&state.bus_name);
         }
     }
+}
+
+pub struct UserInterface {
+    components: Vec<Box<dyn Component>>,
+    theme: Arc<RwLock<Theme>>,
 }
 
 impl UserInterface {
-    pub fn new(
-        rx: Sender<UiEvent>,
-        idx: usize,
-        _ipc: &mut WindowManagerIPC,
-        commands: Commands,
-        theme: Arc<RwLock<Theme>>,
-        animation: Arc<RwLock<AnimationConfig>>,
-    ) -> Self {
-        let components: Vec<Box<dyn Component>> = boxed!(
-            Clock::new(rx.clone(), idx, 1000, Arc::clone(&animation)),
-            Warp::new(commands.warp)
-        );
+    pub fn new(theme: Arc<RwLock<Theme>>, animation: &RwLock<AnimationConfig>) -> Self {
+        let components: Vec<Box<dyn Component>> = boxed!(Clock::new(animation), Warp);
 
-        Self {
-            components,
-            _idx: idx,
-            modifier: Modifiers::default(),
-            state: UIState::new(),
-            theme,
-            sender: rx,
-        }
+        Self { components, theme }
     }
 
-    pub fn on_ipc(&mut self, event: IPCEvent) -> Redraw {
-        self.components
-            .iter_mut()
-            .map(|c| c.on_ipc(&event))
-            .max()
-            .unwrap_or_default()
+    fn fan_out(&mut self, f: impl FnMut(&mut Box<dyn Component>) -> Redraw) -> Redraw {
+        self.components.iter_mut().map(f).max().unwrap_or_default()
+    }
+
+    pub fn on_ipc(&mut self, event: &IPCEvent) -> Redraw {
+        self.fan_out(|c| c.on_ipc(event))
     }
 
     pub fn on_mpris(&mut self, state: &PlayerState, event: &MprisEvent) -> Redraw {
-        let redraw = self
-            .components
-            .iter_mut()
-            .map(|c| c.on_mpris(state, event))
-            .max()
-            .unwrap_or_default();
-
-        if state.active {
-            self.state
-                .players
-                .insert(state.identity.clone(), state.clone());
-        } else {
-            self.state.players.remove(&state.identity);
-        }
-
-        redraw
+        self.fan_out(|c| c.on_mpris(state, event))
     }
 
     pub fn on_kde_connect_event(&mut self, event: &KDEConnectEvent) -> Redraw {
-        self.components
-            .iter_mut()
-            .map(|c| c.on_kde_connect_event(event))
-            .max()
-            .unwrap_or_default()
+        self.fan_out(|c| c.on_kde_connect_event(event))
     }
 
     pub fn on_warp(&mut self, status: &WarpStatus) -> Redraw {
-        let redraw = self
-            .components
-            .iter_mut()
-            .map(|c| c.on_warp(status))
-            .max()
-            .unwrap_or_default();
-        self.state.warp = Some(status.clone());
-        redraw
+        self.fan_out(|c| c.on_warp(status))
     }
 
-    pub fn on_notification(&mut self, event: NotificationEvent) -> Redraw {
-        self.components
-            .iter_mut()
-            .map(|c| c.on_notification(&event))
-            .max()
-            .unwrap_or_default()
+    pub fn on_notification(&mut self, event: &NotificationEvent) -> Redraw {
+        self.fan_out(|c| c.on_notification(event))
     }
 
-    pub fn draw(&mut self, canvas: &Canvas, fonts: &FontBook) {
+    pub fn draw(&mut self, canvas: &Canvas, state: &UIState, fonts: &FontBook) -> Redraw {
         let cfg = self.theme.read().unwrap();
         let theme = cfg.theme();
         canvas.clear(theme.surface_container);
@@ -192,64 +141,33 @@ impl UserInterface {
         let redraw = self
             .components
             .iter_mut()
-            .map(|c| c.draw(canvas, &self.state, fonts, theme))
+            .map(|c| c.draw(canvas, state, fonts, theme))
             .max()
             .unwrap_or_default();
-
-        if redraw == Redraw::Animating {
-            let _ = self.sender.send(UiEvent::RequestRedrawAll);
-        }
+        redraw
     }
 
     pub fn on_cursor(&mut self, event: &PointerEvent) -> Redraw {
-        self.components
-            .iter_mut()
-            .map(|c| c.on_cursor(event))
-            .max()
-            .unwrap_or_default()
+        self.fan_out(|c| c.on_cursor(event))
     }
 
-    pub fn on_modifier(&mut self, modifier: Modifiers) {
-        self.modifier = modifier;
-    }
-
-    pub fn on_easing_updated(&mut self, id: String, easing: Easing) -> Redraw {
-        self.components
-            .iter_mut()
-            .map(|c| c.on_easing_updated(id.clone(), &easing))
-            .max()
-            .unwrap_or_default()
+    pub fn on_easing_updated(&mut self, id: &str, easing: &Easing) -> Redraw {
+        self.fan_out(|c| c.on_easing_updated(id, easing))
     }
 
     pub fn on_drag_enter(&mut self, mime_types: &[String]) -> Redraw {
-        self.components
-            .iter_mut()
-            .map(|c| c.on_drag_enter(mime_types))
-            .max()
-            .unwrap_or_default()
+        self.fan_out(|c| c.on_drag_enter(mime_types))
     }
 
     pub fn on_drag_motion(&mut self, x: f64, y: f64) -> Redraw {
-        self.components
-            .iter_mut()
-            .map(|c| c.on_drag_motion(x, y))
-            .max()
-            .unwrap_or_default()
+        self.fan_out(|c| c.on_drag_motion(x, y))
     }
 
     pub fn on_drag_leave(&mut self) -> Redraw {
-        self.components
-            .iter_mut()
-            .map(|c| c.on_drag_leave())
-            .max()
-            .unwrap_or_default()
+        self.fan_out(|c| c.on_drag_leave())
     }
 
     pub fn on_drop(&mut self, mime: &str, data: &[u8]) -> Redraw {
-        self.components
-            .iter_mut()
-            .map(|c| c.on_drop(mime, data))
-            .max()
-            .unwrap_or_default()
+        self.fan_out(|c| c.on_drop(mime, data))
     }
 }

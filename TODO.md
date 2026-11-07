@@ -45,7 +45,7 @@
 - [ ] system resources
 
 ## Shell
-- [ ] set keyboard interactivity to None at creation, drop the pointer Enter hack
+- [x] set keyboard interactivity to None at creation, drop the pointer Enter hack
 - [ ] keyboard input, only if the bar ever needs it (needs get_keyboard_with_repeat)
 - [ ] make design.
 - [ ] z-order based rendering

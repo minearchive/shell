@@ -1,17 +1,20 @@
-mod easings;
-
 use std::collections::HashMap;
-use std::fs;
-use std::io;
+use std::path::Path;
 
 use log::warn;
+use serde::Deserialize;
 
 use ui_core::animation::parser::{css_to_easing, Easing};
 
 use crate::ui::UiEvent;
 
-use self::easings::RawAnimationConfig;
-use super::watchable::WatchableConfig;
+use super::watchable::{read_toml, WatchableConfig};
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct RawAnimationConfig {
+    easings: HashMap<String, String>,
+}
 
 #[derive(Default)]
 pub struct AnimationConfig {
@@ -20,18 +23,8 @@ pub struct AnimationConfig {
 }
 
 impl WatchableConfig for AnimationConfig {
-    fn try_load(path: &str) -> Option<Self> {
-        let src = fs::read_to_string(path)
-            .map_err(|e| warn!("AnimationConfig read failed: {e}"))
-            .ok()?;
-
-        if src.trim().is_empty() {
-            return None;
-        }
-
-        let raw_cfg: RawAnimationConfig = toml::from_str(&src)
-            .map_err(|e| warn!("AnimationConfig parse failed:\n{e}"))
-            .ok()?;
+    fn try_load(path: &Path) -> Option<Self> {
+        let raw_cfg: RawAnimationConfig = read_toml(path)?;
 
         let mut easings = HashMap::new();
         for (name, css) in &raw_cfg.easings {
@@ -49,15 +42,6 @@ impl WatchableConfig for AnimationConfig {
         })
     }
 
-    fn write(&self, path: &str) -> io::Result<()> {
-        let raw_cfg = RawAnimationConfig {
-            easings: self.raw.clone(),
-        };
-        let content =
-            toml::to_string(&raw_cfg).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        fs::write(path, content)
-    }
-
     fn is_changed(&self, new: &Self) -> bool {
         self.raw != new.raw
     }
@@ -67,12 +51,7 @@ impl WatchableConfig for AnimationConfig {
     }
 }
 
-#[allow(unused)]
 impl AnimationConfig {
-    pub fn add_easing(&mut self, name: String, easing: Easing) {
-        self.easings.insert(name, easing);
-    }
-
     pub fn get_easing(&self, name: &str) -> Option<&Easing> {
         self.easings.get(name)
     }

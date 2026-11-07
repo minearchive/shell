@@ -4,6 +4,7 @@ use std::time::Duration;
 use calloop::channel::Sender;
 use futures_util::StreamExt;
 use serde::Deserialize;
+use tokio::process::Command;
 use tokio::sync::mpsc;
 use zbus::{Connection, MatchRule, MessageStream};
 
@@ -38,7 +39,6 @@ impl WarpStatus {
 pub enum WarpCommand {
     Connect,
     Disconnect,
-    UpdateState,
 }
 
 pub struct WarpClient;
@@ -79,49 +79,31 @@ impl WarpClient {
         poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         let mut last: Option<WarpStatus> = None;
-        emit(&sender, &mut last, query_status().await, true);
 
+        // The first poll tick fires immediately, delivering the initial status.
         loop {
             tokio::select! {
-                Some(cmd) = cmd_rx.recv() => {
-                    let force = cmd == WarpCommand::UpdateState;
-                    run_command(cmd).await;
-                    emit(&sender, &mut last, query_status().await, force);
-                }
-                Some(_) = sni.next() => {
-                    emit(&sender, &mut last, query_status().await, false);
-                }
-                _ = poll.tick() => {
-                    emit(&sender, &mut last, query_status().await, false);
+                Some(cmd) = cmd_rx.recv() => run_command(cmd).await,
+                Some(_) = sni.next() => {}
+                _ = poll.tick() => {}
+            }
+
+            if let Some(status) = query_status().await {
+                if last.as_ref() != Some(&status) {
+                    let _ = sender.send(status.clone());
+                    last = Some(status);
                 }
             }
         }
     }
 }
 
-fn emit(
-    sender: &Sender<WarpStatus>,
-    last: &mut Option<WarpStatus>,
-    status: Option<WarpStatus>,
-    force: bool,
-) {
-    let Some(status) = status else { return };
-    if !force && last.as_ref() == Some(&status) {
-        return;
-    }
-    let _ = sender.send(status.clone());
-    *last = Some(status);
-}
-
 async fn query_status() -> Option<WarpStatus> {
-    let output = tokio::task::spawn_blocking(|| {
-        std::process::Command::new("warp-cli")
-            .args(["-j", "--accept-tos", "status"])
-            .output()
-    })
-    .await
-    .ok()?
-    .ok()?;
+    let output = Command::new("warp-cli")
+        .args(["-j", "--accept-tos", "status"])
+        .output()
+        .await
+        .ok()?;
 
     if !output.status.success() {
         log::warn!(
@@ -144,23 +126,18 @@ async fn run_command(cmd: WarpCommand) {
     let arg = match cmd {
         WarpCommand::Connect => "connect",
         WarpCommand::Disconnect => "disconnect",
-        WarpCommand::UpdateState => return,
     };
 
-    let result = tokio::task::spawn_blocking(move || {
-        std::process::Command::new("warp-cli")
-            .args(["--accept-tos", arg])
-            .output()
-    })
-    .await;
-
-    match result {
-        Ok(Ok(out)) if !out.status.success() => log::warn!(
+    match Command::new("warp-cli")
+        .args(["--accept-tos", arg])
+        .output()
+        .await
+    {
+        Ok(out) if !out.status.success() => log::warn!(
             "warp: `warp-cli {arg}` failed: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         ),
-        Ok(Err(e)) => log::warn!("warp: could not run `warp-cli {arg}`: {e}"),
-        Err(e) => log::warn!("warp: `warp-cli {arg}` task failed: {e}"),
+        Err(e) => log::warn!("warp: could not run `warp-cli {arg}`: {e}"),
         _ => {}
     }
 }

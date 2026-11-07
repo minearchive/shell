@@ -2,19 +2,13 @@
 
 ## Overview
 
-`WindowManagerIPC` (`src/ipc/mod.rs`) is an enum dispatcher instantiated once in
-`main()` (`WindowManagerIPC::new(ipc_tx)`) from `$XDG_CURRENT_DESKTOP`. Each
-backend's constructor spawns a listener thread that translates compositor-native
-events into the internal `IPCEvent` enum and sends them over a
-`calloop::channel`. The `IPCEvent` `insert_source` closure in `main()` fans
-each event out to every `Screen`, calling `screen.ui.on_ipc(event.clone())`,
-folds the `Redraw` results, and calls `shell.request_redraw(i)` for the
-screens that returned non-`Redraw::None`.
-
-`WindowManagerIPC` also directly implements `IpcTrait` itself (delegating to
-whichever backend variant it holds), for the two synchronous getters
-(`get_current_window_name`, `get_current_workspace`) — separate from the async
-event stream described above.
+`ipc::listen` (`src/ipc/mod.rs`) is called once in `main()` with `ipc_tx` and picks
+the backend from `$XDG_CURRENT_DESKTOP`. Each backend spawns a listener thread
+that translates compositor-native events into the internal `IPCEvent` enum and
+sends them over a `calloop::channel`. The closure registered with `on_msg` in
+`main()` calls `shell.dispatch(|ui| ui.on_ipc(&event))`, which fans the event out
+to every `Screen` and requests a redraw for the screens that returned
+non-`Redraw::None`.
 
 ## Adding a new IPCEvent variant
 
@@ -30,8 +24,6 @@ pub enum IPCEvent {
 }
 ```
 
-`IPCEvent` **must** `#[derive(Clone)]` — the main loop fans it to every screen.
-
 ### 2. Emit from a backend
 
 `src/ipc/niri.rs` (or `hyprland.rs`):
@@ -46,18 +38,15 @@ every component and folds their `Redraw` results — it doesn't match on
 variants itself:
 
 ```rust
-pub fn on_ipc(&mut self, event: IPCEvent) -> Redraw {
-    self.components
-        .iter_mut()
-        .map(|c| c.on_ipc(&event))
-        .fold(Redraw::None, Redraw::max)
+pub fn on_ipc(&mut self, event: &IPCEvent) -> Redraw {
+    self.fan_out(|c| c.on_ipc(event))
 }
 ```
 
 If `MonitorAdded` needs to update shared `UIState` (rather than being handled
-entirely inside a component), add that here — matching on the new variant and
-writing to `self.state` — following the pattern `on_mpris`/`on_warp` use for
-their own state fields (see [docs/config.md](config.md)).
+entirely inside a component), do it in the IPC closure in `main()` before
+dispatching, following the pattern the MPRIS and WARP closures use for their own
+state fields (see [docs/config.md](config.md)).
 
 ### 4. Handle (or ignore) in components
 
@@ -71,7 +60,4 @@ about; add a catch-all `_ => Redraw::None` arm to ignore the rest. Return
 | Backend | File | Status |
 |---------|------|--------|
 | niri | `src/ipc/niri.rs` | Implemented — workspace + window focus events |
-| hyprland | `src/ipc/hyprland.rs` | Stub — all `IpcTrait` methods are `todo!()` |
-
-When `XDG_CURRENT_DESKTOP=hyprland` the enum delegates to the Hyprland backend
-automatically, so implementing the stub methods there is all that is needed.
+| hyprland | `src/ipc/hyprland.rs` | Stub — empty handlers; `start_listener` blocks its caller |

@@ -1,16 +1,14 @@
 use std::collections::HashSet;
-use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
 
 use calloop::channel::Sender;
 use log::{debug, error, info};
-use mpris::{Event, LoopStatus, PlaybackStatus, PlayerFinder};
-
-static MPRIS: OnceLock<MprisClient> = OnceLock::new();
+use mpris::{Event, LoopStatus, PlaybackStatus, Player, PlayerFinder};
 
 #[derive(Debug, Clone)]
 pub struct PlayerState {
+    pub bus_name: String,
     pub identity: String,
     pub active: bool,
     pub status: PlaybackStatus,
@@ -22,16 +20,20 @@ pub struct PlayerState {
 }
 
 impl PlayerState {
-    pub fn new(identity: String) -> Self {
+    /// Snapshot a player we just found, which may be mid-song already.
+    pub fn read(player: &Player) -> Self {
         Self {
-            identity,
+            bus_name: player.bus_name().to_string(),
+            identity: player.identity().to_string(),
             active: true,
-            status: PlaybackStatus::Stopped,
+            status: player
+                .get_playback_status()
+                .unwrap_or(PlaybackStatus::Stopped),
             title: None,
             artists: None,
-            volume: None,
-            shuffle: false,
-            loop_status: LoopStatus::None,
+            volume: player.get_volume().ok(),
+            shuffle: player.get_shuffle().unwrap_or(false),
+            loop_status: player.get_loop_status().unwrap_or(LoopStatus::None),
         }
     }
 
@@ -58,132 +60,126 @@ impl PlayerState {
     }
 }
 
-pub struct MprisClient {
-    _sender: Sender<(PlayerState, Event)>,
-}
+pub fn start_listener(sender: Sender<(PlayerState, Event)>) {
+    thread::spawn(move || {
+        let finder = match PlayerFinder::new() {
+            Ok(f) => f,
+            Err(err) => {
+                error!("Failed to connect to D-Bus: {err}");
+                return;
+            }
+        };
 
-impl MprisClient {
-    pub fn init(sender: Sender<(PlayerState, Event)>) {
-        MPRIS.get_or_init(|| {
-            Self::start_listener(sender.clone());
-            Self { _sender: sender }
-        });
-    }
+        let mut tracked: HashSet<String> = HashSet::new();
+        let mut suppressed_errors: HashSet<String> = HashSet::new();
 
-    fn start_listener(sender: Sender<(PlayerState, Event)>) {
-        thread::spawn(move || {
-            let finder = match PlayerFinder::new() {
-                Ok(f) => f,
+        loop {
+            let mut current_errors: HashSet<String> = HashSet::new();
+
+            let players: Vec<_> = match finder.iter_players() {
+                Ok(iter) => iter
+                    .filter_map(|res| match res {
+                        Ok(player) => Some(player),
+                        Err(err) => {
+                            let msg = err.to_string();
+                            if !suppressed_errors.contains(&msg) {
+                                debug!("Skipping unreadable player: {err}");
+                            }
+                            current_errors.insert(msg);
+                            None
+                        }
+                    })
+                    .collect(),
                 Err(err) => {
-                    error!("Failed to connect to D-Bus: {err}");
-                    return;
+                    error!("Failed to list players: {err:?}");
+                    thread::sleep(Duration::from_secs(1));
+                    continue;
                 }
             };
 
-            let mut tracked: HashSet<String> = HashSet::new();
-            let mut suppressed_errors: HashSet<String> = HashSet::new();
+            let current: HashSet<String> =
+                players.iter().map(|p| p.bus_name().to_string()).collect();
 
-            loop {
-                let mut current_errors: HashSet<String> = HashSet::new();
+            tracked.retain(|bus_name| current.contains(bus_name));
 
-                let players: Vec<_> = match finder.iter_players() {
-                    Ok(iter) => iter
-                        .filter_map(|res| match res {
-                            Ok(player) => Some(player),
-                            Err(err) => {
-                                let msg = err.to_string();
-                                if !suppressed_errors.contains(&msg) {
-                                    debug!("Skipping unreadable player: {err}");
-                                }
-                                current_errors.insert(msg);
-                                None
-                            }
-                        })
-                        .collect(),
-                    Err(err) => {
-                        error!("Failed to list players: {err:?}");
-                        thread::sleep(Duration::from_secs(1));
-                        continue;
-                    }
-                };
-
-                let current: HashSet<String> =
-                    players.iter().map(|p| p.bus_name().to_string()).collect();
-
-                tracked.retain(|bus_name| current.contains(bus_name));
-
-                for player in &players {
-                    let bus_name = player.bus_name().to_string();
-                    if tracked.insert(bus_name.clone()) {
-                        let sender = sender.clone();
-                        info!("[{}] new player spawned. listening...", player.identity());
-                        thread::spawn(move || {
-                            MprisClient::read_events_for_player(bus_name, sender);
-                        });
-                    }
+            for player in &players {
+                let bus_name = player.bus_name().to_string();
+                if tracked.insert(bus_name.clone()) {
+                    let sender = sender.clone();
+                    info!("[{}] new player spawned. listening...", player.identity());
+                    thread::spawn(move || {
+                        read_events_for_player(bus_name, sender);
+                    });
                 }
-
-                suppressed_errors = current_errors;
-                thread::sleep(Duration::from_millis(500));
             }
-        });
+
+            suppressed_errors = current_errors;
+            thread::sleep(Duration::from_millis(500));
+        }
+    });
+}
+
+fn read_events_for_player(bus_name: String, sender: Sender<(PlayerState, Event)>) {
+    let finder = match PlayerFinder::new() {
+        Ok(finder) => finder,
+        Err(err) => {
+            error!("[{bus_name}] Could not connect to D-Bus: {err}");
+            return;
+        }
+    };
+
+    let players = match finder.iter_players() {
+        Ok(players) => players,
+        Err(err) => {
+            error!("[{bus_name}] Could not list players: {err}");
+            return;
+        }
+    };
+
+    let player = match players
+        .filter_map(Result::ok)
+        .find(|p| p.bus_name() == bus_name)
+    {
+        Some(player) => player,
+        None => {
+            error!("[{bus_name}] Player no longer present");
+            return;
+        }
+    };
+
+    let events = match player.events() {
+        Ok(events) => events,
+        Err(err) => {
+            error!(
+                "[{}] Could not start event stream: {err}",
+                player.identity()
+            );
+            return;
+        }
+    };
+
+    let mut state = PlayerState::read(&player);
+
+    if let Ok(metadata) = player.get_metadata() {
+        let event = Event::TrackChanged(metadata);
+        state.apply(&event);
+        let _ = sender.send((state.clone(), event));
     }
 
-    fn read_events_for_player(bus_name: String, sender: Sender<(PlayerState, Event)>) {
-        let finder = match PlayerFinder::new() {
-            Ok(finder) => finder,
-            Err(err) => {
-                error!("[{bus_name}] Could not connect to D-Bus: {err}");
-                return;
-            }
-        };
+    for event in events {
+        match event {
+            Ok(event) => {
+                state.apply(&event);
+                let _ = sender.send((state.clone(), event));
 
-        let players = match finder.iter_players() {
-            Ok(players) => players,
-            Err(err) => {
-                error!("[{bus_name}] Could not list players: {err}");
-                return;
-            }
-        };
-
-        let player = match players
-            .filter_map(Result::ok)
-            .find(|p| p.bus_name() == bus_name)
-        {
-            Some(player) => player,
-            None => {
-                error!("[{bus_name}] Player no longer present");
-                return;
-            }
-        };
-
-        let identity = player.identity().to_string();
-
-        let events = match player.events() {
-            Ok(events) => events,
-            Err(err) => {
-                error!("[{identity}] Could not start event stream: {err}");
-                return;
-            }
-        };
-
-        let mut state = PlayerState::new(identity.clone());
-
-        for event in events {
-            match event {
-                Ok(event) => {
-                    state.apply(&event);
-                    let _ = sender.send((state.clone(), event));
-
-                    if !state.active {
-                        info!("[{identity}] Player has been closed");
-                        break;
-                    }
-                }
-                Err(err) => {
-                    error!("[{identity}] D-Bus error: {err}. Aborting.");
+                if !state.active {
+                    info!("[{}] Player has been closed", state.identity);
                     break;
                 }
+            }
+            Err(err) => {
+                error!("[{}] D-Bus error: {err}. Aborting.", state.identity);
+                break;
             }
         }
     }
@@ -197,6 +193,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "needs a live MPRIS player and runs until it quits"]
     fn test_run() {
         let finder = PlayerFinder::new().expect("Could not connect to D-Bus");
         let players = finder.find_all().expect("Could not list players");

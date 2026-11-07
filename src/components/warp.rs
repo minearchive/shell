@@ -1,22 +1,13 @@
 use skia_safe::{utils::text_utils::Align, Canvas, Color4f, Paint};
-use tokio::sync::mpsc::UnboundedSender;
 
 use ui_core::{font::FontBook, scheme::ColorTheme};
 
 use crate::{
-    dbus::warp::{WarpCommand, WarpStatus},
+    dbus::warp::WarpStatus,
     ui::{Component, Redraw, UIState},
 };
 
 pub struct Warp;
-
-impl Warp {
-    pub fn new(cmd: UnboundedSender<WarpCommand>) -> Self {
-        let _ = cmd.send(WarpCommand::UpdateState);
-
-        Self
-    }
-}
 
 impl Component for Warp {
     fn draw(

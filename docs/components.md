@@ -30,7 +30,7 @@ pub trait Component {
     fn on_kde_connect_event(&mut self, _event: &KDEConnectEvent) -> Redraw { Redraw::None }
     fn on_warp(&mut self, _status: &WarpStatus) -> Redraw { Redraw::None }
     fn on_notification(&mut self, _event: &NotificationEvent) -> Redraw { Redraw::None }
-    fn on_easing_updated(&mut self, _id: String, _easing: &Easing) -> Redraw { Redraw::None }
+    fn on_easing_updated(&mut self, _id: &str, _easing: &Easing) -> Redraw { Redraw::None }
 }
 ```
 
@@ -74,9 +74,8 @@ every event and will crash the process.
 Return `Redraw::Now` when something changed and needs one repaint, and
 `Redraw::Animating` while an `Animation` is still traveling (see
 `Clock::draw`, which returns `Animating` until `self.animation.is_done()`) —
-`Animating` is what keeps a running animation's frames coming, since
-`UserInterface::draw` sends `UiEvent::RequestRedrawAll` whenever any component
-reports it.
+`Animating` is what keeps a running animation's frames coming: `Shell::draw`
+leaves that screen's `needs_redraw` set, so its next frame callback repaints it.
 
 ## 2. Register the module and instantiate
 
@@ -89,30 +88,26 @@ pub mod my_widget;
 a `macro_rules!` that expands `boxed!(a, b)` to `vec![Box::new(a), Box::new(b)]`):
 ```rust
 let components: Vec<Box<dyn Component>> = boxed!(
-    Clock::new(rx.clone(), idx, 1000, Arc::clone(&animation)),
-    Warp::new(commands.warp),
+    Clock::new(animation),
+    Warp,
     MyWidget::new(/* … */),
 );
 ```
-`UserInterface::new` itself takes `(rx: Sender<UiEvent>, idx, _ipc: &mut WindowManagerIPC,
-commands: Commands, theme: Arc<RwLock<Theme>>, animation: Arc<RwLock<AnimationConfig>>)` —
-pass whichever of `theme`/`animation`/`commands` your new component needs
-through to its constructor from there.
+`UserInterface::new` itself takes `(theme: Arc<RwLock<Theme>>, animation: &RwLock<AnimationConfig>)`
+— pass whichever your new component needs through to its constructor from there.
 
-## 3. Triggering redraws from a background thread
+## 3. Triggering redraws
 
-Hold a clone of the `Sender<UiEvent>` and the screen index passed into
-`UserInterface::new`. Send from any thread:
+Components own no threads. Data arrives through a provider channel (see
+[docs/data-sources.md](data-sources.md)) and the `on_*` handler's `Redraw` return
+value requests the repaint. For time-driven content, read the clock in `draw` the
+way `Clock` does: the `CLOCK_TICK` timer in `main()` calls
+`shell.request_redraw_all()` every second.
 
-```rust
-let _ = sender.send(UiEvent::RequestRedraw(screen_idx));
-```
-
-`UiEvent::RequestRedraw(idx)` is handled in `main()`'s `UiEvent` channel
-closure by calling `shell.request_redraw(idx)`, which sets
-`Screen.needs_redraw` and draws immediately unless a `wl_surface.frame`
-callback is still outstanding. There is no separate dirty flag on `UIState`.
-See CLAUDE.md's "Rendering is event-driven" section for the full model.
+`shell.request_redraw(idx)` sets `Screen.needs_redraw` and draws immediately
+unless a `wl_surface.frame` callback is still outstanding. There is no separate
+dirty flag on `UIState`. See CLAUDE.md's "Rendering is event-driven" section for
+the full model.
 
 ## 4. Using fonts
 
@@ -120,15 +115,7 @@ See CLAUDE.md's "Rendering is event-driven" section for the full model.
 registered by default, in `main()` right after `FontBook::new()` (Noto Sans
 CJK JP).
 
-To use another font, send `UiEvent::RegisterFont` once before the first draw:
-
-```rust
-let _ = sender.send(UiEvent::RegisterFont(
-    "roboto".into(),
-    "Roboto".into(),
-    skia_safe::FontStyle::normal(),
-));
-```
+To use another font, add a `book.register(..)` call next to it.
 
 **Calling `fonts.sized` with an unregistered key panics** (`ui_core/src/font/mod.rs`,
 `FontBook::sized`) — there is no silent fallback. Register the key before any
@@ -140,9 +127,10 @@ let _ = sender.send(UiEvent::RegisterFont(
 
 | Field | Type | Meaning |
 |-------|------|---------|
-| `players` | `HashMap<String, PlayerState>` | Active MPRIS players, keyed by identity |
+| `players` | `HashMap<String, PlayerState>` | Active MPRIS players, keyed by bus name |
 | `warp` | `Option<WarpStatus>` | Latest Cloudflare WARP status, if connected |
 
 To surface new data to components, add a field to `UIState` and update it in the
-relevant `UserInterface::on_*` handler. See [docs/data-sources.md](data-sources.md)
-and [docs/config.md](config.md) for details on `UIState` and `Configuration`/`Theme`.
+provider's channel closure in `main()`, before dispatching. See
+[docs/data-sources.md](data-sources.md) and [docs/config.md](config.md) for details
+on `UIState` and `Theme`.

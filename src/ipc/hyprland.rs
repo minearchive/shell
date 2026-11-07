@@ -3,7 +3,7 @@ use std::fmt;
 use calloop::channel::Sender;
 use hyprland::{default_instance, event_listener::EventListener, instance::Instance};
 
-use crate::ipc::{events::IPCEvent, IpcTrait};
+use crate::ipc::events::IPCEvent;
 
 pub enum HyprlandIPCError {
     EventListenerError(hyprland::error::HyprError),
@@ -22,16 +22,6 @@ impl fmt::Display for HyprlandIPCError {
 pub struct HyprlandIpc {
     _event_listener: EventListener,
     _instance: &'static Instance,
-}
-
-impl IpcTrait for HyprlandIpc {
-    fn get_current_window_name(&mut self) -> Option<String> {
-        todo!()
-    }
-
-    fn get_current_workspace(&mut self) -> u32 {
-        todo!()
-    }
 }
 
 impl HyprlandIpc {

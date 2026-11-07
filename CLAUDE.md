@@ -27,8 +27,8 @@ needed by Skia and GL/Wayland. The EGL vendor path assumes NixOS's
 nix develop
 cargo build
 RUST_LOG=debug cargo run      # env_logger reads RUST_LOG; use info/debug
-cargo test                    # runs the mpris event-stream test in src/dbus/mpris.rs
-cargo test test_run -- --nocapture   # the single integration-ish test (needs a live MPRIS player)
+cargo test
+cargo test test_run -- --ignored --nocapture   # mpris event stream (needs a live MPRIS player, runs until it quits)
 ```
 
 For a non-interactive build (also used by CI):
@@ -71,9 +71,9 @@ They are not related and do not share a supertrait. See
 [docs/widgets.md](docs/widgets.md) for the distinction in detail.
 
 The bar itself is one event loop (`calloop`) driving N `Screen`s (one per
-Wayland output). `Shell` (in `src/main.rs`) owns all Wayland/SCTK state and
-implements every SCTK delegate (compositor, output, layer, seat, keyboard,
-pointer, shm). Per output it creates a `Top`-layer surface anchored to the
+Wayland output). `Shell` (in `src/main.rs`) owns all Wayland/SCTK state; its SCTK
+handlers live in `src/output.rs` (compositor, output, layer), `src/seat.rs` (seat,
+pointer) and `src/dnd.rs` (data device). Per output it creates a `Top`-layer surface anchored to the
 bottom/left/right edges with a 60px exclusive zone.
 
 ### Rendering is event-driven, not a render loop
@@ -81,23 +81,24 @@ There is no redraw flag on `UIState`. Each `Screen` tracks `needs_redraw` and
 `frame_pending`; `Shell::request_redraw(idx)` sets `needs_redraw = true` and
 draws immediately unless a `wl_surface.frame` callback is still outstanding
 (`frame_pending`), in which case the frame callback (`CompositorHandler::frame`)
-redraws once it fires. `Shell::draw` clears `needs_redraw`, sets
-`frame_pending = true`, wraps the SHM buffer's pixels directly with Skia
-(`surfaces::wrap_pixels` — no GPU surface), calls `screen.ui.draw(canvas, &font)`,
-requests a new frame callback, and commits.
+redraws once it fires. `Shell::draw` sets `frame_pending = true`, wraps the SHM
+buffer's pixels directly with Skia (`surfaces::wrap_pixels` — no GPU surface),
+calls `screen.ui.draw(canvas, &state, &font)`, sets `needs_redraw` to whether that
+returned `Animating`, requests a new frame callback, and commits.
 
 Component handlers report whether a redraw is needed via `Redraw { None, Now,
 Animating }` (`src/ui.rs`); `UserInterface` folds every component's result with
-`Redraw::max`. `Now` just means "something changed"; `Animating` additionally
-makes `UserInterface::draw` send `UiEvent::RequestRedrawAll`, which redraws
-every screen — this is how a running `Animation` keeps repainting itself every
-frame without any handler having to reschedule it explicitly.
+`Redraw::max`. `Now` just means "something changed"; `Animating` returned from
+`draw` makes that screen's next frame callback repaint it — this is how a running
+`Animation` keeps repainting itself every frame without any handler having to
+reschedule it explicitly. A `CLOCK_TICK` calloop timer in `main()` also repaints
+every screen once a second.
 
 ### The five async input channels (wired in `main()`)
 Background threads/providers feed the calloop event loop through
-`calloop::channel`s. `main()` registers one `insert_source` per channel; each
-closure fans the message out to every `Screen`, collects which ones returned
-non-`Redraw::None`, and calls `shell.request_redraw(idx)` for those:
+`calloop::channel`s. `main()` registers each channel with `on_msg`; each closure
+calls `shell.dispatch`, which fans the message out to every `Screen` and calls
+`shell.request_redraw(idx)` for those that returned non-`Redraw::None`:
 
 | Channel payload | Handler |
 |---|---|
@@ -107,28 +108,24 @@ non-`Redraw::None`, and calls `shell.request_redraw(idx)` for those:
 | `KDEConnectEvent` | `screen.ui.on_kde_connect_event` |
 | `WarpStatus` | `screen.ui.on_warp` |
 
-A sixth channel, `UiEvent` (`RequestRedraw`/`RequestRedrawAll`/`RegisterFont`/
-`AnimationUpdated`), drives `Shell` directly rather than going through a
+A sixth channel, `UiEvent` (`RequestRedrawAll`/`AnimationUpdated`), drives `Shell` directly rather than going through a
 `Component` method.
 
-`UserInterface` (`src/ui.rs`) holds `Vec<Box<dyn Component>>` plus a `UIState`
-(currently `players: HashMap<String, PlayerState>` and `warp: Option<WarpStatus>`).
-Every `on_*` handler both fans out to every `Component` and updates `UIState`
-where relevant. **All drawing lives in components** — `UserInterface::draw`
+`UserInterface` (`src/ui.rs`) holds `Vec<Box<dyn Component>>`; every `on_*` handler
+fans out to every `Component`. `Shell` holds the one `UIState` shared by all screens
+(currently `players: HashMap<String, PlayerState>` and `warp: Option<WarpStatus>`),
+updated in the channel closures in `main()` before dispatching. **All drawing lives in components** — `UserInterface::draw`
 only clears the canvas to `theme.surface_container` and calls each
 `Component::draw`; there is no inline text drawing left in `main.rs`/`ui.rs`.
 
 ### Window-manager IPC abstraction (`src/ipc/`)
-`WindowManagerIPC` is an enum dispatcher selected at runtime from
-`$XDG_CURRENT_DESKTOP` (`niri` or `hyprland`). Both backends implement `IpcTrait`
-(`get_current_window_name`, `get_current_workspace`). Each backend spawns a
-listener thread translating compositor-native events into the small internal
+`ipc::listen` selects a backend at runtime from `$XDG_CURRENT_DESKTOP` (`niri` or
+`hyprland`). Each backend spawns a listener thread translating compositor-native events into the small internal
 `IPCEvent` enum (`src/ipc/events.rs`) sent over the channel.
-- **niri** (`niri.rs`): connects two `niri-ipc` sockets — one for synchronous
-  requests, one for the `EventStream`. Maintains a `HashMap<id, Window>` to
+- **niri** (`niri.rs`): connects a `niri-ipc` socket for the `EventStream`. Maintains a `HashMap<id, Window>` to
   resolve titles on focus changes. This is the fleshed-out backend.
-- **hyprland** (`hyprland.rs`): all handlers are registered but empty;
-  `IpcTrait` methods are `todo!()`. Largely a stub.
+- **hyprland** (`hyprland.rs`): all handlers are registered but empty, and
+  `start_listener` blocks its caller. Parked stub.
 
 ### Fonts (`ui_core/src/font/`)
 `FontBook` (moved out of the bar into `ui_core`) wraps a Skia `FontMgr` plus a
@@ -142,7 +139,6 @@ there is no silent fallback. Register every key you use before the first draw.
 
 `TODO.md` tracks intended providers (audio, battery, network, monitor) and IPC
 event-mapping work. Current live state: niri IPC handles workspace + window-focus
-changes; MPRIS events arrive and `UserInterface::on_mpris` is fully implemented
-(updates `UIState.players`). Hyprland IPC is a stub (`IpcTrait` methods are
-`todo!()`). The M3 widget stack (`ui_widget`/`m3_widget`) is under active
+changes; MPRIS events arrive and update `UIState.players`. Hyprland IPC is a parked
+stub. The M3 widget stack (`ui_widget`/`m3_widget`) is under active
 development against the `m3_test` gallery and is not yet wired into the bar.

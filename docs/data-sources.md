@@ -126,19 +126,12 @@ loop_handle
 
 ### 4. Add `on_battery` to `UserInterface`
 
-`src/ui.rs` — fan out to every component, fold their `Redraw` results, and
-(optionally) cache the latest value in `UIState` so `draw` can read it. Mirror
+`src/ui.rs` — fan out to every component and fold their `Redraw` results. Mirror
 `UserInterface::on_warp` exactly:
 
 ```rust
 pub fn on_battery(&mut self, event: &BatteryEvent) -> Redraw {
-    let redraw = self
-        .components
-        .iter_mut()
-        .map(|c| c.on_battery(event))
-        .fold(Redraw::None, Redraw::max);
-    // optional: self.state.battery = Some(event.clone());
-    redraw
+    self.fan_out(|c| c.on_battery(event))
 }
 ```
 
@@ -162,9 +155,9 @@ as events arrive and will crash the process.
 ### 6. Surface state via `UIState` (optional)
 
 If a component needs the latest battery value inside `draw`, store it in
-`UIState` (step 4) and read `state.battery` there. Add the field in `src/ui.rs`,
-initialise it in `UIState::new`, and update it inside `on_battery`. The
-`Redraw` returned from `on_battery` (step 4) is what actually triggers the
+`UIState` and read `state.battery` there. Add the field in `src/ui.rs` and update
+it in the channel closure in `main()`, before `shell.dispatch` (the WARP closure
+shows the shape). The `Redraw` returned from `on_battery` (step 4) is what actually triggers the
 repaint — `on_warp` folds and returns its components' `Redraw` the same way,
 so simply caching a value in `UIState` without a component reacting to it in
 `on_warp`/`on_battery` produces no visible update until the next unrelated

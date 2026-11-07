@@ -1,16 +1,14 @@
-use std::fs;
-use std::io;
+use std::path::Path;
 
-use log::info;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use ui_core::scheme::ColorTheme;
 
 use crate::ui::UiEvent;
 
-use super::watchable::WatchableConfig;
+use super::watchable::{read_toml, WatchableConfig};
 
-#[derive(Deserialize, Serialize, Default, PartialEq)]
+#[derive(Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct Theme {
     pub is_dark: bool,
@@ -19,24 +17,8 @@ pub struct Theme {
 }
 
 impl WatchableConfig for Theme {
-    fn try_load(path: &str) -> Option<Self> {
-        let src = fs::read_to_string(path)
-            .map_err(|e| info!("Theme read failed: {e}"))
-            .ok()?;
-
-        if src.trim().is_empty() {
-            return None;
-        }
-
-        toml::from_str(&src)
-            .map_err(|e| info!("Theme parse failed:\n{e}"))
-            .ok()
-    }
-
-    fn write(&self, path: &str) -> io::Result<()> {
-        let content =
-            toml::to_string(self).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        fs::write(path, content)
+    fn try_load(path: &Path) -> Option<Self> {
+        read_toml(path)
     }
 
     fn is_changed(&self, new: &Self) -> bool {
