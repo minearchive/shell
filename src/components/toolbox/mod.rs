@@ -10,7 +10,7 @@ use calloop::channel::Sender;
 use m3_widget::{icon::BOX_SIZE, Icon};
 use skia_safe::{Canvas, Color4f, Paint, Point, RRect, Rect};
 use smithay_client_toolkit::seat::pointer::{
-    PointerEvent as SctkPointerEvent, PointerEventKind as SctkKind,
+    AxisScroll, PointerEvent as SctkPointerEvent, PointerEventKind as SctkKind,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -372,7 +372,8 @@ impl Component for Toolbox {
                     ..
                 } => {
                     // A wheel counts in steps; a touchpad doesn't.
-                    let continuous = horizontal.discrete == 0 && horizontal.value120 == 0;
+                    let steps = |axis: &AxisScroll| axis.discrete != 0 || axis.value120 != 0;
+                    let continuous = !steps(horizontal) && !steps(vertical);
                     let moved = panel.on_scroll(
                         horizontal.absolute as f32,
                         vertical.absolute as f32,

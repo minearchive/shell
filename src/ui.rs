@@ -23,7 +23,7 @@ use ui_core::{
 };
 
 use crate::{
-    components::{clock::Clock, media::Media, notifications::Notifications, toolbox::Toolbox},
+    components::{clock::Clock, media::Media, toolbox::Toolbox},
     config::{animation::AnimationConfig, theme::Theme},
     dbus::{
         kdeconnect::KDEConnectEvent,
@@ -68,7 +68,9 @@ pub enum Redraw {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum IslandPlacement {
     /// Over a point on the bar, scaling up from nothing at its bottom center.
-    /// `center_x` of `None` centers it on the bar.
+    /// `center_x` of `None` centers it on the bar. The one docs/components.md starts a
+    /// new component from, though no component uses it today.
+    #[allow(dead_code)]
     Joined { center_x: Option<f32> },
     /// Centered like `Joined`, but reaching down over the bar to the screen's edge, taking
     /// over the middle of the bar's row for as long as it is open.
@@ -413,7 +415,6 @@ impl UserInterface {
         let components: Vec<Box<dyn Component>> = boxed!(
             Clock,
             Media::new(player_commands),
-            Notifications::new(ui_tx.clone()),
             Toolbox::new(system_commands, warp_commands, ui_tx)
         );
         let islands = components
@@ -692,13 +693,10 @@ mod tests {
     use std::rc::Rc;
     use std::thread;
 
-    use skia_safe::{surfaces, FontStyle, Surface};
+    use skia_safe::{surfaces, Surface};
 
     use super::*;
-    use crate::{
-        config::WatchableConfig,
-        dbus::notification::{NotificationSnapshot, Urgency},
-    };
+    use crate::config::WatchableConfig;
 
     const SIZE: (i32, i32) = (800, (ISLAND_MAX_HEIGHT + BAR_HEIGHT) as i32);
     const ABOVE_BAR: i32 = BAR_TOP as i32 - 5;
@@ -940,19 +938,27 @@ mod tests {
             tokio::sync::mpsc::unbounded_channel().0,
             mpsc::channel().0,
         );
-        let mut fonts = FontBook::new();
-        fonts.register("noto_sans", "Noto Sans CJK JP", FontStyle::normal());
-        let mut state = UIState::default();
+        let bidder = Bidder {
+            center_x: 400.0,
+            bidding: Rc::default(),
+            frame: Rc::default(),
+        };
+        let bidding = bidder.bidding.clone();
+        ui.components = vec![Box::new(bidder)];
+        ui.islands.truncate(1);
+
+        let fonts = FontBook::new();
+        let state = UIState::default();
         let mut surface = surfaces::raster_n32_premul(SIZE).unwrap();
-        let mut draw = |ui: &mut UserInterface, state: &UIState| {
-            ui.draw(surface.canvas(), state, &fonts, SIZE.0 as f32);
+        let mut draw = |ui: &mut UserInterface| {
+            ui.draw(surface.canvas(), &state, &fonts, SIZE.0 as f32);
             // Let the morph finish, then paint its end state.
             thread::sleep(ISLAND_MORPH + Duration::from_millis(20));
-            ui.draw(surface.canvas(), state, &fonts, SIZE.0 as f32);
+            ui.draw(surface.canvas(), &state, &fonts, SIZE.0 as f32);
             surface.clone()
         };
 
-        let mut idle = draw(&mut ui, &state);
+        let mut idle = draw(&mut ui);
         assert_eq!(ui.island_rect(), None);
         assert_eq!(
             alpha(&mut idle, 400, ABOVE_BAR),
@@ -961,21 +967,8 @@ mod tests {
         );
         assert_eq!(alpha(&mut idle, 10, IN_BAR), 255, "bar is opaque");
 
-        state.notifications.apply(
-            &NotificationEvent::Posted {
-                id: 1,
-                data: NotificationSnapshot {
-                    app_name: "Slack".into(),
-                    summary: "田中さん".into(),
-                    body: "明日のレビューの件について、資料を共有します。".into(),
-                    urgency: Urgency::Normal,
-                    expire_timeout: 0,
-                    ..Default::default()
-                },
-            },
-            std::time::Instant::now(),
-        );
-        let mut open = draw(&mut ui, &state);
+        bidding.set(true);
+        let mut open = draw(&mut ui);
         let rect = ui.island_rect().expect("island is open");
         assert_eq!(rect.y + rect.height, BAR_TOP);
         assert_eq!(rect.x + rect.width / 2.0, 400.0);
@@ -986,8 +979,8 @@ mod tests {
             "beside it stays transparent"
         );
 
-        state.notifications.remove(1);
-        let mut closed = draw(&mut ui, &state);
+        bidding.set(false);
+        let mut closed = draw(&mut ui);
         assert_eq!(ui.island_rect(), None);
         assert!(ui.islands.iter().all(|island| island.slot.is_none()));
         assert_eq!(alpha(&mut closed, 400, ABOVE_BAR), 0);

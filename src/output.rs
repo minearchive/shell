@@ -44,6 +44,9 @@ impl CompositorHandler for Shell {
     }
 
     fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, surfaces: &WlSurface, _: u32) {
+        if self.banner_frame(surfaces) {
+            return;
+        }
         if let Some(idx) = self.screen_for(surfaces) {
             self.screen[idx].frame_pending = false;
             if self.screen[idx].needs_redraw {
@@ -93,6 +96,7 @@ impl OutputHandler for Shell {
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer.commit();
 
+        let banner = self.create_banner(&output);
         self.screen.push(Screen {
             layer,
             width: 0,
@@ -111,6 +115,7 @@ impl OutputHandler for Shell {
             ),
             output,
             catcher: None,
+            banner: Some(banner),
         });
     }
 
@@ -129,7 +134,9 @@ impl LayerShellHandler for Shell {
         configure: LayerSurfaceConfigure,
         _serial: u32,
     ) {
-        if self.configure_catcher(surfaces, configure.new_size) {
+        if self.configure_catcher(surfaces, configure.new_size)
+            || self.configure_banner(surfaces, configure.new_size)
+        {
             return;
         }
 
@@ -150,7 +157,7 @@ impl LayerShellHandler for Shell {
     /// Only this surface is gone (typically its monitor was unplugged); the
     /// other screens keep running, and `new_output` covers a replugged monitor.
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, surface: &LayerSurface) {
-        if !self.close_catcher(surface) {
+        if !self.close_catcher(surface) && !self.close_banner(surface) {
             self.screen.retain(|s| &s.layer != surface);
         }
     }

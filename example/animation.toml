@@ -8,3 +8,4 @@ island = "linear(0, 0.067, 0.1294, 0.1877, 0.2421, 0.2929, 0.3402, 0.3844, 0.425
 media_play_pause = "conf::ease_out_cubic"
 slider_handle = "conf::m3_standard"
 slider_indicator = "conf::m3_standard"
+notification_banner = "conf::island"

@@ -133,6 +133,7 @@ The bar reads these names:
 | `media_play_pause` | The media card's play button shape and the seek bar's wave height | ease-out cubic |
 | `slider_handle` | A slider's handle narrowing while pressed (toolbox and seek bar) | M3 standard |
 | `slider_indicator` | A slider's value indicator fading in and out | M3 standard |
+| `notification_banner` | The notification card dropping in from the top of the screen and leaving | ease-out cubic |
 
 Any other name is free for your own definitions to reuse. Separate words with `_`,
 not `.`: a bare `a.b = …` is a nested TOML table and the file fails to parse. An easing that fails to parse is skipped with

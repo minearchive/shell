@@ -7,6 +7,10 @@ use calloop::channel::Sender;
 use log::{debug, error, info};
 use mpris::{DBusError, Event, LoopStatus, PlaybackStatus, Player, PlayerFinder};
 
+/// How far a player's report may differ from our count before we believe it. Many report
+/// whole seconds, and following those would make playback stutter backwards.
+const POSITION_TOLERANCE: Duration = Duration::from_millis(1500);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlayerAction {
     Previous,
@@ -60,15 +64,29 @@ impl PlayerState {
         }
     }
 
+    fn position(&self, now: Instant) -> Duration {
+        if self.status == PlaybackStatus::Playing {
+            self.position + now.saturating_duration_since(self.position_at)
+        } else {
+            self.position
+        }
+    }
+
     /// `(position, length)` as of `now`, for a player that reports a length.
     pub fn progress(&self, now: Instant) -> Option<(Duration, Duration)> {
         let length = self.length.filter(|length| !length.is_zero())?;
-        let elapsed = if self.status == PlaybackStatus::Playing {
-            now.saturating_duration_since(self.position_at)
-        } else {
-            Duration::ZERO
-        };
-        Some(((self.position + elapsed).min(length), length))
+        Some((self.position(now).min(length), length))
+    }
+
+    /// Takes a position the player reported at `at`, if it says we have drifted. Returns
+    /// whether it did.
+    pub fn sync_position(&mut self, position: Duration, at: Instant) -> bool {
+        if self.position(at).abs_diff(position) < POSITION_TOLERANCE {
+            return false;
+        }
+        self.position = position;
+        self.position_at = at;
+        true
     }
 
     pub fn apply(&mut self, event: &Event) {
@@ -140,7 +158,11 @@ fn start_commands() -> mpsc::Sender<PlayerCommand> {
     tx
 }
 
-pub fn start_listener(sender: Sender<(PlayerState, Event)>) -> mpsc::Sender<PlayerCommand> {
+/// `positions` gets what each player reports as it plays: not all of them announce a seek.
+pub fn start_listener(
+    sender: Sender<(PlayerState, Event)>,
+    positions: Sender<(String, Duration, Instant)>,
+) -> mpsc::Sender<PlayerCommand> {
     thread::spawn(move || {
         let finder = match PlayerFinder::new() {
             Ok(f) => f,
@@ -184,6 +206,9 @@ pub fn start_listener(sender: Sender<(PlayerState, Event)>) -> mpsc::Sender<Play
 
             for player in &players {
                 let bus_name = player.bus_name().to_string();
+                if let Ok(position) = player.get_position() {
+                    let _ = positions.send((bus_name.clone(), position, Instant::now()));
+                }
                 if tracked.insert(bus_name.clone()) {
                     let sender = sender.clone();
                     info!("[{}] new player spawned. listening...", player.identity());
@@ -299,6 +324,22 @@ mod tests {
         assert_eq!(unknown.progress(in_5s(&unknown)), None);
         let empty = state(PlaybackStatus::Playing, Some(0));
         assert_eq!(empty.progress(in_5s(&empty)), None);
+    }
+
+    #[test]
+    fn only_a_real_drift_moves_the_position() {
+        let mut playing = state(PlaybackStatus::Playing, Some(100));
+        let at = playing.position_at + Duration::from_secs(5);
+
+        // We count 15s. A report in whole seconds is close enough.
+        assert!(!playing.sync_position(Duration::from_secs(14), at));
+        assert_eq!(playing.position, Duration::from_secs(10));
+
+        assert!(playing.sync_position(Duration::from_secs(60), at));
+        assert_eq!(
+            playing.progress(at).map(|(position, _)| position),
+            Some(Duration::from_secs(60))
+        );
     }
 
     #[test]

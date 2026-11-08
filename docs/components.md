@@ -89,7 +89,6 @@ a `macro_rules!` that expands `boxed!(a, b)` to `vec![Box::new(a), Box::new(b)]`
 let components: Vec<Box<dyn Component>> = boxed!(
     Clock,
     Media::new(player_commands),
-    Notifications::new(ui_tx),
     Toolbox::new(system_commands, warp_commands),
     MyWidget::new(/* … */),
 );
@@ -105,7 +104,7 @@ origin is your slot's top-left corner, and `on_cursor` positions are relative to
 
 ## 3. Growing an island
 
-`Notifications` (`src/components/notifications.rs`) is the reference. A bar has one
+`Media` (`src/components/media.rs`) and `Toolbox` are the references. A bar has one
 island, so components bid for it:
 
 ```rust
@@ -134,8 +133,7 @@ fn on_island_cursor(&mut self, event: &PointerEvent) -> Redraw {
 - `island` runs before every draw. Keep returning a request while you want the
   island, and return `None` to collapse it. Changing the size morphs it.
 - The highest `priority` wins the main island, the only one that stays open, and takes
-  the pointer. On a tie, the later component does. `Notifications` uses 100, or 200 for
-  critical. Every component has its own island, so one that loses collapses where it is
+  the pointer. On a tie, the later component does. The toolbox uses 150. Every component has its own island, so one that loses collapses where it is
   while the winner opens where it is, and opens again when it next wins.
 - `draw_island` keeps being called while the island collapses, after `island` has
   returned `None`, so keep a copy of what you were showing.
@@ -148,6 +146,9 @@ fn on_island_cursor(&mut self, event: &PointerEvent) -> Redraw {
   `IslandPlacement::Joined` sits over a point on the bar and scales from nothing at its
   bottom center. `IslandPlacement::OverBar` does the same but reaches down over the bar to
   the screen's edge, so presses on that part of the bar's row go to the island.
+- Notifications are not an island. The one on display drops in as a card from the top of
+  the screen, on a surface of its own (`src/banner.rs`, drawn by `Banner` in
+  `src/components/notifications.rs`), and a click dismisses it.
   `IslandPlacement::Corner { from_width }` is flush with the screen's right
   edge, widening from `from_width`, with content scaling from the bottom-right.
 - `draw_overlay` draws over the island's content, unscaled, at your bar slot's origin, and

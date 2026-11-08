@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use m3_widget::Icon;
+use m3_widget::{icon::BOX_SIZE, Icon};
 use skia_safe::{
     Canvas, Color4f, FilterMode, Image, MipmapMode, Paint, PaintCap, PaintJoin, PaintStyle,
     PathBuilder, Point, RRect, Rect, SamplingOptions, Vector,
@@ -50,7 +50,6 @@ const CHILD_PADDING: f32 = 12.0;
 const ICON_SIZE: f32 = 40.0;
 const TEXT_X: f32 = ROW_PADDING + ICON_SIZE + ROW_PADDING;
 const BUTTON_SIZE: f32 = 28.0;
-const BUTTON_ICON: f32 = 14.0;
 const PILL_HEIGHT: f32 = 24.0;
 const CHEVRON: f32 = 16.0;
 const LIST_TOP: f32 = TOP_PADDING + HEADER_HEIGHT + HEADER_GAP;
@@ -61,7 +60,7 @@ const ROW_WIDTH: f32 = PANEL_WIDTH - PANEL_PADDING * 2.0;
 pub const PANEL_HEIGHT: f32 = LIST_TOP + CARD_HEIGHT * 3.0 + ROW_GAP * 2.0 + LIST_BOTTOM;
 /// Pixels per unit of the compositor's axis value.
 /// ponytail: one speed for wheels and touchpads; split on `source` if either feels off.
-const SCROLL_SPEED: f32 = 1.0;
+const SCROLL_SPEED: f32 = 2.0;
 /// How far a press moves before it counts as a drag rather than a click.
 const DRAG_SLOP: f32 = 6.0;
 /// How much of its width a row must be dragged to go once let go.
@@ -69,6 +68,8 @@ const DISMISS_RATIO: f32 = 0.4;
 const SLIDE: Duration = Duration::from_millis(200);
 /// How long rows take to close a gap, or to make room for an app opening.
 const MOVE: Duration = Duration::from_millis(250);
+/// How long a wheel's step takes to scroll.
+const SCROLL: Duration = Duration::from_millis(200);
 /// "すべて消去" slides the rows in view away one after another, from the top, this far
 /// apart.
 const CLEAR_STAGGER: Duration = Duration::from_millis(50);
@@ -177,10 +178,6 @@ impl Row {
             Kind::Child => (String::new(), format!("{} · {ago}", data.summary)),
         };
         let text = data.body.lines().next().unwrap_or_default().to_string();
-        // The close button only shows on hover, but the text stops short of it anyway,
-        // so that hovering doesn't reflow it.
-        let width = close.x - 8.0 - (rect.x + TEXT_X);
-        let fit = |text: &str, size: f32| elide(text, width, |s| fonts.measure(FONT, size, s));
         Self {
             kind,
             ids: if kind == Kind::Child {
@@ -192,9 +189,9 @@ impl Row {
             group_len: group.len(),
             critical: data.urgency == Urgency::Critical,
             icon: data.icon.clone(),
-            header: fit(&header, SMALL_SIZE),
-            title: fit(&title, TEXT_SIZE),
-            text: fit(&text, TEXT_SIZE),
+            header,
+            title,
+            text,
             rect,
             close,
             pill,
@@ -261,8 +258,13 @@ impl Row {
                 Kind::Head => (r.height - SMALL_SIZE * LINE_HEIGHT) / 2.0,
                 Kind::Child => CHILD_PADDING,
             };
+        // The close button only shows on hover, but the text stops short of it anyway,
+        // so that hovering doesn't reflow it. Fitted here rather than when laid out, so
+        // that only rows in view pay for it.
+        let width = self.close.x - 8.0 - x;
         let mut line = |text: &str, size: f32, paint: &Paint| {
-            fonts.draw(canvas, FONT, size, text, Point::new(x, y + size), paint);
+            let text = elide(text, width, |s| fonts.measure(FONT, size, s));
+            fonts.draw(canvas, FONT, size, &text, Point::new(x, y + size), paint);
             y += size * LINE_HEIGHT;
         };
         if self.kind != Kind::Child {
@@ -301,7 +303,8 @@ impl Row {
             let c = self.close;
             let radius = BUTTON_SIZE / 2.0;
             canvas.draw_rrect(RRect::new_rect_xy(c.to_skia(), radius, radius), &button);
-            let inset = (BUTTON_SIZE - BUTTON_ICON) / 2.0;
+            // Icons draw at a fixed size from their box's corner, so the box is centered.
+            let inset = (BUTTON_SIZE - BOX_SIZE) / 2.0;
             Icon::Close.draw(
                 canvas,
                 c.inset(inset, inset).to_skia(),
@@ -384,7 +387,9 @@ pub struct NotificationPanel {
     clear: LayoutRect,
     /// Apps whose rows are open, one per notification.
     expanded: HashSet<String>,
+    /// Where the list is scrolled to; a wheel's step gets there over `scrolling`.
     scroll: f32,
+    scrolling: Option<Animation<f32>>,
     list_height: f32,
     /// The pointer, in panel coordinates, while it is over the panel.
     hover: Option<(f32, f32)>,
@@ -398,6 +403,9 @@ pub struct NotificationPanel {
     gone: HashSet<u32>,
     /// Where each row is drawn, on its way to where it was last laid out.
     ys: HashMap<RowKey, Animation<f32>>,
+    /// The notifications of an app just opened, fading in as they come out from under
+    /// its heading.
+    fades: HashMap<RowKey, Animation<f32>>,
     /// When "すべて消去" was pressed, while its rows slide away.
     clearing: Option<Instant>,
 }
@@ -407,6 +415,7 @@ impl NotificationPanel {
     pub fn reset(&mut self) {
         self.expanded.clear();
         self.scroll = 0.0;
+        self.scrolling = None;
         self.hover = None;
         self.press = None;
         self.swipe = None;
@@ -440,24 +449,38 @@ impl NotificationPanel {
             }
         }
         self.list_height = (y - ROW_GAP).max(0.0) + LIST_BOTTOM;
-        self.scroll = self.scroll.clamp(0.0, self.max_scroll());
+        let scroll = self.scroll.clamp(0.0, self.max_scroll());
+        if scroll != self.scroll {
+            self.scroll = scroll;
+            self.scrolling = None;
+        }
 
         // Rows that were already here move to their new place, from wherever they are
-        // drawn now; new ones start in place.
+        // drawn now. New ones start in place, but an opened app's notifications come
+        // out from under its heading.
         let mut ys = HashMap::new();
+        let mut head = 0.0;
         for row in &self.rows {
             let (key, to) = (row.key(), row.rect.y);
+            if row.kind == Kind::Head {
+                head = to;
+            }
             let y = match self.ys.remove(&key) {
                 Some(mut y) if y.to() != to => {
                     y.set_target(to);
                     y
                 }
                 Some(y) => y,
-                None => Animation::new(to, to, MOVE, Arc::new(ease_out_cubic)),
+                None if row.kind == Kind::Child => {
+                    self.fades.insert(key, move_to(0.0, 1.0));
+                    move_to(head, to)
+                }
+                None => move_to(to, to),
             };
             ys.insert(key, y);
         }
         self.ys = ys;
+        self.fades.retain(|_, fade| fade.is_traveling());
 
         self.clear = if unseen.is_empty() {
             LayoutRect::empty()
@@ -472,6 +495,13 @@ impl NotificationPanel {
         };
     }
 
+    /// Where the list is drawn scrolled to, on its way to `scroll`.
+    fn shown_scroll(&self) -> f32 {
+        self.scrolling
+            .as_ref()
+            .map_or(self.scroll, Animation::value)
+    }
+
     fn max_scroll(&self) -> f32 {
         (self.list_height - (PANEL_HEIGHT - LIST_TOP)).max(0.0)
     }
@@ -481,15 +511,27 @@ impl NotificationPanel {
         if !(LIST_TOP..PANEL_HEIGHT).contains(&y) {
             return None;
         }
-        let list_y = y - LIST_TOP + self.scroll;
+        let list_y = y - LIST_TOP + self.shown_scroll();
         self.rows.iter().find(|row| row.rect.contains(x, list_y))
     }
 
-    /// Scrolls by `dy`, and swipes the row under the pointer by `dx`. `dx` from a wheel
-    /// is ignored, and `stop` ends a touchpad's swipe. Returns whether anything moved.
+    /// Scrolls by `dy`, and swipes the row under the pointer by `dx`. A wheel's `dy`
+    /// glides there and its `dx` is ignored; `stop` ends a touchpad's swipe. Returns
+    /// whether anything moved.
     pub fn on_scroll(&mut self, dx: f32, dy: f32, continuous: bool, stop: bool) -> bool {
         let scroll = (self.scroll + dy * SCROLL_SPEED).clamp(0.0, self.max_scroll());
         let mut moved = scroll != self.scroll;
+        if moved {
+            // A touchpad's steps are small and many: they glide well enough on their own.
+            self.scrolling = (!continuous).then(|| {
+                Animation::new(
+                    self.shown_scroll(),
+                    scroll,
+                    SCROLL,
+                    Arc::new(ease_out_cubic),
+                )
+            });
+        }
         self.scroll = scroll;
 
         if continuous && dx != 0.0 && self.swipe.is_none() {
@@ -535,6 +577,7 @@ impl NotificationPanel {
             Some(Axis::Sideways) => press.offset = dx,
             Some(Axis::Vertical) => {
                 self.scroll = (press.scroll - dy).clamp(0.0, max_scroll);
+                self.scrolling = None;
             }
             None => return was != now,
         }
@@ -564,7 +607,7 @@ impl NotificationPanel {
             row: self.row_at(x, y).map(Row::key),
             axis: None,
             offset: 0.0,
-            scroll: self.scroll,
+            scroll: self.shown_scroll(),
         });
     }
 
@@ -588,7 +631,7 @@ impl NotificationPanel {
                 if press.row != Some(row.key()) {
                     return None;
                 }
-                let list_y = y - LIST_TOP + self.scroll;
+                let list_y = y - LIST_TOP + self.shown_scroll();
                 if row.close.contains(x, list_y) {
                     let ids = row.ids.clone();
                     self.hide(&ids);
@@ -664,7 +707,7 @@ impl NotificationPanel {
     }
 
     fn in_view(&self, row: &Row) -> bool {
-        let top = self.scroll;
+        let top = self.shown_scroll();
         let bottom = top + PANEL_HEIGHT - LIST_TOP;
         row.rect.y < bottom && row.rect.y + row.rect.height > top
     }
@@ -746,13 +789,22 @@ impl NotificationPanel {
             None,
             true,
         );
-        canvas.translate((0.0, LIST_TOP - self.scroll));
+        let top = self.shown_scroll();
+        canvas.translate((0.0, LIST_TOP - top));
         let last = self.rows.len() - 1;
-        for (i, row) in self.rows.iter().enumerate() {
+        // From the bottom up, so that an opened app's notifications come out from under
+        // its heading rather than over it.
+        for (i, row) in self.rows.iter().enumerate().rev() {
             let key = row.key();
             let ends = (i == 0, i == last);
             let y = self.ys.get(&key).map_or(row.rect.y, Animation::value);
+            if y >= top + PANEL_HEIGHT - LIST_TOP || y + row.rect.height <= top {
+                continue;
+            }
             let moved = canvas.save();
+            if let Some(fade) = self.fades.get(&key) {
+                canvas.save_layer_alpha_f(None, fade.value());
+            }
             canvas.translate((0.0, y - row.rect.y));
             row.draw(
                 canvas,
@@ -768,9 +820,14 @@ impl NotificationPanel {
 
         self.slides.values().any(Animation::is_traveling)
             || self.ys.values().any(Animation::is_traveling)
+            || self.scrolling.as_ref().is_some_and(Animation::is_traveling)
             || !self.flinging.is_empty()
             || self.clearing.is_some()
     }
+}
+
+fn move_to(from: f32, to: f32) -> Animation<f32> {
+    Animation::new(from, to, MOVE, Arc::new(ease_out_cubic))
 }
 
 fn slide(from: f32, to: f32) -> Animation<f32> {
@@ -1005,6 +1062,39 @@ mod tests {
         );
         std::thread::sleep(MOVE + Duration::from_millis(20));
         assert_eq!(panel.ys[&below].value(), to);
+    }
+
+    #[test]
+    fn an_opened_apps_notifications_come_out_from_under_its_heading() {
+        let store = posted(&["a", "a"]);
+        let (mut panel, fonts) = panel(&store);
+        let at = body_of(&panel, 0);
+        click(&mut panel, at);
+        panel.lay_out(&store, &fonts, Instant::now());
+
+        let child = panel.rows[2].key();
+        assert!(panel.ys[&child].value() < panel.rows[2].rect.y);
+        assert!(panel.fades[&child].value() < 1.0);
+        std::thread::sleep(MOVE + Duration::from_millis(20));
+        assert_eq!(panel.ys[&child].value(), panel.rows[2].rect.y);
+        assert_eq!(panel.fades[&child].value(), 1.0);
+    }
+
+    #[test]
+    fn a_wheel_glides_where_a_touchpad_jumps() {
+        let apps: Vec<String> = (0..6).map(|i| i.to_string()).collect();
+        let apps: Vec<&str> = apps.iter().map(String::as_str).collect();
+        let (mut panel, _) = panel(&posted(&apps));
+
+        assert!(panel.on_scroll(0.0, 30.0, false, false));
+        let step = 30.0 * SCROLL_SPEED;
+        assert_eq!(panel.scroll, step);
+        assert!(panel.shown_scroll() < step, "still on its way");
+        std::thread::sleep(SCROLL + Duration::from_millis(20));
+        assert_eq!(panel.shown_scroll(), step);
+
+        panel.on_scroll(0.0, 15.0, true, false);
+        assert_eq!(panel.shown_scroll(), step + 15.0 * SCROLL_SPEED);
     }
 
     #[test]

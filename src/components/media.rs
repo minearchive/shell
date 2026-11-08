@@ -73,6 +73,9 @@ const WAVE_AMPLITUDE: f32 = 3.0;
 const WAVE_SPEED: f32 = std::f32::consts::PI;
 const MORPH: Duration = Duration::from_millis(300);
 const PLAY_PAUSE_EASING_ID: &str = "media_play_pause";
+/// How long a seek gets to show up in what the player reports. A little over the time
+/// between polling its position.
+const SEEK_SETTLE: Duration = Duration::from_secs(2);
 /// Below notifications, which take the island over and then hand it back.
 const ISLAND_PRIORITY: u8 = 50;
 /// The player to show, if any: playing beats paused, then whichever last played. A
@@ -337,6 +340,8 @@ pub struct Media {
     open: bool,
     shown: Option<Shown>,
     slider: Slider,
+    /// Where we last seeked to, and when.
+    seeked: Option<(Duration, Instant)>,
     /// 1 while playing: drives the play button's shape and the wave's height.
     playing: Animation<f32>,
     /// What the wave's motion counts from.
@@ -353,6 +358,7 @@ impl Media {
             open: false,
             shown: None,
             slider: Slider::new(0.0, 1.0, 0.0),
+            seeked: None,
             playing: Animation::new(0.0, 0.0, MORPH, Arc::new(ease_out_cubic)),
             started: Instant::now(),
             bar_width: 0.0,
@@ -392,6 +398,7 @@ impl Media {
             CoreKind::Release { .. } if was_pressed => {
                 if let Some((_, length)) = shown.progress {
                     let target = length.mul_f32(self.slider.value());
+                    self.seeked = Some((target, Instant::now()));
                     self.send(&shown.bus_name, PlayerAction::SeekTo(target));
                 }
             }
@@ -611,6 +618,14 @@ impl Component for Media {
         // Mid-drag the slider leads, and the time follows it.
         self.slider.set_enabled(shown.progress.is_some());
         if let (Some((position, length)), false) = (shown.progress, self.slider.is_pressed()) {
+            // The player takes a moment over a seek, and until then still reports where it
+            // was: what we asked for holds until it has had time to get there.
+            self.seeked = self.seeked.filter(|(_, at)| at.elapsed() < SEEK_SETTLE);
+            let position = match self.seeked {
+                Some((target, at)) if shown.playing => target + at.elapsed(),
+                Some((target, _)) => target,
+                None => position,
+            };
             self.slider
                 .set_value(position.as_secs_f32() / length.as_secs_f32());
         }
@@ -679,7 +694,10 @@ impl Component for Media {
         }
     }
 
-    fn on_mpris(&mut self, state: &PlayerState, _event: &Event) -> Redraw {
+    fn on_mpris(&mut self, state: &PlayerState, event: &Event) -> Redraw {
+        if matches!(event, Event::TrackChanged(_)) {
+            self.seeked = None;
+        }
         if state.status == PlaybackStatus::Playing {
             self.last_playing = Some(state.bus_name.clone());
         }
@@ -755,17 +773,13 @@ mod tests {
         }
     }
 
-    /// Presses and releases the slider, and returns what that sent.
-    fn drag_slider(progress: Option<(Duration, Duration)>) -> Vec<PlayerCommand> {
+    fn draw_island(media: &mut Media) {
         let theme = crate::config::theme::Theme::load(
             &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("example/theme.toml"),
         );
         let mut fonts = FontBook::new();
         fonts.register(FONT, "Noto Sans CJK JP", skia_safe::FontStyle::normal());
         let mut surface = skia_safe::surfaces::raster_n32_premul((400, 170)).unwrap();
-        let (tx, rx) = std::sync::mpsc::channel();
-        let mut media = Media::new(tx);
-        media.shown = Some(shown_with(progress));
         media.draw_island(
             surface.canvas(),
             (400.0, 170.0),
@@ -773,6 +787,16 @@ mod tests {
             &fonts,
             theme.theme(),
         );
+    }
+
+    /// Presses and releases the middle of the slider.
+    fn dragged(
+        progress: Option<(Duration, Duration)>,
+    ) -> (Media, std::sync::mpsc::Receiver<PlayerCommand>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut media = Media::new(tx);
+        media.shown = Some(shown_with(progress));
+        draw_island(&mut media);
 
         let rect = media.shown.as_ref().unwrap().slider_rect();
         let at = (
@@ -786,7 +810,28 @@ mod tests {
             at,
             CoreKind::Release { button: left },
         ));
-        rx.try_iter().collect()
+        (media, rx)
+    }
+
+    /// Presses and releases the slider, and returns what that sent.
+    fn drag_slider(progress: Option<(Duration, Duration)>) -> Vec<PlayerCommand> {
+        dragged(progress).1.try_iter().collect()
+    }
+
+    #[test]
+    fn a_seek_holds_until_the_player_has_had_time_to_get_there() {
+        let progress = (Duration::from_secs(10), Duration::from_secs(100));
+        let (mut media, _rx) = dragged(Some(progress));
+
+        // The player still says 10s.
+        draw_island(&mut media);
+        let held = media.slider.value();
+        assert!((0.45..0.55).contains(&held), "fell back to {held}");
+
+        let (target, _) = media.seeked.unwrap();
+        media.seeked = Some((target, Instant::now() - SEEK_SETTLE));
+        draw_island(&mut media);
+        assert!((media.slider.value() - 0.1).abs() < 0.001);
     }
 
     #[test]

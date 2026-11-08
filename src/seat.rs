@@ -64,7 +64,7 @@ impl PointerHandler for Shell {
     ) {
         for event in events {
             debug!("Pointer {:?} @ {:?}", event.kind, event.position);
-            if self.catcher_pointer(event) {
+            if self.catcher_pointer(event) || self.banner_pointer(event) {
                 continue;
             }
             self.dispatch_to(&event.surface, |ui| ui.on_cursor(event));

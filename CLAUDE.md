@@ -75,6 +75,8 @@ handlers live in `src/output.rs` (compositor, output, layer), `src/seat.rs` (sea
 pointer) and `src/dnd.rs` (data device). Per output it creates a `Top`-layer surface anchored to the
 bottom/left/right edges with a 60px exclusive zone. The surface is taller than that:
 the headroom above the bar is transparent and click-through, and islands grow into it.
+A second, `Overlay`-layer surface per output along the top edge (`src/banner.rs`) shows the
+notification on display as a card that drops in from the top; it is not an island.
 
 ### Rendering is event-driven, not a render loop
 There is no redraw flag on `UIState`. Each `Screen` tracks `needs_redraw` and
@@ -119,7 +121,8 @@ calls `shell.dispatch`, which fans the message out to every `Screen` and calls
 
 `SystemStatus` (`src/system.rs`) has its own channel too: its closure updates
 `UIState.system` and repaints every screen, since the toolbox always shows it. So does
-player art (`src/dbus/player_art.rs`), which updates `UIState.player_art`.
+player art (`src/dbus/player_art.rs`), which updates `UIState.player_art`, and players'
+polled positions, which correct `UIState.players` when they have drifted.
 
 A sixth channel, `UiEvent` (`RequestRedrawAll`/`AnimationUpdated`/`DismissNotification`/`ClearNotifications`), drives `Shell` directly rather than going through a
 `Component` method.

@@ -53,6 +53,7 @@ use crate::{
 
 use ui_core::font::FontBook;
 
+mod banner;
 mod catcher;
 mod components;
 mod config;
@@ -86,6 +87,8 @@ pub struct Screen {
     ui: UserInterface,
     output: WlOutput,
     catcher: Option<catcher::Catcher>,
+    /// The notification card along the top edge; `None` once the compositor closes it.
+    banner: Option<banner::BannerSurface>,
 }
 
 pub struct Shell {
@@ -154,14 +157,31 @@ fn main() {
         debug!("{event:?}");
         shell.state.notifications.apply(&event, Instant::now());
         shell.dispatch(|ui| ui.on_notification(&event));
+        // The banner and the toolbox's badge both follow the store.
+        shell.request_redraw_all();
     });
 
     let (mpris_tx, mpris_rx) = channel::channel::<(PlayerState, MprisEvent)>();
-    let player_commands = dbus::mpris::start_listener(mpris_tx);
+    let (position_tx, position_rx) = channel::channel();
+    let player_commands = dbus::mpris::start_listener(mpris_tx, position_tx);
     on_msg(&loop_handle, mpris_rx, |(state, event), shell| {
         shell.state.update_player(state.clone());
         shell.dispatch(|ui| ui.on_mpris(&state, &event));
     });
+    on_msg(
+        &loop_handle,
+        position_rx,
+        |(bus_name, position, at), shell| {
+            let drifted = shell
+                .state
+                .players
+                .get_mut(&bus_name)
+                .is_some_and(|player| player.sync_position(position, at));
+            if drifted {
+                shell.request_redraw_all();
+            }
+        },
+    );
 
     let (ipc_tx, ipc_rx) = channel::channel::<IPCEvent>();
     ipc::listen(ipc_tx);
@@ -202,13 +222,18 @@ fn main() {
     let (ui_tx, ui_rx) = channel::channel::<UiEvent>();
     on_msg(&loop_handle, ui_rx, |msg, shell| match msg {
         UiEvent::RequestRedrawAll => shell.request_redraw_all(),
-        UiEvent::AnimationUpdated(easings) => shell.dispatch(|ui| {
-            easings
-                .iter()
-                .map(|(id, easing)| ui.on_easing_updated(id, easing))
-                .max()
-                .unwrap_or_default()
-        }),
+        UiEvent::AnimationUpdated(easings) => {
+            if let Some(easing) = easings.get(components::notifications::EASING_ID) {
+                shell.set_banner_easing(easing);
+            }
+            shell.dispatch(|ui| {
+                easings
+                    .iter()
+                    .map(|(id, easing)| ui.on_easing_updated(id, easing))
+                    .max()
+                    .unwrap_or_default()
+            })
+        }
         UiEvent::DismissNotification(id) => {
             if shell.state.notifications.remove(id) {
                 shell.notify_closed(id, CloseReason::Dismissed);
@@ -400,6 +425,7 @@ impl Shell {
         if !screen.frame_pending {
             self.draw(idx);
         }
+        self.request_banner_redraw(idx);
     }
 
     pub fn draw(&mut self, idx: usize) {
