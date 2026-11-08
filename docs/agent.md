@@ -51,7 +51,8 @@ The workspace widget crates (not yet used by the bar — see
 | The ui_core/ui_widget/m3_widget stack, `Widget` trait | [docs/widgets.md](widgets.md) |
 | Extending IPC events | [docs/ipc.md](ipc.md) |
 | Adding a data source (audio, battery…) | [docs/data-sources.md](data-sources.md) |
-| Theme, AnimationConfig, FontBook | [docs/config.md](config.md) |
+| Config files (`theme.toml`, `animation.toml`), `WatchableConfig` | [docs/config.md](config.md) |
+| `UIState`, `FontBook` | [docs/components.md](components.md) |
 
 ## Known sharp edges
 

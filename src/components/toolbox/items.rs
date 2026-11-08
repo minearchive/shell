@@ -8,11 +8,12 @@ use skia_safe::{Canvas, Color4f, Paint, Point, RRect, Rect};
 use tokio::sync::mpsc::UnboundedSender;
 
 use ui_core::{
-    font::FontBook, geometry::LayoutRect, pointer::PointerEvent, scheme::ColorTheme,
-    util::wrap_text,
+    animation::parser::Easing, font::FontBook, geometry::LayoutRect, pointer::PointerEvent,
+    scheme::ColorTheme, util::wrap_text,
 };
 
 use crate::{
+    components::update_slider_easing,
     dbus::warp::WarpCommand,
     system::{BatteryState, Network, PowerProfile, SystemCommand, SystemStatus},
     ui::UIState,
@@ -72,6 +73,7 @@ pub trait ToolboxItem {
     fn on_pointer(&mut self, _event: &PointerEvent) -> bool {
         false
     }
+    fn on_easing_updated(&mut self, _id: &str, _easing: &Easing) {}
 }
 
 /// A read-only entry: an icon, a title and one line of detail.
@@ -403,6 +405,10 @@ impl ToolboxItem for SliderItem {
 
     fn on_pointer(&mut self, event: &PointerEvent) -> bool {
         self.slider.on_pointer(event)
+    }
+
+    fn on_easing_updated(&mut self, id: &str, easing: &Easing) {
+        update_slider_easing(&mut self.slider, id, easing);
     }
 }
 

@@ -48,7 +48,7 @@ dependency. `ui_core::lib.rs` re-exports: `animation`, `font`, `geometry`, `isla
 | `animation::animation` | `Animation<T>` (only `Animation<f32>` implemented). `new(from, to, Duration, Easing)`, `value()`, `is_done()`, `is_traveling()` (not done AND `from != to`), `reset(from,to)`, `set_target(to)`, `transition_easing(e)`, `set_easing`, `set_duration`, `from()`/`to()`. Submodule `easing` with ~30 standard curves (`ease_in/out/in_out_{sine,quad,cubic,quart,quint,expo,circ,back,elastic,bounce}`). |
 | `animation::parser` | `type Easing = Arc<dyn Fn(f32) -> f32>`; `cubic_bezier(x1,y1,x2,y2) -> Easing`; `css_to_easing` parses CSS timing-function syntax (consumed by `src/config/animation`). |
 | `scheme::color` | `Color { r, g, b, a: f32 }` — serde + `TryFrom<String>` hex parsing (`#RRGGBB`/`#RRGGBBAA`), `with_alpha`, `lerp`. |
-| `scheme::theme` (`ColorTheme`) | The full 45-field Material 3 color-role palette (`primary`, `on_primary`, `primary_container`, … `scrim`). Serde-deserializable, all fields default to transparent. See [docs/config.md](config.md) for how the bar loads this from TOML. |
+| `scheme::theme` (`ColorTheme`) | The full 49-field Material 3 color-role palette (`primary`, `on_primary`, `primary_container`, … `scrim`). Serde-deserializable, all fields default to transparent. See [docs/config.md](config.md) for how the bar loads this from TOML. |
 
 ## `ui_widget` — the `Widget` trait and layout containers
 

@@ -46,7 +46,7 @@ pub fn on_ipc(&mut self, event: &IPCEvent) -> Redraw {
 If `MonitorAdded` needs to update shared `UIState` (rather than being handled
 entirely inside a component), do it in the IPC closure in `main()` before
 dispatching, following the pattern the MPRIS and WARP closures use for their own
-state fields (see [docs/config.md](config.md)).
+state fields (see [docs/components.md](components.md#7-reading-shared-state)).
 
 ### 4. Handle (or ignore) in components
 

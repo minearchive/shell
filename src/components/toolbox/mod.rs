@@ -9,7 +9,10 @@ use smithay_client_toolkit::seat::pointer::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 
-use ui_core::{font::FontBook, geometry::LayoutRect, pointer::button, scheme::ColorTheme};
+use ui_core::{
+    animation::parser::Easing, font::FontBook, geometry::LayoutRect, pointer::button,
+    scheme::ColorTheme,
+};
 
 use self::items::{default_items, DetailWidth, ToolboxItem};
 use crate::{
@@ -203,6 +206,13 @@ impl Component for Toolbox {
             }
             _ => Redraw::None,
         }
+    }
+
+    fn on_easing_updated(&mut self, id: &str, easing: &Easing) -> Redraw {
+        for item in &mut self.items {
+            item.on_easing_updated(id, easing);
+        }
+        Redraw::None
     }
 
     fn on_warp(&mut self, _status: &WarpStatus) -> Redraw {

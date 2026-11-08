@@ -163,7 +163,7 @@ shows the shape). The `Redraw` returned from `on_battery` (step 4) is what actua
 repaint — `on_warp` folds and returns its components' `Redraw` the same way,
 so simply caching a value in `UIState` without a component reacting to it in
 `on_warp`/`on_battery` produces no visible update until the next unrelated
-redraw. See [docs/config.md](config.md) for the full `UIState` reference.
+redraw. See [docs/components.md](components.md#7-reading-shared-state) for the full `UIState` reference.
 
 ## Provider status
 

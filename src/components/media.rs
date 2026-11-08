@@ -18,7 +18,10 @@ use skia_safe::{
 use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind};
 
 use ui_core::{
-    animation::animation::{easing::ease_out_cubic, Animation},
+    animation::{
+        animation::{easing::ease_out_cubic, Animation},
+        parser::Easing,
+    },
     font::FontBook,
     geometry::LayoutRect,
     pointer::{button, PointerEvent as CorePointerEvent, PointerEventKind as CoreKind},
@@ -27,7 +30,7 @@ use ui_core::{
 };
 
 use crate::{
-    components::toolbox::lerp_box,
+    components::{toolbox::lerp_box, update_slider_easing},
     dbus::{
         mpris::{PlayerAction, PlayerCommand, PlayerState},
         player_art::Art,
@@ -69,6 +72,7 @@ const WAVE_AMPLITUDE: f32 = 3.0;
 /// How fast the wave travels, in radians a second: a wavelength every two seconds.
 const WAVE_SPEED: f32 = std::f32::consts::PI;
 const MORPH: Duration = Duration::from_millis(300);
+const PLAY_PAUSE_EASING_ID: &str = "media_play_pause";
 /// Below notifications, which take the island over and then hand it back.
 const ISLAND_PRIORITY: u8 = 50;
 /// The player to show, if any: playing beats paused, then whichever last played. A
@@ -422,6 +426,14 @@ impl Media {
 impl Component for Media {
     fn bar_slot(&self) -> BarSlot {
         BarSlot::Center
+    }
+
+    fn on_easing_updated(&mut self, id: &str, easing: &Easing) -> Redraw {
+        if id == PLAY_PAUSE_EASING_ID {
+            self.playing.set_easing(easing.clone());
+        }
+        update_slider_easing(&mut self.slider, id, easing);
+        Redraw::None
     }
 
     fn bar_width(&self, state: &UIState, fonts: &FontBook) -> f32 {

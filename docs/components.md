@@ -212,28 +212,40 @@ the full model.
 
 ## 6. Using fonts
 
-`fonts.sized("noto_sans", 32.)` is always available — it is the only font
-registered by default, in `main()` right after `FontBook::new()` (Noto Sans
-CJK JP).
+`FontBook` (`ui_core/src/font/mod.rs`) maps short string keys to `Typeface`s.
+`fonts.sized("noto_sans", 32.)` returns a 32px `skia_safe::Font` and is always
+available: `noto_sans` (Noto Sans CJK JP) is the only key registered by default,
+in `main()` right after `FontBook::new()`.
 
-To use another font, add a `book.register(..)` call next to it.
+To use another font, add a call next to it:
 
-**Calling `fonts.sized` with an unregistered key panics** (`ui_core/src/font/mod.rs`,
-`FontBook::sized`) — there is no silent fallback. Register the key before any
-`draw` call can reach it.
+```rust
+book.register("roboto", "Roboto", FontStyle::normal());
+```
+
+`register` panics if Skia's `FontMgr` cannot resolve the family, and **calling
+`fonts.sized` with an unregistered key panics**: there is no silent fallback.
+Register the key before any `draw` call can reach it.
 
 ## 7. Reading shared state
 
-`UIState` (passed to `draw`) exposes:
+`UIState` (`src/ui.rs`) is the render snapshot passed by reference to every
+`draw`. `Shell` owns the single copy shared by every screen. Components **read**
+it and never write to it; `main()`'s channel closures update it just before
+dispatching the event (e.g. `state.update_player`).
 
-| Field | Type | Meaning |
-|-------|------|---------|
-| `players` | `HashMap<String, PlayerState>` | Active MPRIS players, keyed by bus name |
-| `warp` | `Option<WarpStatus>` | Latest Cloudflare WARP status, if connected |
-| `notifications` | `NotificationStore` | Notifications on display; `current()` is the one to show |
-| `system` | `SystemStatus` | Network, Bluetooth, volume, backlight, battery and power profile |
+| Field | Type | Updated by | Meaning |
+|-------|------|------------|---------|
+| `players` | `HashMap<String, PlayerState>` | MPRIS channel, position polling | Active MPRIS players, keyed by bus name; inactive ones are removed |
+| `player_art` | `HashMap<String, Art>` | Player-art channel | Cover art, keyed by bus name like `players` |
+| `warp` | `Option<WarpStatus>` | WARP channel | Latest Cloudflare WARP status, if connected |
+| `notifications` | `NotificationStore` | Notification channel, clock tick, `DismissNotification` | Notifications on display; `current()` is the one to show; the tick removes expired ones |
+| `system` | `SystemStatus` | System channel | Network, Bluetooth, volume, backlight, battery and power profile |
 
-To surface new data to components, add a field to `UIState` and update it in the
-provider's channel closure in `main()`, before dispatching. See
-[docs/data-sources.md](data-sources.md) and [docs/config.md](config.md) for details
-on `UIState` and `Theme`.
+To surface new data to components:
+
+1. Add the public field to `UIState`, with a `Default` (`UIState` derives it).
+2. Update it in the provider's channel closure in `main()`, before
+   `shell.dispatch`, so the repaint that dispatch may trigger sees it. The
+   repaint itself is driven by the handler's `Redraw` return value; see
+   [docs/data-sources.md](data-sources.md).

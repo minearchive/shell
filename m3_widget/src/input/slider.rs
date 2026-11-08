@@ -8,7 +8,7 @@ use skia_safe::{
 };
 
 use ui_core::{
-    animation::animation::Animation,
+    animation::{animation::Animation, parser::Easing},
     font::FontBook,
     geometry::LayoutRect,
     pointer::{self, PointerEvent, PointerEventKind},
@@ -158,6 +158,16 @@ impl Slider {
         };
         slider.value = slider.quantize(value);
         slider
+    }
+
+    /// The curve the handle narrows and widens with on press and release.
+    pub fn set_handle_easing(&mut self, easing: Easing) {
+        self.animations.handle_width.set_easing(easing);
+    }
+
+    /// The curve the value indicator fades in and out with.
+    pub fn set_indicator_easing(&mut self, easing: Easing) {
+        self.animations.indicator.set_easing(easing);
     }
 
     pub fn size(mut self, size: SliderSize) -> Self {

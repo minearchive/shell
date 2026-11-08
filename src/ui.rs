@@ -413,23 +413,16 @@ impl UserInterface {
             Notifications::new(ui_tx),
             Toolbox::new(system_commands, warp_commands)
         );
-        let easing = animation
-            .read()
-            .unwrap()
-            .get_easing(ISLAND_EASING_ID)
-            .cloned()
-            .unwrap_or(Arc::new(ease_out_cubic));
-
         let islands = components
             .iter()
             .map(|_| Island {
-                morph: IslandMorph::new(ISLAND_MORPH, easing.clone()),
+                morph: IslandMorph::new(ISLAND_MORPH, Arc::new(ease_out_cubic)),
                 slot: None,
                 rect: None,
             })
             .collect();
 
-        Self {
+        let mut ui = Self {
             components,
             theme,
             islands,
@@ -437,7 +430,12 @@ impl UserInterface {
             island_grab: None,
             island_hover: None,
             bar_origins: Vec::new(),
+        };
+        // Reloads arrive as `on_easing_updated`; the file as it stands at startup does too.
+        for (id, easing) in animation.read().unwrap().easings() {
+            ui.on_easing_updated(id, easing);
         }
+        ui
     }
 
     /// The island taking the pointer: the main one, or one still collapsing without one.
