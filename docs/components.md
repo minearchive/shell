@@ -169,7 +169,12 @@ The morph's easing comes from the `island` key in `animation.toml`.
 The toolbox (`src/components/toolbox/`) shows a row of icons in the bar's bottom-right
 corner. Clicking it opens a panel of details above it, as a `Corner` island, and each icon
 flies to its entry in the panel. Clicking the row again, the rest of the bar, or anywhere
-else on that screen closes it. `Caption` entries go across the top of the panel,
+else on that screen closes it. A right click opens the unseen notifications in the same
+corner instead (`notifications.rs`), laid out like Android's shade and always three cards
+tall, scrolling past that. Each app's notifications stack into one row that a click opens.
+A row goes by dragging it sideways, a sideways touchpad swipe, or its ✕ on hover. The
+icons fade where they are, and a badge on the row counts the unseen ones while it is
+closed. `Caption` entries go across the top of the panel,
 half-width entries pair up in rows below them, and full-width entries stack below those. To add one, push it to
 `default_items` in `items.rs`; its position there sets its order in the bar and panel:
 
@@ -239,7 +244,7 @@ dispatching the event (e.g. `state.update_player`).
 | `players` | `HashMap<String, PlayerState>` | MPRIS channel, position polling | Active MPRIS players, keyed by bus name; inactive ones are removed |
 | `player_art` | `HashMap<String, Art>` | Player-art channel | Cover art, keyed by bus name like `players` |
 | `warp` | `Option<WarpStatus>` | WARP channel | Latest Cloudflare WARP status, if connected |
-| `notifications` | `NotificationStore` | Notification channel, clock tick, `DismissNotification` | Notifications on display; `current()` is the one to show; the tick removes expired ones |
+| `notifications` | `NotificationStore` | Notification channel, clock tick, `DismissNotification`, `ClearNotifications` | Notifications on display; `current()` is the one to show. The tick moves expired ones to a missed list; `unseen()` returns both, newest first, for the toolbox |
 | `system` | `SystemStatus` | System channel | Network, Bluetooth, volume, backlight, battery and power profile |
 
 To surface new data to components:

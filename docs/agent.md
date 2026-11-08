@@ -28,7 +28,7 @@ The bar binary (`my_shell`, `src/`):
 | `src/dbus/warp.rs`, `src/dbus/kdeconnect/`, `src/dbus/notification.rs` | Other D-Bus providers |
 | `src/components/clock.rs` | Reference `Component` implementation |
 | `src/components/notifications.rs` | Reference island implementation |
-| `src/components/toolbox/` | Status icons and their detail panel; add entries in `items.rs` |
+| `src/components/toolbox/` | Status icons and their detail panel (left click); unseen notifications (right click, `notifications.rs`); add entries in `items.rs` |
 | `src/system.rs` | `SystemStatus`: polls network, Bluetooth, audio, backlight, battery |
 | `src/config/mod.rs`, `theme.rs`, `animation.rs`, `watchable.rs` | `config_path`, `Theme`, `AnimationConfig` + hot-reload |
 

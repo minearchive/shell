@@ -275,7 +275,10 @@ pub trait Component {
 pub enum UiEvent {
     RequestRedrawAll,
     AnimationUpdated(HashMap<String, Easing>),
+    /// Dismisses the notification on display or among the missed ones.
     DismissNotification(u32),
+    /// Dismisses every notification, missed ones included.
+    ClearNotifications,
 }
 
 /// Provider state shared by every screen, so a screen that appears late sees
@@ -410,8 +413,8 @@ impl UserInterface {
         let components: Vec<Box<dyn Component>> = boxed!(
             Clock,
             Media::new(player_commands),
-            Notifications::new(ui_tx),
-            Toolbox::new(system_commands, warp_commands)
+            Notifications::new(ui_tx.clone()),
+            Toolbox::new(system_commands, warp_commands, ui_tx)
         );
         let islands = components
             .iter()

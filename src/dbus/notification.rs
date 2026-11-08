@@ -15,6 +15,8 @@ const PATH: &str = "/org/freedesktop/Notifications";
 
 /// How long a notification stays up when its sender leaves the choice to us.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+/// How many expired notifications are kept for the toolbox; the oldest go first.
+const MISSED_LIMIT: usize = 50;
 
 /// Urgency level carried in the `urgency` hint (a byte).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -72,13 +74,16 @@ pub enum NotificationEvent {
 pub struct ActiveNotification {
     pub id: u32,
     pub data: NotificationSnapshot,
+    pub posted: Instant,
     expires: Option<Instant>,
 }
 
-/// The notifications currently on display, oldest first.
+/// The notifications on display, and the ones that expired before anyone dismissed
+/// them, both oldest first.
 #[derive(Default)]
 pub struct NotificationStore {
     active: Vec<ActiveNotification>,
+    missed: Vec<ActiveNotification>,
 }
 
 impl NotificationStore {
@@ -94,8 +99,10 @@ impl NotificationStore {
                 let entry = ActiveNotification {
                     id: *id,
                     data: data.clone(),
+                    posted: now,
                     expires,
                 };
+                self.missed.retain(|n| n.id != *id);
                 match self.active.iter_mut().find(|n| n.id == *id) {
                     Some(existing) => *existing = entry,
                     None => self.active.push(entry),
@@ -116,23 +123,45 @@ impl NotificationStore {
         self.active.len()
     }
 
-    /// Returns whether `id` was on display.
+    /// Removes `id` wherever it is. Returns whether it was on display, so that its
+    /// sender still has to be told.
     pub fn remove(&mut self, id: u32) -> bool {
+        self.missed.retain(|n| n.id != id);
         let before = self.active.len();
         self.active.retain(|n| n.id != id);
         self.active.len() != before
     }
 
-    /// Removes and returns the ids whose time is up.
+    /// Removes everything. Returns the ids that were on display, like [`Self::remove`].
+    pub fn clear(&mut self) -> Vec<u32> {
+        self.missed.clear();
+        self.active.drain(..).map(|n| n.id).collect()
+    }
+
+    /// How many [`Self::unseen`] returns, without sorting them.
+    pub fn unseen_len(&self) -> usize {
+        self.active.len() + self.missed.len()
+    }
+
+    /// Every notification nobody has dismissed yet, newest first.
+    pub fn unseen(&self) -> Vec<&ActiveNotification> {
+        let mut all: Vec<_> = self.missed.iter().chain(&self.active).rev().collect();
+        all.sort_by_key(|n| std::cmp::Reverse(n.posted));
+        all
+    }
+
+    /// Moves the notifications whose time is up to the missed ones, and returns their ids.
     pub fn take_expired(&mut self, now: Instant) -> Vec<u32> {
-        let expired: Vec<u32> = self
+        let (expired, active) = self
             .active
-            .iter()
-            .filter(|n| n.expires.is_some_and(|at| at <= now))
-            .map(|n| n.id)
-            .collect();
-        self.active.retain(|n| n.expires.is_none_or(|at| at > now));
-        expired
+            .drain(..)
+            .partition(|n| n.expires.is_some_and(|at| at <= now));
+        self.active = active;
+        let ids = expired.iter().map(|n| n.id).collect();
+        self.missed.extend(expired);
+        let excess = self.missed.len().saturating_sub(MISSED_LIMIT);
+        self.missed.drain(..excess);
+        ids
     }
 }
 
@@ -354,5 +383,43 @@ mod tests {
 
         assert_eq!(store.len(), 0);
         assert!(!store.remove(1));
+    }
+
+    #[test]
+    fn expired_ones_stay_unseen_until_dismissed_or_closed() {
+        let now = Instant::now();
+        let ids = |store: &NotificationStore| -> Vec<u32> {
+            store.unseen().iter().map(|n| n.id).collect()
+        };
+        let mut store = NotificationStore::default();
+        store.apply(&posted(1, Urgency::Normal, 100), now);
+        store.apply(&posted(2, Urgency::Normal, 100), now);
+        store.apply(&posted(3, Urgency::Normal, 0), now);
+        assert_eq!(store.take_expired(now + DEFAULT_TIMEOUT), [1, 2]);
+
+        assert_eq!(store.len(), 1, "only 3 is still on display");
+        assert_eq!(ids(&store), [3, 2, 1]);
+
+        assert!(!store.remove(2), "its sender already heard it expire");
+        store.apply(&NotificationEvent::Closed { id: 1 }, now);
+        assert_eq!(ids(&store), [3]);
+
+        store.apply(&posted(4, Urgency::Normal, 100), now);
+        store.take_expired(now + DEFAULT_TIMEOUT);
+        assert_eq!(store.clear(), [3]);
+        assert!(store.unseen().is_empty());
+    }
+
+    #[test]
+    fn missed_ones_are_capped() {
+        let now = Instant::now();
+        let mut store = NotificationStore::default();
+        for id in 0..MISSED_LIMIT as u32 + 5 {
+            store.apply(&posted(id, Urgency::Normal, 100), now);
+        }
+        store.take_expired(now + DEFAULT_TIMEOUT);
+        let unseen = store.unseen();
+        assert_eq!(unseen.len(), MISSED_LIMIT);
+        assert_eq!(unseen.last().unwrap().id, 5, "the oldest went first");
     }
 }

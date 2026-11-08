@@ -121,7 +121,7 @@ calls `shell.dispatch`, which fans the message out to every `Screen` and calls
 `UIState.system` and repaints every screen, since the toolbox always shows it. So does
 player art (`src/dbus/player_art.rs`), which updates `UIState.player_art`.
 
-A sixth channel, `UiEvent` (`RequestRedrawAll`/`AnimationUpdated`/`DismissNotification`), drives `Shell` directly rather than going through a
+A sixth channel, `UiEvent` (`RequestRedrawAll`/`AnimationUpdated`/`DismissNotification`/`ClearNotifications`), drives `Shell` directly rather than going through a
 `Component` method.
 
 `UserInterface` (`src/ui.rs`) holds `Vec<Box<dyn Component>>`; every `on_*` handler

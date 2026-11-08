@@ -212,8 +212,14 @@ fn main() {
         UiEvent::DismissNotification(id) => {
             if shell.state.notifications.remove(id) {
                 shell.notify_closed(id, CloseReason::Dismissed);
-                shell.request_redraw_all();
             }
+            shell.request_redraw_all();
+        }
+        UiEvent::ClearNotifications => {
+            for id in shell.state.notifications.clear() {
+                shell.notify_closed(id, CloseReason::Dismissed);
+            }
+            shell.request_redraw_all();
         }
     });
 

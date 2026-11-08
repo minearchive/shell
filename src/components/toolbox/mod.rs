@@ -1,9 +1,14 @@
-//! The bar's status icons, and the panel of details they open.
+//! The bar's status icons, and the panel of details they open. A right click opens
+//! the notifications nobody has dismissed instead.
 
 mod items;
+mod notifications;
 
+use std::time::Instant;
+
+use calloop::channel::Sender;
 use m3_widget::{icon::BOX_SIZE, Icon};
-use skia_safe::{Canvas, Rect};
+use skia_safe::{Canvas, Color4f, Paint, Point, RRect, Rect};
 use smithay_client_toolkit::seat::pointer::{
     PointerEvent as SctkPointerEvent, PointerEventKind as SctkKind,
 };
@@ -15,15 +20,17 @@ use ui_core::{
 };
 
 use self::items::{default_items, DetailWidth, ToolboxItem};
+use self::notifications::{Action, NotificationPanel, PANEL_HEIGHT};
 use crate::{
     dbus::warp::{WarpCommand, WarpStatus},
     system::{SystemCommand, SystemStatus},
     ui::{
         to_core_event, BarSlot, Component, IslandFrame, IslandPlacement, IslandRequest, Redraw,
-        UIState, BAR_HEIGHT,
+        UIState, UiEvent, BAR_HEIGHT,
     },
 };
 
+const FONT: &str = "noto_sans";
 const ICON_GAP: f32 = 14.0;
 const ROW_PADDING: f32 = 20.0;
 
@@ -32,6 +39,16 @@ const PANEL_PADDING: f32 = 16.0;
 const PANEL_GAP: f32 = 12.0;
 /// Above a normal notification, so one can't pull the panel away from under a drag.
 const PANEL_PRIORITY: u8 = 150;
+const BADGE_HEIGHT: f32 = 16.0;
+const BADGE_TEXT: f32 = 11.0;
+
+/// Which panel the row opens: a left click opens the controls, a right click the
+/// notifications.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum View {
+    Controls,
+    Notifications,
+}
 
 /// Where each entry goes in the panel, and the panel's height: captions on top, then
 /// half-width entries in pairs, then full-width entries. Zero-height entries take no
@@ -88,7 +105,11 @@ pub struct Toolbox {
     items: Vec<Box<dyn ToolboxItem>>,
     rects: Vec<LayoutRect>,
     panel_height: f32,
-    open: bool,
+    notifications: NotificationPanel,
+    ui_tx: Sender<UiEvent>,
+    open: Option<View>,
+    /// The panel last opened, still drawn while the island collapses.
+    shown: View,
     /// The row's width on the last draw, for hit testing.
     row_width: f32,
 }
@@ -97,12 +118,16 @@ impl Toolbox {
     pub fn new(
         commands: UnboundedSender<SystemCommand>,
         warp_commands: UnboundedSender<WarpCommand>,
+        ui_tx: Sender<UiEvent>,
     ) -> Self {
         let mut toolbox = Self {
             items: default_items(commands, warp_commands),
             rects: Vec::new(),
             panel_height: 0.0,
-            open: false,
+            notifications: NotificationPanel::default(),
+            ui_tx,
+            open: None,
+            shown: View::Controls,
             row_width: 0.0,
         };
         toolbox.lay_out(&SystemStatus::default());
@@ -122,21 +147,28 @@ impl Toolbox {
 
 impl Toolbox {
     fn close(&mut self) -> Redraw {
-        if self.open {
-            self.open = false;
+        if self.open.is_some() {
+            self.open = None;
             Redraw::Now
         } else {
             Redraw::None
         }
     }
 
-    /// The row toggles the panel, and anywhere else in the bar dismisses it. `x` and `y`
-    /// are relative to the row, so the rest of the bar is out of its range.
-    fn on_bar_press(&mut self, x: f64, y: f64) -> Redraw {
+    /// The row toggles `view`, or switches to it from the other panel, and anywhere
+    /// else in the bar dismisses it. `x` and `y` are relative to the row, so the rest of
+    /// the bar is out of its range.
+    fn on_bar_press(&mut self, x: f64, y: f64, view: View) -> Redraw {
         let in_row =
             (0.0..self.row_width as f64).contains(&x) && (0.0..BAR_HEIGHT as f64).contains(&y);
         if in_row {
-            self.open = !self.open;
+            self.open = (self.open != Some(view)).then_some(view);
+            if let Some(view) = self.open {
+                if view == View::Notifications {
+                    self.notifications.reset();
+                }
+                self.shown = view;
+            }
             Redraw::Now
         } else {
             self.close()
@@ -171,6 +203,8 @@ impl Component for Toolbox {
         self.row_width = self.bar_width(state, fonts);
         let top = (BAR_HEIGHT as f32 - BOX_SIZE) / 2.0;
         let progress = island.map_or(0.0, |frame| frame.progress);
+        // Only the controls have entries for the icons to fly to.
+        let flying = self.shown == View::Controls;
 
         let mut x = ROW_PADDING;
         for (item, rect) in self.items.iter().zip(&self.rects) {
@@ -178,13 +212,13 @@ impl Component for Toolbox {
                 continue;
             };
             let in_bar = Rect::from_xywh(x, top, BOX_SIZE, BOX_SIZE);
-            let at = island.map_or(in_bar, |frame| {
+            let at = island.filter(|_| flying).map_or(in_bar, |frame| {
                 let in_panel = item
                     .icon_box(*rect)
                     .with_offset((frame.content.x, frame.content.y));
                 lerp_box(in_bar, in_panel, progress)
             });
-            let alpha = if item.icon_fades() {
+            let alpha = if item.icon_fades() || !flying {
                 1.0 - progress
             } else {
                 1.0
@@ -196,13 +230,39 @@ impl Component for Toolbox {
         // The row is empty once its icons have left: this is what closes the panel.
         let close = Rect::from_xywh((self.row_width - BOX_SIZE) / 2.0, top, BOX_SIZE, BOX_SIZE);
         Icon::Close.draw(canvas, close, theme.on_surface.with_alpha(progress));
+
+        // A right click is easy to miss, so say when it has something to show.
+        let unseen = state.notifications.unseen_len();
+        if unseen > 0 {
+            let text = unseen.to_string();
+            let width = (fonts.measure(FONT, BADGE_TEXT, &text) + 8.0).max(BADGE_HEIGHT);
+            let right = x - ICON_GAP + BADGE_HEIGHT / 4.0;
+            let badge =
+                Rect::from_xywh(right - width, top - BADGE_HEIGHT / 2.0, width, BADGE_HEIGHT);
+            let alpha = 1.0 - progress;
+            let mut paint = Paint::new(Color4f::from(theme.primary.with_alpha(alpha)), None);
+            paint.set_anti_alias(true);
+            let radius = BADGE_HEIGHT / 2.0;
+            canvas.draw_rrect(RRect::new_rect_xy(badge, radius, radius), &paint);
+            paint.set_color4f(Color4f::from(theme.on_primary.with_alpha(alpha)), None);
+            let text_width = fonts.measure(FONT, BADGE_TEXT, &text);
+            let baseline = Point::new(
+                badge.center_x() - text_width / 2.0,
+                badge.center_y() + BADGE_TEXT * 0.35,
+            );
+            fonts.draw(canvas, FONT, BADGE_TEXT, &text, baseline, &paint);
+        }
         Redraw::None
     }
 
     fn on_cursor(&mut self, event: &SctkPointerEvent) -> Redraw {
+        let (x, y) = event.position;
         match event.kind {
             SctkKind::Press { button, .. } if button == button::LEFT => {
-                self.on_bar_press(event.position.0, event.position.1)
+                self.on_bar_press(x, y, View::Controls)
+            }
+            SctkKind::Press { button, .. } if button == button::RIGHT => {
+                self.on_bar_press(x, y, View::Notifications)
             }
             _ => Redraw::None,
         }
@@ -216,7 +276,7 @@ impl Component for Toolbox {
     }
 
     fn on_warp(&mut self, _status: &WarpStatus) -> Redraw {
-        if self.open {
+        if self.open == Some(View::Controls) {
             Redraw::Now
         } else {
             Redraw::None
@@ -224,7 +284,7 @@ impl Component for Toolbox {
     }
 
     fn captures_outside_press(&self) -> bool {
-        self.open
+        self.open.is_some()
     }
 
     fn on_outside_press(&mut self) -> Redraw {
@@ -237,10 +297,20 @@ impl Component for Toolbox {
         fonts: &FontBook,
         _bar_width: f32,
     ) -> Option<IslandRequest> {
-        self.lay_out(&state.system);
-        self.open.then(|| IslandRequest {
+        let height = match self.open? {
+            View::Controls => {
+                self.lay_out(&state.system);
+                self.panel_height
+            }
+            View::Notifications => {
+                self.notifications
+                    .lay_out(&state.notifications, fonts, Instant::now());
+                PANEL_HEIGHT
+            }
+        };
+        Some(IslandRequest {
             width: PANEL_WIDTH,
-            height: self.panel_height,
+            height,
             placement: IslandPlacement::Corner {
                 from_width: self.bar_width(state, fonts),
             },
@@ -251,11 +321,24 @@ impl Component for Toolbox {
     fn draw_island(
         &mut self,
         canvas: &Canvas,
-        _size: (f32, f32),
+        size: (f32, f32),
         state: &UIState,
         fonts: &FontBook,
         theme: &ColorTheme,
     ) -> Redraw {
+        if self.shown == View::Notifications {
+            for id in self.notifications.take_flung() {
+                let _ = self.ui_tx.send(UiEvent::DismissNotification(id));
+            }
+            if self.notifications.take_cleared() {
+                let _ = self.ui_tx.send(UiEvent::ClearNotifications);
+            }
+            return if self.notifications.draw(canvas, size, fonts, theme) {
+                Redraw::Animating
+            } else {
+                Redraw::None
+            };
+        }
         let mut animating = false;
         for (item, rect) in self.items.iter_mut().zip(&self.rects) {
             animating |= item.draw(canvas, *rect, state, fonts, theme);
@@ -268,6 +351,50 @@ impl Component for Toolbox {
     }
 
     fn on_island_cursor(&mut self, event: &SctkPointerEvent) -> Redraw {
+        if self.shown == View::Notifications {
+            let (x, y) = (event.position.0 as f32, event.position.1 as f32);
+            let panel = &mut self.notifications;
+            let action = match &event.kind {
+                SctkKind::Motion { .. } | SctkKind::Enter { .. } => {
+                    panel.on_motion(x, y).then_some(Action::Repaint)
+                }
+                SctkKind::Leave { .. } => panel.on_leave().then_some(Action::Repaint),
+                SctkKind::Press { button, .. } if *button == button::LEFT => {
+                    panel.on_press(x, y);
+                    None
+                }
+                SctkKind::Release { button, .. } if *button == button::LEFT => {
+                    panel.on_release(x, y)
+                }
+                SctkKind::Axis {
+                    horizontal,
+                    vertical,
+                    ..
+                } => {
+                    // A wheel counts in steps; a touchpad doesn't.
+                    let continuous = horizontal.discrete == 0 && horizontal.value120 == 0;
+                    let moved = panel.on_scroll(
+                        horizontal.absolute as f32,
+                        vertical.absolute as f32,
+                        continuous,
+                        horizontal.stop,
+                    );
+                    moved.then_some(Action::Repaint)
+                }
+                _ => None,
+            };
+            // Dismissals repaint from main, once the store has changed.
+            match action {
+                Some(Action::Dismiss(ids)) => {
+                    for id in ids {
+                        let _ = self.ui_tx.send(UiEvent::DismissNotification(id));
+                    }
+                }
+                Some(Action::Repaint) => return Redraw::Now,
+                None => {}
+            }
+            return Redraw::None;
+        }
         let Some(event) = to_core_event(event) else {
             return Redraw::None;
         };
@@ -322,7 +449,11 @@ mod tests {
     #[test]
     fn battery_caption_appears_with_a_battery() {
         let (tx, _rx) = mpsc::unbounded_channel();
-        let mut toolbox = Toolbox::new(tx, mpsc::unbounded_channel().0);
+        let mut toolbox = Toolbox::new(
+            tx,
+            mpsc::unbounded_channel().0,
+            calloop::channel::channel().0,
+        );
 
         toolbox.lay_out(&SystemStatus::default());
         let without = toolbox.panel_height;
@@ -362,47 +493,65 @@ mod tests {
     #[test]
     fn warp_status_repaints_only_an_open_panel() {
         let (tx, _rx) = mpsc::unbounded_channel();
-        let mut toolbox = Toolbox::new(tx, mpsc::unbounded_channel().0);
+        let mut toolbox = Toolbox::new(
+            tx,
+            mpsc::unbounded_channel().0,
+            calloop::channel::channel().0,
+        );
         let status = WarpStatus::default();
 
         assert_eq!(toolbox.on_warp(&status), Redraw::None);
-        toolbox.open = true;
+        toolbox.open = Some(View::Controls);
         assert_eq!(toolbox.on_warp(&status), Redraw::Now);
     }
 
     #[test]
     fn row_toggles_and_presses_elsewhere_only_close() {
         let (tx, _rx) = mpsc::unbounded_channel();
-        let mut toolbox = Toolbox::new(tx, mpsc::unbounded_channel().0);
+        let mut toolbox = Toolbox::new(
+            tx,
+            mpsc::unbounded_channel().0,
+            calloop::channel::channel().0,
+        );
         toolbox.row_width = 100.0;
+        let (left, right) = (View::Controls, View::Notifications);
 
         assert_eq!(
-            toolbox.on_bar_press(-500.0, 30.0),
+            toolbox.on_bar_press(-500.0, 30.0, left),
             Redraw::None,
             "stays closed"
         );
         assert!(!toolbox.captures_outside_press());
 
-        assert_eq!(toolbox.on_bar_press(50.0, 30.0), Redraw::Now);
-        assert!(toolbox.open, "the row opens");
+        assert_eq!(toolbox.on_bar_press(50.0, 30.0, left), Redraw::Now);
+        assert_eq!(toolbox.open, Some(left), "a left click opens the controls");
         assert!(toolbox.captures_outside_press());
 
-        assert_eq!(toolbox.on_bar_press(50.0, 30.0), Redraw::Now);
-        assert!(!toolbox.open, "the row closes");
+        toolbox.on_bar_press(50.0, 30.0, right);
+        assert_eq!(toolbox.open, Some(right), "a right click switches");
+        assert_eq!(toolbox.shown, right);
 
-        toolbox.open = true;
-        assert_eq!(toolbox.on_bar_press(-500.0, 30.0), Redraw::Now);
-        assert!(!toolbox.open, "the rest of the bar closes");
+        toolbox.on_bar_press(50.0, 30.0, right);
+        assert_eq!(toolbox.open, None, "the same click closes");
+        assert_eq!(toolbox.shown, right, "still drawn while collapsing");
 
-        toolbox.open = true;
+        toolbox.open = Some(left);
+        assert_eq!(toolbox.on_bar_press(-500.0, 30.0, right), Redraw::Now);
+        assert_eq!(toolbox.open, None, "the rest of the bar closes");
+
+        toolbox.open = Some(right);
         assert_eq!(toolbox.on_outside_press(), Redraw::Now);
-        assert!(!toolbox.open, "outside the bar closes");
+        assert_eq!(toolbox.open, None, "outside the bar closes");
     }
 
     #[test]
     fn bar_shows_the_four_icons_and_the_panel_fits_the_headroom() {
         let (tx, _rx) = mpsc::unbounded_channel();
-        let toolbox = Toolbox::new(tx, mpsc::unbounded_channel().0);
+        let toolbox = Toolbox::new(
+            tx,
+            mpsc::unbounded_channel().0,
+            calloop::channel::channel().0,
+        );
 
         let status = SystemStatus {
             battery: Some(Battery {
