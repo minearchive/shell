@@ -6,7 +6,7 @@ use crate::{
     cli::{Cli, Command},
     config::set_config_dir,
     state::State,
-    ui::{IslandPart, IslandPlacement, IslandRequest, Part, BAR_HEIGHT, ISLAND_MAX_HEIGHT},
+    ui::{BAR_HEIGHT, ISLAND_MAX_HEIGHT},
 };
 
 mod cli;
@@ -59,10 +59,10 @@ fn main() {
                     .input_region(InputRegion::Empty)
                     .output(&output),
                 move || {
-                    let mut parts = vec![components::clock::clock(&state)];
-                    if std::env::var_os("MY_SHELL_DEBUG_ISLAND").is_some() {
-                        parts.push(debug_island(&state));
-                    }
+                    let parts = vec![
+                        components::clock::clock(&state),
+                        components::media::media(&state, width),
+                    ];
                     ui::bar(&state, width, parts, input)
                 },
             );
@@ -72,36 +72,5 @@ fn main() {
     if let Err(e) = result {
         eprintln!("{e}");
         std::process::exit(1);
-    }
-}
-
-/// ponytail: opens on every `my_shell action launcher`, to try the islands before a real
-/// component bids for one. Goes when media is ported.
-fn debug_island(state: &State) -> Part {
-    let action = state.action;
-    let request = memo(move || {
-        let open = action.get().is_some_and(|(n, _)| n % 2 == 0);
-        open.then_some(IslandRequest {
-            width: 420.0,
-            height: 160.0,
-            placement: IslandPlacement::Joined { center_x: None },
-            priority: 100,
-        })
-    });
-    let state = state.clone();
-    let content = div()
-        .size_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_size(20.0)
-        .dyn_style(move |s| s.text_color(ui::palette(&state, |t| t.on_surface)))
-        .child(text("アイランドのテスト"));
-    Part {
-        bar: None,
-        island: Some(IslandPart {
-            request,
-            content: content.into_view(),
-        }),
     }
 }

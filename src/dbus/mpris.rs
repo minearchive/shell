@@ -25,7 +25,7 @@ pub struct PlayerCommand {
     pub action: PlayerAction,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PlayerState {
     pub bus_name: String,
     pub identity: String,

@@ -46,10 +46,17 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
 - [x] モーフは `IslandMorph` をそのまま使い、動いている間だけ `request_frame` で `frame` signal を進める。`animation.toml` の `island` の easing もそのまま効く
   - シルエットは `svg::path`、中身は `translate` / `scale` / `opacity`、入力範囲は `frame` を読む effect から
 - [ ] `draw_overlay` の代わり（バーとアイランドの間を動くもの：toolbox のアイコン、media のアイコンと文字）
-- [ ] `captures_outside_press`（`catcher.rs`）の代わり：外のクリックで閉じる
-- [ ] 確認用の `debug_island`（`MY_SHELL_DEBUG_ISLAND=1` と `my_shell action launcher`）を、media の移植後に消す
+  - 今の media は、開いている間はバーの側を `opacity` 0 にして、カードに重ねているだけ
+- [ ] `captures_outside_press`（`catcher.rs`）の代わり：外のクリックで閉じる。media は今、バーの曲名のクリックでしか閉じない
+- [x] 確認用の `debug_island` を消した
 - [x] clock
-- [ ] media（player_art は `bitmap_view`）
+- [x] media
+  - カードの背景はアートの `bg_image`（`BackgroundSize::Cover`）、スクリムは svg の角丸矩形に線形グラデーション
+  - `Art` は skia の `Image` ではなく `ImageSource`（RGBA）を持つ。デコード・縮小・アクセント色は今まで通り skia で、プロバイダのスレッドで
+  - シークバーは `slider_with`（挙動だけ）に自前の見た目。md3e の `wavy` は色が全体のスキーム固定で、波もホバー中しか流れないため使わない。アートの色と「再生中に流れる波」は今まで通り
+  - 曲名の折り返しと省略は `ui_core::util` のまま、文字幅は `svg::measure_text` で測る
+  - [ ] 再生ボタンの角の変形は ease-out-cubic 固定。`animation.toml` の `media_play_pause` は読んでいない（関数の easing は AntiWebUI の `Transition` に渡せない）
+  - [ ] 波と再生位置の確認：長さを報告するプレイヤーで再生中に開く（ブラウザでは試せていない）
 - [ ] notifications（アイランド）
 - [ ] toolbox（スライダーは MD3E、notifications のリスト、items）
 - [ ] `m3_widget` を `anti-webui-md3e`（独立クレート。同じ git rev から依存に足す）に置き換える。スライダー、アイコン（Material Symbols）、ボタン、リスト項目

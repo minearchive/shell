@@ -4,9 +4,13 @@
 use std::{collections::HashMap, fs, path::Path, process::Command, thread, time::Duration};
 
 use anti_webui::prelude::UiSender as Sender;
+use anti_webui::style::ImageSource;
 use log::{debug, error};
 use mpris::PlayerFinder;
-use skia_safe::{surfaces, Data, FilterMode, Image, MipmapMode, Paint, Rect, SamplingOptions};
+use skia_safe::{
+    image::CachingHint, surfaces, AlphaType, ColorType, Data, FilterMode, Image, ImageInfo,
+    MipmapMode, Paint, Rect, SamplingOptions,
+};
 use ui_core::scheme::color::Color;
 
 use crate::dbus::notification_icon::percent_decode;
@@ -22,9 +26,10 @@ const ACCENT_SAMPLES: i32 = 16;
 const ACCENT_LIGHTNESS: f32 = 0.55;
 const ON_ACCENT_SHADE: f32 = 0.2;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Art {
-    pub image: Image,
+    /// Decoded and shrunk here, off the UI thread.
+    pub pixels: ImageSource,
     /// A light color from the art, for what the card emphasizes.
     pub accent: Color,
     pub on_accent: Color,
@@ -72,7 +77,7 @@ fn load(url: &str) -> Option<Art> {
     let image = shrink(&image?)?;
     let accent = accent(&image)?;
     Some(Art {
-        image,
+        pixels: pixels(&image)?,
         accent,
         on_accent: Color {
             r: accent.r * ON_ACCENT_SHADE,
@@ -131,6 +136,16 @@ fn resized(image: &Image, width: i32, height: i32) -> Option<Image> {
         &Paint::default(),
     );
     Some(surface.image_snapshot())
+}
+
+/// The image's pixels as AntiWebUI takes them: RGBA with straight alpha.
+fn pixels(image: &Image) -> Option<ImageSource> {
+    let (width, height) = (image.width(), image.height());
+    let info = ImageInfo::new((width, height), ColorType::RGBA8888, AlphaType::Unpremul, None);
+    let mut data = vec![0u8; width as usize * height as usize * 4];
+    image
+        .read_pixels(&info, &mut data, width as usize * 4, (0, 0), CachingHint::Disallow)
+        .then(|| ImageSource::rgba(width as u32, height as u32, data))
 }
 
 /// The art's most vivid color, lightened. Art with no color in it comes out near white.

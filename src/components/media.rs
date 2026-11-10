@@ -2,48 +2,35 @@
 //! open an island with a card like Material 3 Expressive's media player on a phone.
 
 use std::{
+    cell::Cell,
     collections::HashMap,
-    sync::{mpsc::Sender, Arc},
+    rc::Rc,
     time::{Duration, Instant},
 };
 
-use m3_widget::{icon::BOX_SIZE, Icon, Slider, SliderWave, Widget};
-use mpris::{Event, PlaybackStatus};
-use skia_safe::{
-    canvas::SrcRectConstraint,
-    gradient::{shaders, Colors, Gradient, Interpolation},
-    Canvas, Color4f, Contains, FilterMode, Image, MipmapMode, Paint, Point, RRect, Rect,
-    SamplingOptions, TileMode,
-};
-use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind};
-
+use anti_webui::prelude::*;
+use anti_webui::style::{BackgroundSize, LineHeight, Style};
+use anti_webui_md3e::{components::sized_icon, icons};
+use kurbo::BezPath;
+use mpris::PlaybackStatus;
 use ui_core::{
-    animation::{
-        animation::{easing::ease_out_cubic, Animation},
-        parser::Easing,
-    },
-    font::FontBook,
-    geometry::LayoutRect,
-    pointer::{button, PointerEvent as CorePointerEvent, PointerEventKind as CoreKind},
-    scheme::{color::Color, ColorTheme},
+    scheme::{color::Color as ThemeColor, ColorTheme},
     util::{elide, wrap_text},
 };
 
 use crate::{
-    components::{toolbox::lerp_box, update_slider_easing},
     dbus::{
         mpris::{PlayerAction, PlayerCommand, PlayerState},
         player_art::Art,
     },
-    ui::{
-        bar_baseline, to_core_event, BarSlot, Component, IslandFrame, IslandPlacement,
-        IslandRequest, Redraw, UIState, BAR_HEIGHT, ISLAND_SIDE_MARGIN,
-    },
+    state::State,
+    ui::{color, palette, BarSlot, IslandPart, IslandPlacement, IslandRequest, Part, ISLAND_SIDE_MARGIN},
 };
 
-const FONT: &str = "noto_sans";
+const FONT: &str = "Noto Sans CJK JP";
 const BAR_TEXT_SIZE: f32 = 16.0;
 const MAX_BAR_TEXT_WIDTH: f32 = 280.0;
+const ICON_SIZE: f32 = 24.0;
 const ICON_GAP: f32 = 8.0;
 const THUMBNAIL_RADIUS: f32 = 6.0;
 
@@ -68,16 +55,22 @@ const CONTROL_INSET: f32 = 8.0;
 const TIME_SIZE: f32 = 12.0;
 const TIME_WIDTH: f32 = 36.0;
 const SLIDER_HEIGHT: f32 = 24.0;
+const TRACK: f32 = 4.0;
+const HANDLE_WIDTH: f32 = 4.0;
+const HANDLE_GAP: f32 = 6.0;
 const WAVE_AMPLITUDE: f32 = 3.0;
+const WAVE_LENGTH: f32 = 28.0;
 /// How fast the wave travels, in radians a second: a wavelength every two seconds.
 const WAVE_SPEED: f32 = std::f32::consts::PI;
-const MORPH: Duration = Duration::from_millis(300);
-const PLAY_PAUSE_EASING_ID: &str = "media_play_pause";
+/// ponytail: animation.toml's `media_play_pause` easing isn't read here; it is a function and
+/// AntiWebUI's transitions take a cubic-bezier. This is ease-out-cubic, its default.
+const MORPH: Transition = Transition::ms(300).cubic_bezier(0.33, 1.0, 0.68, 1.0);
 /// How long a seek gets to show up in what the player reports. A little over the time
 /// between polling its position.
 const SEEK_SETTLE: Duration = Duration::from_secs(2);
 /// Below notifications, which take the island over and then hand it back.
 const ISLAND_PRIORITY: u8 = 50;
+
 /// The player to show, if any: playing beats paused, then whichever last played. A
 /// stopped player has nothing to show. `last_playing` keeps the bar on the player the
 /// user just paused, rather than jumping to another that happens to be paused too.
@@ -97,79 +90,105 @@ fn current_player<'a>(
         })
 }
 
-/// Falls back on the player's name for a track with no title.
-fn title(player: &PlayerState) -> &str {
-    player
-        .title
-        .as_deref()
-        .filter(|title| !title.is_empty())
-        .unwrap_or(&player.identity)
-}
-
-fn bar_title(player: &PlayerState, fonts: &FontBook) -> String {
-    elide(title(player), MAX_BAR_TEXT_WIDTH, |s| {
-        fonts.measure(FONT, BAR_TEXT_SIZE, s)
-    })
-}
-
 fn format_time(time: Duration) -> String {
     let seconds = time.as_secs();
     format!("{}:{:02}", seconds / 60, seconds % 60)
 }
 
-/// Where text in the island is while it opens: `to` rises with the island's content, and
-/// stays at `from` in the bar until the content has come up that far. `from` and `to` are
-/// in slot coordinates, as is `content`, the island's final rect.
-fn travel(from: Point, to: Point, content: LayoutRect, progress: f32) -> Point {
-    let bottom = content.y + content.height;
-    Point::new(
-        from.x + (to.x - from.x) * progress,
-        from.y.min(bottom - (bottom - to.y) * progress),
-    )
+/// What the bar and the card show of the current player.
+#[derive(Clone, Debug, PartialEq)]
+struct Track {
+    bus_name: String,
+    /// Falls back on the player's name for a track with no title.
+    title: String,
+    artists: String,
+    playing: bool,
+    /// Without one there is nothing to seek through.
+    length: Option<Duration>,
+    player: PlayerState,
 }
 
-/// Draws `image` over `rect`, cropped rather than stretched to fit.
-fn draw_art(canvas: &Canvas, image: &Image, rect: Rect, radius: f32, alpha: f32) {
-    let (width, height) = (image.width() as f32, image.height() as f32);
-    let scale = (width / rect.width()).min(height / rect.height());
-    let (crop_w, crop_h) = (rect.width() * scale, rect.height() * scale);
-    let crop = Rect::from_xywh(
-        (width - crop_w) / 2.0,
-        (height - crop_h) / 2.0,
-        crop_w,
-        crop_h,
-    );
+impl Track {
+    fn new(player: &PlayerState) -> Self {
+        Self {
+            bus_name: player.bus_name.clone(),
+            title: player
+                .title
+                .clone()
+                .filter(|title| !title.is_empty())
+                .unwrap_or_else(|| player.identity.clone()),
+            artists: player.artists.as_deref().unwrap_or_default().join(", "),
+            playing: player.status == PlaybackStatus::Playing,
+            length: player.progress(Instant::now()).map(|(_, length)| length),
+            player: player.clone(),
+        }
+    }
 
-    let mut paint = Paint::default();
-    paint.set_anti_alias(true);
-    paint.set_alpha_f(alpha);
-    let saved = canvas.save();
-    canvas.clip_rrect(RRect::new_rect_xy(rect, radius, radius), None, true);
-    canvas.draw_image_rect_with_sampling_options(
-        image,
-        Some((&crop, SrcRectConstraint::Fast)),
-        rect,
-        SamplingOptions::new(FilterMode::Linear, MipmapMode::None),
-        &paint,
-    );
-    canvas.restore_to_count(saved);
+    /// Where playback is now, as the player last reported it.
+    fn position(&self, now: Instant) -> Duration {
+        self.player.progress(now).map_or(Duration::ZERO, |(position, _)| position)
+    }
+}
+
+/// The card as laid out for a track: kept after the island closes, so it is still there
+/// while it collapses.
+#[derive(Clone, Debug, PartialEq)]
+struct Card {
+    title: Vec<String>,
+    artist: String,
+    size: (f32, f32),
+}
+
+fn text_style(size: f32) -> Style {
+    Style::default().font_family(FONT).text_size(size)
+}
+
+fn measure(size: f32) -> impl Fn(&str) -> f32 {
+    let style = text_style(size);
+    move |s| svg::measure_text(s, &style).0
+}
+
+impl Card {
+    fn new(track: &Track, bar_width: f32) -> Self {
+        let width = ISLAND_WIDTH.min(bar_width - ISLAND_SIDE_MARGIN * 2.0);
+        let text_width = width - (CARD_MARGIN + CARD_PADDING) * 2.0 - PLAY_SIZE - PLAY_GAP;
+        let artist = elide(&track.artists, text_width, measure(ARTIST_SIZE));
+        let title = wrap_text(&track.title, text_width, MAX_TITLE_LINES, measure(TITLE_SIZE));
+        let artist_height = if artist.is_empty() {
+            0.0
+        } else {
+            ARTIST_SIZE * LINE_HEIGHT
+        };
+        let text_height = TITLE_SIZE * LINE_HEIGHT * title.len() as f32 + artist_height;
+        let height = (CARD_MARGIN + CARD_PADDING) * 2.0
+            + text_height.max(HEADER_MIN_HEIGHT)
+            + CONTROL_ROW_GAP
+            + CONTROL_SIZE
+            - CONTROL_INSET;
+        Self {
+            title,
+            artist,
+            size: (width, height),
+        }
+    }
 }
 
 /// The card's colors: from the art with light text on its scrim, whatever the theme is
 /// like, and from the theme without art.
+#[derive(Clone, Copy)]
 struct CardColors {
-    content: Color,
-    content_variant: Color,
-    accent: Color,
-    on_accent: Color,
-    track: Color,
+    content: ThemeColor,
+    content_variant: ThemeColor,
+    accent: ThemeColor,
+    on_accent: ThemeColor,
+    track: ThemeColor,
 }
 
 impl CardColors {
     fn new(art: Option<&Art>, theme: &ColorTheme) -> Self {
         match art {
             Some(art) => {
-                let white = Color {
+                let white = ThemeColor {
                     r: 1.0,
                     g: 1.0,
                     b: 1.0,
@@ -194,522 +213,441 @@ impl CardColors {
     }
 }
 
-/// The track laid out for the island. Kept after the island closes, so it is still there
-/// to draw while it collapses.
-struct Shown {
-    bus_name: String,
-    art: Option<Art>,
-    title: Vec<String>,
-    artist: String,
-    playing: bool,
-    /// `(position, length)`, if the player reports them.
-    progress: Option<(Duration, Duration)>,
-    size: (f32, f32),
-}
-
-impl Shown {
-    fn new(player: &PlayerState, art: Option<&Art>, bar_width: f32, fonts: &FontBook) -> Self {
-        let width = ISLAND_WIDTH.min(bar_width - ISLAND_SIDE_MARGIN * 2.0);
-        let text_width = width - (CARD_MARGIN + CARD_PADDING) * 2.0 - PLAY_SIZE - PLAY_GAP;
-        let artists = player.artists.as_deref().unwrap_or_default().join(", ");
-        let artist = elide(&artists, text_width, |s| {
-            fonts.measure(FONT, ARTIST_SIZE, s)
-        });
-        let title = wrap_text(title(player), text_width, MAX_TITLE_LINES, |s| {
-            fonts.measure(FONT, TITLE_SIZE, s)
-        });
-        let artist_height = if artist.is_empty() {
-            0.0
-        } else {
-            ARTIST_SIZE * LINE_HEIGHT
-        };
-        let text_height = TITLE_SIZE * LINE_HEIGHT * title.len() as f32 + artist_height;
-        let height = (CARD_MARGIN + CARD_PADDING) * 2.0
-            + text_height.max(HEADER_MIN_HEIGHT)
-            + CONTROL_ROW_GAP
-            + CONTROL_SIZE
-            - CONTROL_INSET;
-        Self {
-            bus_name: player.bus_name.clone(),
-            art: art.cloned(),
-            title,
-            artist,
-            playing: player.status == PlaybackStatus::Playing,
-            progress: player.progress(Instant::now()),
-            size: (width, height),
-        }
-    }
-
-    fn card(&self) -> Rect {
-        Rect::from_wh(self.size.0, self.size.1).with_inset((CARD_MARGIN, CARD_MARGIN))
-    }
-
-    /// The title's and artist's lines: their text, size and baseline's start.
-    fn lines(&self) -> Vec<(&str, f32, Point)> {
-        let titles = self.title.iter().map(|line| (line.as_str(), TITLE_SIZE));
-        let mut y = CARD_MARGIN + CARD_PADDING;
-        titles
-            .chain([(self.artist.as_str(), ARTIST_SIZE)])
-            .filter(|(text, _)| !text.is_empty())
-            .map(|(text, size)| {
-                let at = Point::new(CARD_MARGIN + CARD_PADDING, y + size);
-                y += size * LINE_HEIGHT;
-                (text, size, at)
-            })
-            .collect()
-    }
-
-    fn play_rect(&self) -> Rect {
-        let card = self.card();
-        Rect::from_xywh(
-            card.right - CARD_PADDING - PLAY_SIZE,
-            card.top + CARD_PADDING,
-            PLAY_SIZE,
-            PLAY_SIZE,
-        )
-    }
-
-    fn control_top(&self) -> f32 {
-        self.card().bottom - CONTROL_INSET - CONTROL_SIZE
-    }
-
-    fn previous_rect(&self) -> Rect {
-        let left = self.card().left + CONTROL_INSET;
-        Rect::from_xywh(left, self.control_top(), CONTROL_SIZE, CONTROL_SIZE)
-    }
-
-    fn next_rect(&self) -> Rect {
-        let left = self.card().right - CONTROL_INSET - CONTROL_SIZE;
-        Rect::from_xywh(left, self.control_top(), CONTROL_SIZE, CONTROL_SIZE)
-    }
-
-    fn slider_rect(&self) -> LayoutRect {
-        let left = self.previous_rect().right + TIME_WIDTH;
-        LayoutRect::new(
-            left,
-            self.control_top() + (CONTROL_SIZE - SLIDER_HEIGHT) / 2.0,
-            self.next_rect().left - TIME_WIDTH - left,
-            SLIDER_HEIGHT,
-        )
-    }
-
-    fn button_at(&self, x: f64, y: f64) -> Option<PlayerAction> {
-        [
-            (self.previous_rect(), PlayerAction::Previous),
-            (self.play_rect(), PlayerAction::PlayPause),
-            (self.next_rect(), PlayerAction::Next),
-        ]
-        .into_iter()
-        .find(|(rect, _)| rect.contains(Point::new(x as f32, y as f32)))
-        .map(|(_, action)| action)
-    }
-
-    /// The art under a scrim for the text, or a plain card. The text is on the left, so
-    /// that's where the scrim is darkest.
-    fn draw_card(&self, canvas: &Canvas, theme: &ColorTheme) {
-        let card = self.card();
-        let rrect = RRect::new_rect_xy(card, CARD_RADIUS, CARD_RADIUS);
-        let mut paint = Paint::default();
-        paint.set_anti_alias(true);
-        let Some(art) = &self.art else {
-            paint.set_color4f(Color4f::from(theme.surface_container_high), None);
-            canvas.draw_rrect(rrect, &paint);
-            return;
-        };
-        draw_art(canvas, &art.image, card, CARD_RADIUS, 1.0);
-        let colors = [
-            Color4f::new(0.0, 0.0, 0.0, 0.78),
-            Color4f::new(0.0, 0.0, 0.0, 0.35),
-        ];
-        let scrim = Gradient::new(
-            Colors::new_evenly_spaced(&colors, TileMode::Clamp, None),
-            Interpolation::default(),
-        );
-        paint.set_shader(shaders::linear_gradient(
-            ((card.left, 0.0), (card.right, 0.0)),
-            &scrim,
-            None,
-        ));
-        canvas.draw_rrect(rrect, &paint);
-    }
-}
-
-pub struct Media {
-    commands: Sender<PlayerCommand>,
-    last_playing: Option<String>,
-    open: bool,
-    shown: Option<Shown>,
-    slider: Slider,
-    /// Where we last seeked to, and when.
-    seeked: Option<(Duration, Instant)>,
-    /// 1 while playing: drives the play button's shape and the wave's height.
-    playing: Animation<f32>,
-    /// What the wave's motion counts from.
-    started: Instant,
-    /// The width in the bar on the last draw, for hit testing.
-    bar_width: f32,
-}
-
-impl Media {
-    pub fn new(commands: Sender<PlayerCommand>) -> Self {
-        Self {
-            commands,
-            last_playing: None,
-            open: false,
-            shown: None,
-            slider: Slider::new(0.0, 1.0, 0.0),
-            seeked: None,
-            playing: Animation::new(0.0, 0.0, MORPH, Arc::new(ease_out_cubic)),
-            started: Instant::now(),
-            bar_width: 0.0,
-        }
-    }
-
-    fn player<'a>(&self, state: &'a UIState) -> Option<&'a PlayerState> {
-        current_player(&state.players, self.last_playing.as_deref())
-    }
-
-    fn close(&mut self) -> Redraw {
-        if self.open {
-            self.open = false;
-            Redraw::Now
-        } else {
-            Redraw::None
-        }
-    }
-
-    fn send(&self, bus_name: &str, action: PlayerAction) {
-        let _ = self.commands.send(PlayerCommand {
-            bus_name: bus_name.to_string(),
-            action,
+/// Calls `f` every frame for as long as `active` reads true.
+fn every_frame(active: Memo<bool>, f: impl Fn() + 'static) {
+    fn step(active: Memo<bool>, f: Rc<dyn Fn()>, run: Rc<Cell<u64>>, me: u64) {
+        request_frame(move |_| {
+            if run.get() == me && untrack(|| active.get()) {
+                f();
+                step(active, f, run, me);
+            }
         });
     }
-
-    /// A pointer event in the island. The slider only seeks once it is let go, since a
-    /// player may take a moment over every seek.
-    fn on_island_pointer(&mut self, event: &CorePointerEvent) -> Redraw {
-        let Some(shown) = &self.shown else {
-            return Redraw::None;
-        };
-        let was_pressed = self.slider.is_pressed();
-        let dirty = self.slider.on_pointer(event);
-
-        match event.kind {
-            CoreKind::Release { .. } if was_pressed => {
-                if let Some((_, length)) = shown.progress {
-                    let target = length.mul_f32(self.slider.value());
-                    self.seeked = Some((target, Instant::now()));
-                    self.send(&shown.bus_name, PlayerAction::SeekTo(target));
-                }
-            }
-            CoreKind::Press { button } if button == button::LEFT => {
-                if let Some(action) = shown.button_at(event.x(), event.y()) {
-                    self.send(&shown.bus_name, action);
-                }
-            }
-            _ => {}
+    let f: Rc<dyn Fn()> = Rc::new(f);
+    let run = Rc::new(Cell::new(0u64));
+    effect(move || {
+        if active.get() {
+            // One that went off and on again before its next frame stops for this one.
+            run.set(run.get() + 1);
+            step(active, f.clone(), run.clone(), run.get());
         }
-        if dirty {
-            Redraw::Now
-        } else {
-            Redraw::None
-        }
-    }
-
-    /// Our slot toggles the island, and anywhere else in the bar dismisses it. `x` and
-    /// `y` are relative to the slot, so the rest of the bar is out of its range.
-    fn on_bar_press(&mut self, x: f64, y: f64) -> Redraw {
-        let in_slot =
-            (0.0..self.bar_width as f64).contains(&x) && (0.0..BAR_HEIGHT as f64).contains(&y);
-        if in_slot {
-            self.open = !self.open;
-            Redraw::Now
-        } else {
-            self.close()
-        }
-    }
+    });
 }
 
-impl Component for Media {
-    fn bar_slot(&self) -> BarSlot {
-        BarSlot::Center
-    }
+/// The wavy progress line of M3 Expressive's media player: the played part waves while
+/// `amplitude` is above 0, then a gap, the handle, a gap and the rest of the track.
+fn progress_path(width: f32, fraction: f32, amplitude: f32, phase: f32) -> (BezPath, BezPath, BezPath) {
+    let mid = f64::from(SLIDER_HEIGHT / 2.0);
+    let handle = HANDLE_WIDTH / 2.0 + (width - HANDLE_WIDTH) * fraction;
+    let played_end = (handle - HANDLE_WIDTH / 2.0 - HANDLE_GAP).max(0.0);
+    let rest_start = (handle + HANDLE_WIDTH / 2.0 + HANDLE_GAP).min(width);
 
-    fn on_easing_updated(&mut self, id: &str, easing: &Easing) -> Redraw {
-        if id == PLAY_PAUSE_EASING_ID {
-            self.playing.set_easing(easing.clone());
+    let mut played = BezPath::new();
+    if played_end > 0.0 {
+        let step = 2.0;
+        let mut x = 0.0;
+        played.move_to((0.0, mid));
+        while x < played_end {
+            x = (x + step).min(played_end);
+            let k = std::f32::consts::TAU / WAVE_LENGTH;
+            let y = mid + f64::from(amplitude * (k * x - phase).sin());
+            played.line_to((f64::from(x), y));
         }
-        update_slider_easing(&mut self.slider, id, easing);
-        Redraw::None
     }
-
-    fn bar_width(&self, state: &UIState, fonts: &FontBook) -> f32 {
-        self.player(state).map_or(0.0, |player| {
-            let text = bar_title(player, fonts);
-            BOX_SIZE + ICON_GAP + fonts.measure(FONT, BAR_TEXT_SIZE, &text)
-        })
+    let mut rest = BezPath::new();
+    if rest_start < width {
+        rest.move_to((f64::from(rest_start), mid));
+        rest.line_to((f64::from(width), mid));
     }
+    let mut thumb = BezPath::new();
+    thumb.move_to((f64::from(handle), 0.0));
+    thumb.line_to((f64::from(handle), f64::from(SLIDER_HEIGHT)));
+    (played, rest, thumb)
+}
 
-    /// Drawn here rather than in `draw` so everything can move into the island as it opens:
-    /// the title to its first line, and the art to the card or the icon to the play button.
-    fn draw_overlay(
-        &mut self,
-        canvas: &Canvas,
-        island: Option<IslandFrame>,
-        state: &UIState,
-        fonts: &FontBook,
-        theme: &ColorTheme,
-    ) -> Redraw {
-        self.bar_width = self.bar_width(state, fonts);
-        let progress = island.map_or(0.0, |frame| frame.progress);
-        let bar_text_at = Point::new(
-            BOX_SIZE + ICON_GAP,
-            bar_baseline(&fonts.sized(FONT, BAR_TEXT_SIZE)),
-        );
-        let in_bar = Rect::from_xywh(
-            0.0,
-            (BAR_HEIGHT as f32 - BOX_SIZE) / 2.0,
-            BOX_SIZE,
-            BOX_SIZE,
-        );
-        let mut paint = Paint::default();
-        paint.set_anti_alias(true);
-        // Fading over only half the way keeps what the two titles share solid throughout.
-        let first_alpha = (progress * 2.0).min(1.0);
-        let bar_alpha = ((1.0 - progress) * 2.0).min(1.0);
-        // The lines are too close together to read until the island has made room for them.
-        let rest_alpha = (progress * 2.0 - 1.0).max(0.0);
+pub fn media(state: &State, bar_width: f32) -> Part {
+    let players = state.players;
+    let player_art = state.player_art;
+    let last_playing = state.last_playing;
+    let commands = state.commands.clone();
 
-        let mut title_at = bar_text_at;
-        let mut card_at = in_bar;
-        let mut play_at = in_bar;
-        if let Some((frame, shown)) = island.zip(self.shown.as_ref()) {
-            let origin = (frame.content.x, frame.content.y);
-            let colors = CardColors::new(shown.art.as_ref(), theme);
-            for (i, (text, size, at)) in shown.lines().into_iter().enumerate() {
-                let color = if i < shown.title.len() {
-                    colors.content
-                } else {
-                    colors.content_variant
-                };
-                let at = travel(
-                    bar_text_at,
-                    at + Point::from(origin),
-                    frame.content,
-                    progress,
-                );
-                if i == 0 {
-                    title_at = at;
-                }
-                let alpha = if i == 0 { first_alpha } else { rest_alpha };
-                paint.set_color4f(Color4f::from(color.with_alpha(alpha)), None);
-                fonts.draw(canvas, FONT, size, text, at, &paint);
+    let track = memo(move || {
+        let last = last_playing.get();
+        players.with(|p| current_player(p, last.as_deref()).map(Track::new))
+    });
+    let art = memo(move || {
+        let bus = track.with(|t| t.as_ref().map(|t| t.bus_name.clone()))?;
+        player_art.with(|a| a.get(&bus).cloned())
+    });
+    let open = signal(false);
+    // With the player gone there is nothing to show.
+    effect(move || {
+        if track.with(Option::is_none) {
+            untrack(|| open.set(false));
+        }
+    });
+
+    // The card for the island, kept while it collapses after the player has gone.
+    let card = signal(None::<Card>);
+    effect(move || {
+        if let Some(t) = track.get() {
+            let laid_out = Card::new(&t, bar_width);
+            if untrack(|| card.get()).as_ref() != Some(&laid_out) {
+                untrack(|| card.set(Some(laid_out)));
             }
-            card_at = shown.card().with_offset(origin);
-            play_at = shown.play_rect().with_offset(origin);
         }
-
-        if let Some(player) = self.player(state) {
-            let color = if player.status == PlaybackStatus::Playing {
-                theme.on_surface
-            } else {
-                theme.on_surface_variant
-            };
-            match state.player_art.get(&player.bus_name) {
-                Some(art) => {
-                    let lerp = |from: f32, to: f32| from + (to - from) * progress;
-                    let at = Rect::new(
-                        lerp(in_bar.left, card_at.left),
-                        lerp(in_bar.top, card_at.top),
-                        lerp(in_bar.right, card_at.right),
-                        lerp(in_bar.bottom, card_at.bottom),
-                    );
-                    let radius = lerp(THUMBNAIL_RADIUS, CARD_RADIUS);
-                    // Gone by halfway, before it can be seen not to line up with the growing card.
-                    draw_art(
-                        canvas,
-                        &art.image,
-                        at,
-                        radius,
-                        (1.0 - progress * 2.0).max(0.0),
-                    );
-                }
-                None => {
-                    let at = lerp_box(in_bar, play_at, progress);
-                    Icon::MusicNote.draw(canvas, at, color.with_alpha(1.0 - progress));
-                }
-            }
-            paint.set_color4f(Color4f::from(color.with_alpha(bar_alpha)), None);
-            let text = bar_title(player, fonts);
-            fonts.draw(canvas, FONT, BAR_TEXT_SIZE, &text, title_at, &paint);
-        }
-        Redraw::None
-    }
-
-    fn on_cursor(&mut self, event: &PointerEvent) -> Redraw {
-        match event.kind {
-            PointerEventKind::Press { button, .. } if button == button::LEFT => {
-                self.on_bar_press(event.position.0, event.position.1)
-            }
-            _ => Redraw::None,
-        }
-    }
-
-    fn captures_outside_press(&self) -> bool {
-        self.open
-    }
-
-    fn on_outside_press(&mut self) -> Redraw {
-        self.close()
-    }
-
-    fn island(
-        &mut self,
-        state: &UIState,
-        fonts: &FontBook,
-        bar_width: f32,
-    ) -> Option<IslandRequest> {
-        // With the player gone there is nothing open to dismiss, so outside presses must
-        // stop being captured too.
-        let Some(player) = self.player(state) else {
-            self.open = false;
-            return None;
-        };
-        if !self.open {
+    });
+    let request = memo(move || {
+        if !open.get() || track.with(Option::is_none) {
             return None;
         }
-        let art = state.player_art.get(&player.bus_name);
-        let shown = Shown::new(player, art, bar_width, fonts);
-        let request = IslandRequest {
-            width: shown.size.0,
-            height: shown.size.1,
+        let (width, height) = card.with(|c| c.as_ref().map(|c| c.size))?;
+        Some(IslandRequest {
+            width,
+            height,
             placement: IslandPlacement::OverBar,
             priority: ISLAND_PRIORITY,
-        };
-        self.shown = Some(shown);
-        Some(request)
-    }
+        })
+    });
 
-    fn draw_island(
-        &mut self,
-        canvas: &Canvas,
-        _size: (f32, f32),
-        _state: &UIState,
-        fonts: &FontBook,
-        theme: &ColorTheme,
-    ) -> Redraw {
-        let Some(shown) = &self.shown else {
-            return Redraw::None;
-        };
-
-        shown.draw_card(canvas, theme);
-        let colors = CardColors::new(shown.art.as_ref(), theme);
-        let mut slider_theme = theme.clone();
-        slider_theme.primary = colors.accent;
-        slider_theme.secondary_container = colors.track;
-        slider_theme.on_surface = colors.content;
-
-        let target = if shown.playing { 1.0 } else { 0.0 };
-        if self.playing.to() != target {
-            self.playing.set_target(target);
+    let send = {
+        let commands = commands.clone();
+        move |action: PlayerAction| {
+            if let Some(t) = untrack(|| track.get()) {
+                let _ = commands.player.send(PlayerCommand {
+                    bus_name: t.bus_name,
+                    action,
+                });
+            }
         }
-        let playing = self.playing.value();
+    };
 
-        // Mid-drag the slider leads, and the time follows it.
-        self.slider.set_enabled(shown.progress.is_some());
-        if let (Some((position, length)), false) = (shown.progress, self.slider.is_pressed()) {
+    let bar = bar_view(state, track, art, open);
+    let content = island_view(state, track, art, card, open, send);
+    Part {
+        bar: Some((BarSlot::Center, bar.into_view())),
+        island: Some(IslandPart {
+            request,
+            content: content.into_view(),
+        }),
+    }
+}
+
+/// The art or an icon, and the title, in the bar. A click toggles the island.
+fn bar_view(state: &State, track: Memo<Option<Track>>, art: Memo<Option<Art>>, open: Signal<bool>) -> Div {
+    let theme_state = state.clone();
+    let color = move || {
+        let playing = track.with(|t| t.as_ref().is_some_and(|t| t.playing));
+        palette(&theme_state, |t| if playing { t.on_surface } else { t.on_surface_variant })
+    };
+    let icon_color = color.clone();
+    let text_color = color;
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(ICON_GAP)
+        .transition_of([Prop::Opacity], Transition::ms(150))
+        // Under the card while it is open, which has the same in it.
+        .dyn_style(move |s| {
+            let s = if open.get() { s.opacity(0.0) } else { s.opacity(1.0) };
+            if track.with(Option::is_none) { s.hidden() } else { s }
+        })
+        .on_click(move |_| open.update(|o| *o = !*o))
+        .child(dyn_view(move || match art.get() {
+            Some(art) => div()
+                .w(ICON_SIZE)
+                .h(ICON_SIZE)
+                .rounded(THUMBNAIL_RADIUS)
+                .bg_image(art.pixels.clone())
+                .bg_size(BackgroundSize::Cover)
+                .into_view(),
+            None => {
+                let icon_color = icon_color.clone();
+                sized_icon(icons::MUSIC_NOTE, ICON_SIZE)
+                    .dyn_style(move |s| s.text_color(icon_color()))
+                    .into_view()
+            }
+        }))
+        .child(
+            text(move || {
+                let title = track.with(|t| t.as_ref().map(|t| t.title.clone()));
+                elide(&title.unwrap_or_default(), MAX_BAR_TEXT_WIDTH, measure(BAR_TEXT_SIZE))
+            })
+            .text_size(BAR_TEXT_SIZE)
+            .whitespace_nowrap()
+            .dyn_style(move |s| s.text_color(text_color())),
+        )
+}
+
+fn island_view(
+    state: &State,
+    track: Memo<Option<Track>>,
+    art: Memo<Option<Art>>,
+    card: Signal<Option<Card>>,
+    open: Signal<bool>,
+    send: impl Fn(PlayerAction) + Clone + 'static,
+) -> Div {
+    let theme = state.theme;
+    let colors = move || theme.with(|t| CardColors::new(art.get().as_ref(), t.theme()));
+    let playing = memo(move || track.with(|t| t.as_ref().is_some_and(|t| t.playing)));
+    let play_morph = follow(move || if playing.get() { 1.0f32 } else { 0.0 }, MORPH);
+    let card_size = move || card.with(|c| c.as_ref().map_or((0.0, 0.0), |c| c.size));
+    let (inner_w, inner_h) = (
+        move || card_size().0 - CARD_MARGIN * 2.0,
+        move || card_size().1 - CARD_MARGIN * 2.0,
+    );
+
+    // The slider leads while it is held, and the player's position otherwise.
+    let value = signal(0.0f32);
+    let held = signal(false);
+    let seeked = Rc::new(Cell::new(None::<(Duration, Instant)>));
+    let sync = {
+        let seeked = seeked.clone();
+        move || {
+            if untrack(|| held.get()) {
+                return;
+            }
+            let Some(t) = untrack(|| track.get()) else {
+                return;
+            };
+            let Some(length) = t.length else {
+                return;
+            };
             // The player takes a moment over a seek, and until then still reports where it
             // was: what we asked for holds until it has had time to get there.
-            self.seeked = self.seeked.filter(|(_, at)| at.elapsed() < SEEK_SETTLE);
-            let position = match self.seeked {
-                Some((target, at)) if shown.playing => target + at.elapsed(),
+            seeked.set(seeked.get().filter(|(_, at)| at.elapsed() < SEEK_SETTLE));
+            let position = match seeked.get() {
+                Some((target, at)) if t.playing => target + at.elapsed(),
                 Some((target, _)) => target,
-                None => position,
+                None => t.position(Instant::now()),
             };
-            self.slider
-                .set_value(position.as_secs_f32() / length.as_secs_f32());
+            value.set(position.as_secs_f32() / length.as_secs_f32());
         }
-        let slider = shown.slider_rect();
-        self.slider.set_layout_rect(slider);
-        let waving = shown.progress.is_some();
-        self.slider.set_wave(Some(SliderWave {
-            amplitude: if waving {
-                WAVE_AMPLITUDE * playing
-            } else {
-                0.0
-            },
-            phase: self.started.elapsed().as_secs_f32() * WAVE_SPEED,
-        }));
-        let animating = self.slider.draw(canvas, &slider_theme, fonts);
-
-        if let Some((_, length)) = shown.progress {
-            let mut paint = Paint::new(Color4f::from(colors.content_variant), None);
-            paint.set_anti_alias(true);
-            let baseline = slider.y + (slider.height + TIME_SIZE) / 2.0 - 1.0;
-            let position = format_time(length.mul_f32(self.slider.value()));
-            let at = Point::new(shown.previous_rect().right, baseline);
-            fonts.draw(canvas, FONT, TIME_SIZE, &position, at, &paint);
-            let total = format_time(length);
-            let x = shown.next_rect().left - fonts.measure(FONT, TIME_SIZE, &total);
-            let at = Point::new(x, baseline);
-            fonts.draw(canvas, FONT, TIME_SIZE, &total, at, &paint);
+    };
+    {
+        let sync = sync.clone();
+        let seeked = seeked.clone();
+        let last_title = Cell::new(None::<(String, String)>);
+        effect(move || {
+            let key = track.with(|t| t.as_ref().map(|t| (t.bus_name.clone(), t.title.clone())));
+            if last_title.replace(key.clone()) != key {
+                seeked.set(None);
+            }
+            sync();
+        });
+    }
+    // The slider only seeks once it is let go, since a player may take a moment over every seek.
+    {
+        let send = send.clone();
+        let seeked = seeked.clone();
+        let was = Cell::new(false);
+        effect(move || {
+            let now = held.get();
+            if was.replace(now) && !now {
+                if let Some(length) = untrack(|| track.get()).and_then(|t| t.length) {
+                    let target = length.mul_f32(untrack(|| value.get()));
+                    seeked.set(Some((target, Instant::now())));
+                    send(PlayerAction::SeekTo(target));
+                }
+            }
+        });
+    }
+    // While the card is open and the track plays, the wave flows and the position advances.
+    let phase = signal(0.0f32);
+    let started = Instant::now();
+    every_frame(memo(move || open.get() && playing.get()), {
+        let sync = sync.clone();
+        move || {
+            phase.set(started.elapsed().as_secs_f32() * WAVE_SPEED);
+            sync();
         }
+    });
 
-        let centered = |rect: Rect| {
-            Rect::from_xywh(
-                rect.center_x() - BOX_SIZE / 2.0,
-                rect.center_y() - BOX_SIZE / 2.0,
-                BOX_SIZE,
-                BOX_SIZE,
+    let can_seek = memo(move || track.with(|t| t.as_ref().is_some_and(|t| t.length.is_some())));
+    let slider = slider_with(value, 0.0, 1.0, SliderOptions::new(), move |s: SliderState| {
+        effect(move || {
+            let now = s.held().is_some();
+            untrack(|| held.set(now));
+        });
+        let width = signal(0.0f32);
+        let paths = move || {
+            let amplitude = WAVE_AMPLITUDE * play_morph.get();
+            progress_path(width.get(), s.fraction(), amplitude, phase.get())
+        };
+        let stroke = move |path: Box<dyn Fn() -> BezPath>, pick: fn(&CardColors) -> ThemeColor| {
+            svg::path(move || path())
+                .fill_none()
+                .stroke_width(TRACK)
+                .line_cap(anti_webui::style::LineCap::Round)
+                .dyn_style(move |st| st.stroke(color(pick(&colors()))))
+        };
+        let played = paths.clone();
+        let rest = paths.clone();
+        let thumb = paths;
+        div()
+            .flex_1()
+            .h(SLIDER_HEIGHT)
+            .on_resized(move |w, _| width.set(w))
+            .dyn_style(move |st| st.opacity(if can_seek.get() { 1.0 } else { 0.38 }))
+            .child(
+                svg()
+                    .size_full()
+                    .child(stroke(Box::new(move || played().0), |c| c.accent))
+                    .child(stroke(Box::new(move || rest().1), |c| c.track))
+                    .child(stroke(Box::new(move || thumb().2), |c| c.accent)),
             )
+    });
+
+    let time = |f: Box<dyn Fn() -> String>| {
+        text(f)
+            .text_size(TIME_SIZE)
+            .whitespace_nowrap()
+            .dyn_style(move |s| s.text_color(color(colors().content_variant)))
+    };
+    let position_text = time(Box::new(move || {
+        track.with(|t| {
+            t.as_ref()
+                .and_then(|t| t.length)
+                .map_or(String::new(), |l| format_time(l.mul_f32(value.get())))
+        })
+    }));
+    let length_text = time(Box::new(move || {
+        track.with(|t| t.as_ref().and_then(|t| t.length).map_or(String::new(), format_time))
+    }));
+
+    let control = |symbol, action: PlayerAction| {
+        let send = send.clone();
+        div()
+            .w(CONTROL_SIZE)
+            .h(CONTROL_SIZE)
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(CONTROL_SIZE / 2.0)
+            .on_click(move |_| send(action.clone()))
+            .child(
+                sized_icon(symbol, ICON_SIZE)
+                    .dyn_style(move |s| s.text_color(color(colors().content))),
+            )
+    };
+
+    let play = {
+        let send = send.clone();
+        div()
+            .w(PLAY_SIZE)
+            .h(PLAY_SIZE)
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .on_click(move |_| send(PlayerAction::PlayPause))
+            .dyn_style(move |s| {
+                let radius = PLAY_SIZE / 2.0 + (PLAY_RADIUS_PLAYING - PLAY_SIZE / 2.0) * play_morph.get();
+                s.rounded(radius).bg(color(colors().accent))
+            })
+            .child(dyn_view(move || {
+                let symbol = if playing.get() { icons::PAUSE } else { icons::PLAY_ARROW };
+                sized_icon(symbol, ICON_SIZE)
+                    .dyn_style(move |s| s.text_color(color(colors().on_accent)))
+                    .into_view()
+            }))
+    };
+
+    let lines = div().flex().flex_col().flex_1().child(dyn_view(move || {
+        let Some(c) = card.get() else {
+            return div().into_view();
         };
-        Icon::SkipPrevious.draw(canvas, centered(shown.previous_rect()), colors.content);
-        Icon::SkipNext.draw(canvas, centered(shown.next_rect()), colors.content);
-
-        let play = shown.play_rect();
-        let radius = PLAY_SIZE / 2.0 + (PLAY_RADIUS_PLAYING - PLAY_SIZE / 2.0) * playing;
-        let mut paint = Paint::new(Color4f::from(colors.accent), None);
-        paint.set_anti_alias(true);
-        canvas.draw_rrect(RRect::new_rect_xy(play, radius, radius), &paint);
-        let icon = if shown.playing {
-            Icon::Pause
-        } else {
-            Icon::Play
-        };
-        icon.draw(canvas, centered(play), colors.on_accent);
-
-        // ponytail: repaints the whole surface every frame while a track plays with the
-        // card open. Damage only the card if that shows up on a profile.
-        if animating || self.playing.is_traveling() || (shown.playing && waving) {
-            Redraw::Animating
-        } else {
-            Redraw::None
+        let mut column = div().flex().flex_col();
+        for line in c.title {
+            column = column.child(
+                text(line)
+                    .text_size(TITLE_SIZE)
+                    .line_height(LineHeight::Relative(LINE_HEIGHT))
+                    .whitespace_nowrap()
+                    .dyn_style(move |s| s.text_color(color(colors().content))),
+            );
         }
-    }
+        if !c.artist.is_empty() {
+            column = column.child(
+                text(c.artist)
+                    .text_size(ARTIST_SIZE)
+                    .line_height(LineHeight::Relative(LINE_HEIGHT))
+                    .whitespace_nowrap()
+                    .dyn_style(move |s| s.text_color(color(colors().content_variant))),
+            );
+        }
+        column.into_view()
+    }));
 
-    fn on_island_cursor(&mut self, event: &PointerEvent) -> Redraw {
-        match to_core_event(event) {
-            Some(event) => self.on_island_pointer(&event),
-            None => Redraw::None,
-        }
-    }
+    // The art under a scrim for the text, or a plain card. The text is on the left, so
+    // that's where the scrim is darkest.
+    let scrim = svg()
+        .absolute()
+        .left(0.0)
+        .top(0.0)
+        .size_full()
+        .dyn_style(move |s| if art.with(Option::is_some) { s } else { s.hidden() })
+        .child(
+            svg::path(move || {
+                kurbo::Shape::to_path(
+                    &kurbo::RoundedRect::new(0.0, 0.0, f64::from(inner_w()), f64::from(inner_h()), f64::from(CARD_RADIUS)),
+                    0.05,
+                )
+            })
+            .fill(
+                Gradient::linear(0.0, 0.0, 1.0, 0.0)
+                    .stop(0.0, Color::new(0.0, 0.0, 0.0, 0.78))
+                    .stop(1.0, Color::new(0.0, 0.0, 0.0, 0.35)),
+            ),
+        );
 
-    fn on_mpris(&mut self, state: &PlayerState, event: &Event) -> Redraw {
-        if matches!(event, Event::TrackChanged(_)) {
-            self.seeked = None;
-        }
-        if state.status == PlaybackStatus::Playing {
-            self.last_playing = Some(state.bus_name.clone());
-        }
-        Redraw::Now
-    }
+    let state = state.clone();
+    div().size_full().p(CARD_MARGIN).child(
+        div()
+            .relative()
+            .size_full()
+            .rounded(CARD_RADIUS)
+            .overflow_hidden()
+            .dyn_style(move |s| match art.get() {
+                Some(art) => s.bg_image(art.pixels.clone()).bg_size(BackgroundSize::Cover),
+                None => s.bg(palette(&state, |t| t.surface_container_high)),
+            })
+            .child(scrim)
+            .child(
+                div()
+                    .absolute()
+                    .left(CARD_PADDING)
+                    .top(CARD_PADDING)
+                    .right(CARD_PADDING)
+                    .flex()
+                    .flex_row()
+                    .gap(PLAY_GAP)
+                    .child(lines)
+                    .child(play),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left(CONTROL_INSET)
+                    .right(CONTROL_INSET)
+                    .bottom(CONTROL_INSET)
+                    .h(CONTROL_SIZE)
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .child(control(icons::SKIP_PREVIOUS, PlayerAction::Previous))
+                    .child(div().w(TIME_WIDTH).child(position_text))
+                    .child(slider)
+                    .child(div().w(TIME_WIDTH).flex().justify_end().child(length_text))
+                    .child(control(icons::SKIP_NEXT, PlayerAction::Next)),
+            ),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use mpris::LoopStatus;
-
-    use crate::config::WatchableConfig;
 
     use super::*;
 
@@ -761,114 +699,6 @@ mod tests {
         assert_eq!(shown(&players, None), Some("a"), "stable with no history");
     }
 
-    fn shown_with(progress: Option<(Duration, Duration)>) -> Shown {
-        Shown {
-            bus_name: "player".to_string(),
-            art: None,
-            title: Vec::new(),
-            artist: String::new(),
-            playing: true,
-            progress,
-            size: (400.0, 170.0),
-        }
-    }
-
-    fn draw_island(media: &mut Media) {
-        let theme = crate::config::theme::Theme::load(
-            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("example/theme.toml"),
-        );
-        let mut fonts = FontBook::new();
-        fonts.register(FONT, "Noto Sans CJK JP", skia_safe::FontStyle::normal());
-        let mut surface = skia_safe::surfaces::raster_n32_premul((400, 170)).unwrap();
-        media.draw_island(
-            surface.canvas(),
-            (400.0, 170.0),
-            &UIState::default(),
-            &fonts,
-            theme.theme(),
-        );
-    }
-
-    /// Presses and releases the middle of the slider.
-    fn dragged(
-        progress: Option<(Duration, Duration)>,
-    ) -> (Media, std::sync::mpsc::Receiver<PlayerCommand>) {
-        let (tx, rx) = std::sync::mpsc::channel();
-        let mut media = Media::new(tx);
-        media.shown = Some(shown_with(progress));
-        draw_island(&mut media);
-
-        let rect = media.shown.as_ref().unwrap().slider_rect();
-        let at = (
-            (rect.x + rect.width / 2.0) as f64,
-            (rect.y + rect.height / 2.0) as f64,
-        );
-        let left = button::LEFT;
-        media.on_island_pointer(&CorePointerEvent::new(at, CoreKind::Press { button: left }));
-        assert!(rx.try_recv().is_err(), "nothing until it is let go");
-        media.on_island_pointer(&CorePointerEvent::new(
-            at,
-            CoreKind::Release { button: left },
-        ));
-        (media, rx)
-    }
-
-    /// Presses and releases the slider, and returns what that sent.
-    fn drag_slider(progress: Option<(Duration, Duration)>) -> Vec<PlayerCommand> {
-        dragged(progress).1.try_iter().collect()
-    }
-
-    #[test]
-    fn a_seek_holds_until_the_player_has_had_time_to_get_there() {
-        let progress = (Duration::from_secs(10), Duration::from_secs(100));
-        let (mut media, _rx) = dragged(Some(progress));
-
-        // The player still says 10s.
-        draw_island(&mut media);
-        let held = media.slider.value();
-        assert!((0.45..0.55).contains(&held), "fell back to {held}");
-
-        let (target, _) = media.seeked.unwrap();
-        media.seeked = Some((target, Instant::now() - SEEK_SETTLE));
-        draw_island(&mut media);
-        assert!((media.slider.value() - 0.1).abs() < 0.001);
-    }
-
-    #[test]
-    fn letting_go_of_the_slider_seeks() {
-        let progress = (Duration::from_secs(10), Duration::from_secs(100));
-        let commands = drag_slider(Some(progress));
-        let [PlayerCommand {
-            bus_name,
-            action: PlayerAction::SeekTo(target),
-        }] = commands.as_slice()
-        else {
-            panic!("expected one seek, got {commands:?}");
-        };
-        assert_eq!(bus_name, "player");
-        assert!((45..55).contains(&target.as_secs()), "seeked to {target:?}");
-    }
-
-    #[test]
-    fn a_player_without_a_length_cannot_seek() {
-        assert_eq!(drag_slider(None), []);
-    }
-
-    #[test]
-    fn text_waits_in_the_bar_then_rises_with_the_island() {
-        let content = LayoutRect::new(-100.0, -100.0, 300.0, 160.0);
-        let (from, to) = (Point::new(30.0, 36.0), Point::new(10.0, -70.0));
-
-        assert_eq!(travel(from, to, content, 0.0), from);
-        assert_eq!(travel(from, to, content, 1.0), to);
-        assert_eq!(travel(from, to, content, 0.1).y, from.y, "still in the bar");
-
-        // Its place in the island, not a straight line that would outrun the island's top.
-        let at = travel(from, to, content, 0.5);
-        assert_eq!(at, Point::new(20.0, 60.0 - 130.0 * 0.5));
-        assert!(at.y > 60.0 - 160.0 * 0.5, "below the island's top");
-    }
-
     #[test]
     fn times_read_as_minutes_and_seconds() {
         assert_eq!(format_time(Duration::from_secs(0)), "0:00");
@@ -877,65 +707,15 @@ mod tests {
     }
 
     #[test]
-    fn presses_map_to_buttons_only_inside_them() {
-        let shown = shown_with(None);
-        let center = |rect: Rect| (rect.center_x() as f64, rect.center_y() as f64);
-        let at = |rect: Rect| {
-            let (x, y) = center(rect);
-            shown.button_at(x, y)
-        };
+    fn the_progress_line_leaves_a_gap_around_the_handle() {
+        let (played, rest, thumb) = progress_path(200.0, 0.5, 0.0, 0.0);
+        let x = |p: &BezPath| kurbo::Shape::bounding_box(p);
+        let handle = x(&thumb).x0 as f32;
+        assert!((handle - 100.0).abs() < 0.01, "{handle}");
+        assert!(x(&played).x1 as f32 <= handle - HANDLE_WIDTH / 2.0 - HANDLE_GAP + 0.01);
+        assert!(x(&rest).x0 as f32 >= handle + HANDLE_WIDTH / 2.0 + HANDLE_GAP - 0.01);
 
-        assert_eq!(at(shown.previous_rect()), Some(PlayerAction::Previous));
-        assert_eq!(at(shown.play_rect()), Some(PlayerAction::PlayPause));
-        assert_eq!(at(shown.next_rect()), Some(PlayerAction::Next));
-
-        let slider = shown.slider_rect();
-        let on_slider = (slider.x + slider.width / 2.0, slider.y + 1.0);
-        assert_eq!(
-            shown.button_at(on_slider.0 as f64, on_slider.1 as f64),
-            None
-        );
-        assert_eq!(shown.button_at(30.0, 30.0), None, "the text");
-    }
-
-    #[test]
-    fn the_slot_toggles_and_presses_elsewhere_only_close() {
-        let mut media = Media::new(std::sync::mpsc::channel().0);
-        media.bar_width = 100.0;
-
-        assert_eq!(media.on_bar_press(-500.0, 30.0), Redraw::None);
-        assert!(!media.captures_outside_press());
-
-        assert_eq!(media.on_bar_press(50.0, 30.0), Redraw::Now);
-        assert!(media.captures_outside_press(), "the slot opens");
-
-        assert_eq!(media.on_bar_press(50.0, 30.0), Redraw::Now);
-        assert!(!media.open, "the slot closes");
-
-        media.open = true;
-        assert_eq!(media.on_bar_press(-500.0, 30.0), Redraw::Now);
-        assert!(!media.open, "the rest of the bar closes");
-
-        media.open = true;
-        assert_eq!(media.on_outside_press(), Redraw::Now);
-        assert!(!media.open, "outside the bar closes");
-    }
-
-    #[test]
-    fn the_island_closes_itself_when_the_player_goes_away() {
-        let mut fonts = FontBook::new();
-        fonts.register(FONT, "Noto Sans CJK JP", skia_safe::FontStyle::normal());
-        let mut media = Media::new(std::sync::mpsc::channel().0);
-        media.open = true;
-
-        let mut state = UIState::default();
-        let (name, playing) = player("a", PlaybackStatus::Playing);
-        state.players.insert(name, playing);
-        assert!(media.island(&state, &fonts, 1000.0).is_some());
-        assert!(media.captures_outside_press());
-
-        state.players.clear();
-        assert!(media.island(&state, &fonts, 1000.0).is_none());
-        assert!(!media.captures_outside_press());
+        let (played, _, _) = progress_path(200.0, 0.0, 3.0, 0.0);
+        assert!(played.elements().is_empty(), "nothing played at the start");
     }
 }
