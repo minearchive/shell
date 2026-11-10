@@ -46,13 +46,15 @@ fn catch_outside_presses(bar: &ui::Bar, input: Signal<Vec<RectI>>, output: Outpu
     {
         let catcher = catcher.clone();
         effect(move || {
+            // Each change may be committed on its own, and a stretched size needs both opposite
+            // edges anchored: anchor before stretching, and shrink before letting go of edges.
             if open.get() {
                 catcher.set_anchor(Anchor::ALL);
                 catcher.set_size(LayerSize::Stretch, LayerSize::Stretch);
             } else {
                 catcher.set_input_region(InputRegion::Empty);
-                catcher.set_anchor(Anchor::TOP | Anchor::LEFT);
                 catcher.set_size(LayerSize::Fixed(1), LayerSize::Fixed(1));
+                catcher.set_anchor(Anchor::TOP | Anchor::LEFT);
             }
         });
     }
