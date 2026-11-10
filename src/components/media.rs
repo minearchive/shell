@@ -9,8 +9,8 @@ use std::{
 };
 
 use anti_webui::prelude::*;
-use anti_webui::style::{BackgroundSize, LineHeight, Style};
-use anti_webui_md3e::{components::sized_icon, icons};
+use anti_webui::style::{BackgroundSize, Length, LineHeight, Style};
+use anti_webui_md3e::{components::sized_icon, icons, motion::fast_spatial};
 use kurbo::BezPath;
 use mpris::PlaybackStatus;
 use ui_core::{
@@ -55,11 +55,23 @@ const CONTROL_INSET: f32 = 8.0;
 const TIME_SIZE: f32 = 12.0;
 const TIME_WIDTH: f32 = 36.0;
 const SLIDER_HEIGHT: f32 = 24.0;
+/// The seek bar is `m3_widget`'s extra-small slider with a wave: a thin track, and a handle as
+/// tall as the bar.
 const TRACK: f32 = 4.0;
 const HANDLE_WIDTH: f32 = 4.0;
+const HANDLE_WIDTH_PRESSED: f32 = 2.0;
 const HANDLE_GAP: f32 = 6.0;
+const STOP_DIAMETER: f32 = 4.0;
+/// The stop indicator sits a corner of the extra-small slider's 16px track in from its end.
+const STOP_INSET: f32 = 8.0;
 const WAVE_AMPLITUDE: f32 = 3.0;
 const WAVE_LENGTH: f32 = 28.0;
+/// How far from the handle the wave settles into a flat line.
+const WAVE_TAPER: f32 = 14.0;
+const WAVE_STEP: f32 = 2.0;
+/// Of the content color, for a seek bar that can't seek.
+const DISABLED_CONTENT_OPACITY: f32 = 0.38;
+const DISABLED_TRACK_OPACITY: f32 = 0.12;
 /// How fast the wave travels, in radians a second: a wavelength every two seconds.
 const WAVE_SPEED: f32 = std::f32::consts::PI;
 /// ponytail: animation.toml's `media_play_pause` easing isn't read here; it is a function and
@@ -213,6 +225,11 @@ impl CardColors {
     }
 }
 
+/// A Material Symbol, filled like `m3_widget`'s icons.
+fn filled_icon(symbol: &'static anti_webui_md3e::icons::Symbol) -> Div {
+    sized_icon(symbol, ICON_SIZE).font_axis(b"FILL", 1.0)
+}
+
 /// Calls `f` every frame for as long as `active` reads true.
 fn every_frame(active: Memo<bool>, f: impl Fn() + 'static) {
     fn step(active: Memo<bool>, f: Rc<dyn Fn()>, run: Rc<Cell<u64>>, me: u64) {
@@ -236,33 +253,68 @@ fn every_frame(active: Memo<bool>, f: impl Fn() + 'static) {
 
 /// The wavy progress line of M3 Expressive's media player: the played part waves while
 /// `amplitude` is above 0, then a gap, the handle, a gap and the rest of the track.
-fn progress_path(width: f32, fraction: f32, amplitude: f32, phase: f32) -> (BezPath, BezPath, BezPath) {
-    let mid = f64::from(SLIDER_HEIGHT / 2.0);
+/// The seek bar's shapes, as `m3_widget::Slider` drew it with a wave.
+struct Progress {
+    /// The played part as a line to stroke: it waves, and settles flat towards the handle so
+    /// it never leaves the track pointing away from it.
+    played: BezPath,
+    /// The rest of the track, a thin bar.
+    rest: BezPath,
+    handle: BezPath,
+    /// The stop indicator at the far end, and whether the played part has reached it.
+    stop: Option<(BezPath, bool)>,
+}
+
+/// `handle_width` narrows while the handle is held.
+fn progress(width: f32, fraction: f32, amplitude: f32, phase: f32, handle_width: f32) -> Progress {
+    let f = f64::from;
+    let mid = SLIDER_HEIGHT / 2.0;
     let handle = HANDLE_WIDTH / 2.0 + (width - HANDLE_WIDTH) * fraction;
-    let played_end = (handle - HANDLE_WIDTH / 2.0 - HANDLE_GAP).max(0.0);
-    let rest_start = (handle + HANDLE_WIDTH / 2.0 + HANDLE_GAP).min(width);
+    let played_end = (handle - handle_width / 2.0 - HANDLE_GAP).max(0.0);
+    let rest_start = (handle + handle_width / 2.0 + HANDLE_GAP).min(width);
 
     let mut played = BezPath::new();
     if played_end > 0.0 {
-        let step = 2.0;
-        let mut x = 0.0;
-        played.move_to((0.0, mid));
+        let y = |x: f32| {
+            let settle = ((played_end - x) / WAVE_TAPER).min(1.0);
+            let angle = x / WAVE_LENGTH * std::f32::consts::TAU - phase;
+            f(mid + angle.sin() * amplitude * settle)
+        };
+        played.move_to((0.0, y(0.0)));
+        let mut x = WAVE_STEP;
         while x < played_end {
-            x = (x + step).min(played_end);
-            let k = std::f32::consts::TAU / WAVE_LENGTH;
-            let y = mid + f64::from(amplitude * (k * x - phase).sin());
-            played.line_to((f64::from(x), y));
+            played.line_to((f(x), y(x)));
+            x += WAVE_STEP;
         }
+        played.line_to((f(played_end), y(played_end)));
     }
-    let mut rest = BezPath::new();
-    if rest_start < width {
-        rest.move_to((f64::from(rest_start), mid));
-        rest.line_to((f64::from(width), mid));
+    let bar = |x0: f32, y0: f32, x1: f32, y1: f32, radius: f32| {
+        kurbo::Shape::to_path(&kurbo::RoundedRect::new(f(x0), f(y0), f(x1), f(y1), f(radius)), 0.05)
+    };
+    let rest = if rest_start < width {
+        bar(rest_start, mid - TRACK / 2.0, width, mid + TRACK / 2.0, TRACK / 2.0)
+    } else {
+        BezPath::new()
+    };
+    let handle_path = bar(
+        handle - handle_width / 2.0,
+        0.0,
+        handle + handle_width / 2.0,
+        SLIDER_HEIGHT,
+        handle_width / 2.0,
+    );
+    // Dropped where the handle's gap would swallow it.
+    let stop_x = width - STOP_INSET;
+    let stop = ((stop_x - handle).abs() > handle_width / 2.0 + HANDLE_GAP).then(|| {
+        let dot = kurbo::Circle::new((f(stop_x), f(mid)), f(STOP_DIAMETER / 2.0));
+        (kurbo::Shape::to_path(&dot, 0.05), stop_x < handle)
+    });
+    Progress {
+        played,
+        rest,
+        handle: handle_path,
+        stop,
     }
-    let mut thumb = BezPath::new();
-    thumb.move_to((f64::from(handle), 0.0));
-    thumb.line_to((f64::from(handle), f64::from(SLIDER_HEIGHT)));
-    (played, rest, thumb)
 }
 
 pub fn media(state: &State, bar_width: f32) -> Part {
@@ -361,10 +413,11 @@ fn bar_view(state: &State, track: Memo<Option<Track>>, art: Memo<Option<Art>>, o
                 .rounded(THUMBNAIL_RADIUS)
                 .bg_image(art.pixels.clone())
                 .bg_size(BackgroundSize::Cover)
+                .bg_position(Length::Percent(50.0), Length::Percent(50.0))
                 .into_view(),
             None => {
                 let icon_color = icon_color.clone();
-                sized_icon(icons::MUSIC_NOTE, ICON_SIZE)
+                filled_icon(icons::MUSIC_NOTE)
                     .dyn_style(move |s| s.text_color(icon_color()))
                     .into_view()
             }
@@ -471,31 +524,72 @@ fn island_view(
             untrack(|| held.set(now));
         });
         let width = signal(0.0f32);
-        let paths = move || {
+        let handle_width = follow(
+            move || if s.held().is_some() { HANDLE_WIDTH_PRESSED } else { HANDLE_WIDTH },
+            fast_spatial(),
+        );
+        let shapes = Rc::new(move || {
             let amplitude = WAVE_AMPLITUDE * play_morph.get();
-            progress_path(width.get(), s.fraction(), amplitude, phase.get())
+            progress(width.get(), s.fraction(), amplitude, phase.get(), handle_width.get())
+        });
+        // The played part, the handle and a stop on the rest of the track are the accent; the
+        // rest, and a stop the played part has reached, are the track's color.
+        let active = move || {
+            let c = colors();
+            if can_seek.get() {
+                c.accent
+            } else {
+                c.content.with_alpha(DISABLED_CONTENT_OPACITY)
+            }
         };
-        let stroke = move |path: Box<dyn Fn() -> BezPath>, pick: fn(&CardColors) -> ThemeColor| {
-            svg::path(move || path())
+        let inactive = move || {
+            let c = colors();
+            if can_seek.get() {
+                c.track
+            } else {
+                c.content.with_alpha(DISABLED_TRACK_OPACITY)
+            }
+        };
+        let played = {
+            let shapes = shapes.clone();
+            svg::path(move || shapes().played)
                 .fill_none()
                 .stroke_width(TRACK)
                 .line_cap(anti_webui::style::LineCap::Round)
-                .dyn_style(move |st| st.stroke(color(pick(&colors()))))
+                .line_join(anti_webui::style::LineJoin::Round)
+                .dyn_style(move |st| st.stroke(color(active())))
         };
-        let played = paths.clone();
-        let rest = paths.clone();
-        let thumb = paths;
+        let rest = {
+            let shapes = shapes.clone();
+            svg::path(move || shapes().rest).dyn_style(move |st| st.fill(color(inactive())))
+        };
+        let stop = {
+            let shapes = shapes.clone();
+            let on_played = {
+                let shapes = shapes.clone();
+                move || shapes().stop.is_some_and(|(_, on_played)| on_played)
+            };
+            svg::path(move || shapes().stop.map_or_else(BezPath::new, |(dot, _)| dot)).dyn_style(
+                move |st| st.fill(color(if on_played() { inactive() } else { active() })),
+            )
+        };
+        let handle = svg::path(move || shapes().handle).dyn_style(move |st| st.fill(color(active())));
         div()
+            .relative()
             .flex_1()
             .h(SLIDER_HEIGHT)
             .on_resized(move |w, _| width.set(w))
-            .dyn_style(move |st| st.opacity(if can_seek.get() { 1.0 } else { 0.38 }))
             .child(
+                // Out of the flow: an svg with no size of its own would ask for 300px.
                 svg()
+                    .absolute()
+                    .left(0.0)
+                    .top(0.0)
                     .size_full()
-                    .child(stroke(Box::new(move || played().0), |c| c.accent))
-                    .child(stroke(Box::new(move || rest().1), |c| c.track))
-                    .child(stroke(Box::new(move || thumb().2), |c| c.accent)),
+                    .child(played)
+                    .child(rest)
+                    .child(stop)
+                    .child(handle),
             )
     });
 
@@ -515,6 +609,9 @@ fn island_view(
     let length_text = time(Box::new(move || {
         track.with(|t| t.as_ref().and_then(|t| t.length).map_or(String::new(), format_time))
     }));
+    // A fixed width keeps the seek bar from moving as the digits change. The position starts
+    // where the previous button's box ends, and the length ends where the next one's begins.
+    let time_box = |time| div().w(TIME_WIDTH).flex_none().flex().child(time);
 
     let control = |symbol, action: PlayerAction| {
         let send = send.clone();
@@ -527,7 +624,7 @@ fn island_view(
             .rounded(CONTROL_SIZE / 2.0)
             .on_click(move |_| send(action.clone()))
             .child(
-                sized_icon(symbol, ICON_SIZE)
+                filled_icon(symbol)
                     .dyn_style(move |s| s.text_color(color(colors().content))),
             )
     };
@@ -548,7 +645,7 @@ fn island_view(
             })
             .child(dyn_view(move || {
                 let symbol = if playing.get() { icons::PAUSE } else { icons::PLAY_ARROW };
-                sized_icon(symbol, ICON_SIZE)
+                filled_icon(symbol)
                     .dyn_style(move |s| s.text_color(color(colors().on_accent)))
                     .into_view()
             }))
@@ -610,7 +707,8 @@ fn island_view(
             .rounded(CARD_RADIUS)
             .overflow_hidden()
             .dyn_style(move |s| match art.get() {
-                Some(art) => s.bg_image(art.pixels.clone()).bg_size(BackgroundSize::Cover),
+                Some(art) => s.bg_image(art.pixels.clone()).bg_size(BackgroundSize::Cover)
+                .bg_position(Length::Percent(50.0), Length::Percent(50.0)),
                 None => s.bg(palette(&state, |t| t.surface_container_high)),
             })
             .child(scrim)
@@ -637,9 +735,9 @@ fn island_view(
                     .flex_row()
                     .items_center()
                     .child(control(icons::SKIP_PREVIOUS, PlayerAction::Previous))
-                    .child(div().w(TIME_WIDTH).child(position_text))
-                    .child(slider)
-                    .child(div().w(TIME_WIDTH).flex().justify_end().child(length_text))
+                    .child(time_box(position_text).justify_start())
+                    .child(slider.flex_1().min_w(0.0))
+                    .child(time_box(length_text).justify_end())
                     .child(control(icons::SKIP_NEXT, PlayerAction::Next)),
             ),
     )
@@ -708,14 +806,25 @@ mod tests {
 
     #[test]
     fn the_progress_line_leaves_a_gap_around_the_handle() {
-        let (played, rest, thumb) = progress_path(200.0, 0.5, 0.0, 0.0);
+        let p = progress(200.0, 0.5, 0.0, 0.0, HANDLE_WIDTH);
         let x = |p: &BezPath| kurbo::Shape::bounding_box(p);
-        let handle = x(&thumb).x0 as f32;
+        let handle = (x(&p.handle).x0 + x(&p.handle).x1) as f32 / 2.0;
         assert!((handle - 100.0).abs() < 0.01, "{handle}");
-        assert!(x(&played).x1 as f32 <= handle - HANDLE_WIDTH / 2.0 - HANDLE_GAP + 0.01);
-        assert!(x(&rest).x0 as f32 >= handle + HANDLE_WIDTH / 2.0 + HANDLE_GAP - 0.01);
+        assert!(x(&p.played).x1 as f32 <= handle - HANDLE_WIDTH / 2.0 - HANDLE_GAP + 0.01);
+        assert!(x(&p.rest).x0 as f32 >= handle + HANDLE_WIDTH / 2.0 + HANDLE_GAP - 0.01);
+        assert!(p.stop.is_some_and(|(_, played)| !played), "the stop is ahead");
 
-        let (played, _, _) = progress_path(200.0, 0.0, 3.0, 0.0);
-        assert!(played.elements().is_empty(), "nothing played at the start");
+        let p = progress(200.0, 0.0, 3.0, 0.0, HANDLE_WIDTH);
+        assert!(p.played.elements().is_empty(), "nothing played at the start");
+    }
+
+    #[test]
+    fn the_wave_settles_flat_at_the_handle_and_the_stop_goes_under_it() {
+        let p = progress(200.0, 0.5, 3.0, 0.0, HANDLE_WIDTH);
+        let end = p.played.elements().last().and_then(|e| e.end_point()).unwrap();
+        assert_eq!(end.y as f32, SLIDER_HEIGHT / 2.0, "flat where it meets the gap");
+
+        // At the end the handle's gap swallows the stop.
+        assert!(progress(200.0, 1.0, 3.0, 0.0, HANDLE_WIDTH).stop.is_none());
     }
 }
