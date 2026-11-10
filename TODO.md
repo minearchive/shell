@@ -25,12 +25,19 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
 - [x] 判定：形・入力範囲・計測とも問題なし（メモリの差は測定誤差程度）。Phase 1 に進む
 
 ### Phase 1: 状態と入力
-- [ ] `UIState` の各フィールドを signal にする：`players`、`warp`、`notifications`、`system`、`player_art`
-- [ ] calloop の channel を `ui_channel` に置き換える：Notification / mpris / IPC / KDEConnect / Warp / Action / System / PlayerArt / position
-- [ ] `UiEvent` を消す（redraw は不要になる。Dismiss / Clear は signal に書き込む）
-- [ ] `CLOCK_TICK` を時計の signal と `set_timeout` に置き換え、通知の期限切れも処理する
-- [ ] 単一インスタンスのソケット（`cli.rs`）を、listener スレッドから `ui_channel` へ流す形に残す
-- [ ] `config/`（theme.toml）を読む部分は残し、テーマを AntiWebUI のスタイルと MD3E の配色に写す
+- [x] `UIState` を `src/state.rs` の `State`（signal の束）にする：`players`、`player_art`、`last_playing`、`warp`、`notifications`、`system`、`focused_title`、`focused_workspace`、`theme`、`animation`、`action`
+  - コマンドの送り口と `NotificationHandle` は `State::commands`（`Rc<Commands>`）
+- [x] calloop の channel を `ui_channel` に置き換える。プロバイダは `UiSender` で送る。`cli` と config の監視はコールバックを受け取る形にした（テストは std の mpsc）
+- [x] `UiEvent` を消す：Dismiss / Clear は `State::dismiss_notification` / `clear_notifications`、設定の再読み込みは signal の更新
+- [x] `CLOCK_TICK`：期限切れの確認は毎秒の tick スレッド＋`ui_channel`（`set_timeout` はウィンドウごとのタイマーで、Shell のルートでは使えない）。時計は `local_time(Every::Minute)`
+- [x] 単一インスタンスのソケットはそのまま。`action` は連番付きの signal（同じ action が 2 回来ても読む側が走り直す）
+- [x] 仮のバー（`main.rs` の `bar`）に全プロバイダの値が出ることを確認した。Phase 2 で消す
+- [ ] テーマを MD3E の配色に写す → Phase 2（md3e の対応表と一緒に）
+- 気付いたこと
+  - `example/theme.toml` は .gitignore 対象で worktree に来ない。ないと既定の `Theme` が全部透明で、何も見えない。既定値を見える色にするか、ないときに警告以上を出す
+  - niri の IPC は変化のときしかイベントが来ないので、起動直後は ws / タイトルが空。最初に `Request::Workspaces` / `FocusedWindow` を引く
+  - 起動時に Vulkan ローダの ERROR が出る：システムの Mesa の radeon / lvp の ICD が、devShell の glibc より新しい glibc を要求して読み込めない。Intel の ICD は読めているので描画には影響しない
+  - バーの文字がマウスで選択できてしまう。Phase 2 で選択を切る
 
 ### Phase 2: コンポーネント
 - [ ] `Component` トレイトを廃止し、`fn x() -> impl IntoView` にする

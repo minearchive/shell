@@ -1,7 +1,7 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
-use calloop::channel::Sender;
+use anti_webui::prelude::UiSender as Sender;
 use futures_util::StreamExt;
 use serde::Deserialize;
 use tokio::process::Command;

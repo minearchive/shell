@@ -7,7 +7,6 @@ use std::{
     time::Duration,
 };
 
-use calloop::channel::Sender;
 use clap::{Parser, Subcommand};
 use log::warn;
 use serde::{Deserialize, Serialize};
@@ -63,9 +62,9 @@ pub fn send(action: &Action) -> Result<(), String> {
     }
 }
 
-/// Binds the socket and forwards every action sent to it to `tx`. Fails if
-/// another instance is already listening.
-pub fn listen(tx: Sender<Action>) -> io::Result<()> {
+/// Binds the socket and hands every action sent to it to `on_action`, on the
+/// socket's thread. Fails if another instance is already listening.
+pub fn listen(on_action: impl Fn(Action) + Send + 'static) -> io::Result<()> {
     let path = socket_path();
     if UnixStream::connect(&path).is_ok() {
         return Err(io::Error::new(
@@ -80,7 +79,7 @@ pub fn listen(tx: Sender<Action>) -> io::Result<()> {
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => {
-                    if let Err(e) = serve(stream, &tx) {
+                    if let Err(e) = serve(stream, &on_action) {
                         warn!("CLI connection failed: {e}");
                     }
                 }
@@ -91,16 +90,16 @@ pub fn listen(tx: Sender<Action>) -> io::Result<()> {
     Ok(())
 }
 
-fn serve(stream: UnixStream, tx: &Sender<Action>) -> io::Result<()> {
+fn serve(stream: UnixStream, on_action: &dyn Fn(Action)) -> io::Result<()> {
     // A client that never finishes its line must not block the next one.
     stream.set_read_timeout(Some(Duration::from_secs(1)))?;
     let mut line = String::new();
     BufReader::new(&stream).read_line(&mut line)?;
     let reply = match serde_json::from_str::<Action>(&line) {
-        Ok(action) => match tx.send(action) {
-            Ok(()) => "ok".to_owned(),
-            Err(e) => e.to_string(),
-        },
+        Ok(action) => {
+            on_action(action);
+            "ok".to_owned()
+        }
         // Only a CLI from a different build sends something this one can't read.
         Err(e) => format!("unknown action {:?}: {e}", line.trim_end()),
     };
@@ -112,10 +111,10 @@ mod tests {
     use super::*;
 
     fn roundtrip(line: &str) -> (String, Option<Action>) {
-        let (tx, rx) = calloop::channel::channel();
+        let (tx, rx) = std::sync::mpsc::channel();
         let (client, server) = UnixStream::pair().unwrap();
         writeln!(&client, "{line}").unwrap();
-        serve(server, &tx).unwrap();
+        serve(server, &|action| tx.send(action).unwrap()).unwrap();
         let mut reply = String::new();
         BufReader::new(&client).read_line(&mut reply).unwrap();
         (reply, rx.try_recv().ok())

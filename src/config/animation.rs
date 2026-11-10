@@ -6,8 +6,6 @@ use serde::Deserialize;
 
 use ui_core::animation::parser::{css_to_easing, Easing};
 
-use crate::ui::UiEvent;
-
 use super::watchable::{read_toml, WatchableConfig};
 
 /// Prefix of a value that reuses another easing by name: `"conf::<name>"`.
@@ -34,7 +32,7 @@ struct RawAnimationConfig {
     easings: HashMap<String, String>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct AnimationConfig {
     raw: HashMap<String, String>,
     easings: HashMap<String, Easing>,
@@ -64,10 +62,6 @@ impl WatchableConfig for AnimationConfig {
 
     fn is_changed(&self, new: &Self) -> bool {
         self.raw != new.raw
-    }
-
-    fn reload_event(&self) -> UiEvent {
-        UiEvent::AnimationUpdated(self.easings.clone())
     }
 }
 

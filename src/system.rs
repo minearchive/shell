@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, fs, path::Path, thread, time::Duration};
 
-use calloop::channel::Sender;
+use anti_webui::prelude::UiSender as Sender;
 use tokio::{
     process::Command,
     sync::mpsc,

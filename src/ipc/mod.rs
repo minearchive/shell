@@ -1,4 +1,4 @@
-use calloop::channel::Sender;
+use anti_webui::prelude::UiSender as Sender;
 use log::warn;
 
 use crate::ipc::{events::IPCEvent, hyprland::HyprlandIpc};

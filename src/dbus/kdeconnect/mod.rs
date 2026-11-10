@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fmt::Display, thread};
 
-use calloop::channel::Sender;
+use anti_webui::prelude::UiSender as Sender;
 
 mod proxy;
 use futures_util::StreamExt;

@@ -4,11 +4,9 @@ use serde::Deserialize;
 
 use ui_core::scheme::ColorTheme;
 
-use crate::ui::UiEvent;
-
 use super::watchable::{read_toml, WatchableConfig};
 
-#[derive(Deserialize, Default, PartialEq)]
+#[derive(Clone, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct Theme {
     pub is_dark: bool,
@@ -23,10 +21,6 @@ impl WatchableConfig for Theme {
 
     fn is_changed(&self, new: &Self) -> bool {
         self != new
-    }
-
-    fn reload_event(&self) -> UiEvent {
-        UiEvent::RequestRedrawAll
     }
 }
 

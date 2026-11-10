@@ -3,7 +3,7 @@
 
 use std::{collections::HashMap, fs, path::Path, process::Command, thread, time::Duration};
 
-use calloop::channel::Sender;
+use anti_webui::prelude::UiSender as Sender;
 use log::{debug, error};
 use mpris::PlayerFinder;
 use skia_safe::{surfaces, Data, FilterMode, Image, MipmapMode, Paint, Rect, SamplingOptions};

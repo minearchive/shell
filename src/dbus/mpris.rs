@@ -3,7 +3,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use calloop::channel::Sender;
+use anti_webui::prelude::UiSender as Sender;
 use log::{debug, error, info};
 use mpris::{DBusError, Event, LoopStatus, PlaybackStatus, Player, PlayerFinder};
 

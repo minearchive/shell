@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use calloop::channel::Sender;
+use anti_webui::prelude::UiSender as Sender;
 use skia_safe::Image;
 use zbus::connection;
 use zbus::object_server::SignalEmitter;

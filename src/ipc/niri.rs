@@ -1,6 +1,6 @@
 use std::{collections::HashMap, thread};
 
-use calloop::channel::Sender;
+use anti_webui::prelude::UiSender as Sender;
 use log::warn;
 use niri_ipc::{socket::Socket, Event, Request, Response, Window};
 

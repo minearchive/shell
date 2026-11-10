@@ -1,6 +1,6 @@
 use std::fmt;
 
-use calloop::channel::Sender;
+use anti_webui::prelude::UiSender as Sender;
 use hyprland::{default_instance, event_listener::EventListener, instance::Instance};
 
 use crate::ipc::events::IPCEvent;

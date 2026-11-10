@@ -22,6 +22,9 @@ winit = "0.30"
 softbuffer = "0.4"
 toml = "1.1.2"
 taffy = "0.12.2"
+# Pinned: it is days old and changes daily. See TODO.md.
+anti-webui = { git = "https://github.com/bea4dev/AntiWebUI", rev = "f2fd04c2f16006c3e8aa95047a506d9cd3db3970", default-features = false, features = ["wayland", "wayland-shell"] }
+kurbo = "0.13"
 # internal crates
 macros = { path = "./macros" }
 ui_core = { path = "./ui_core" }
@@ -35,9 +38,8 @@ version = "0.0.1"
 edition.workspace = true
 
 [dependencies]
-calloop = "0.14"
+anti-webui.workspace = true
 chrono = "0.4"
-calloop-wayland-source = "0.4"
 env_logger = "0.11.10"
 hyprland = { git = "https://github.com/hyprland-community/hyprland-rs", branch = "master" }
 log = "0.4.32"
@@ -49,12 +51,8 @@ serde_json = "1.0"
 clap = { version = "4", features = ["derive"] }
 skia-bindings.workspace = true
 skia-safe.workspace = true
-smithay-client-toolkit = "0.20.0"
 tokio = { version = "1.52.3", features=["rt","macros","sync","time","process"]}
-wayland-client = "0.31.14"
 zbus = { version = "5.16.0", default-features = false, features = ["tokio"] }
 toml.workspace = true
 futures-util = "0.3.32"
-macros.workspace = true
-m3_widget.workspace = true
 ui_core.workspace = true

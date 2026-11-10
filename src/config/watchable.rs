@@ -1,27 +1,24 @@
 use std::fs;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
 use std::thread;
 
-use calloop::channel::Sender;
 use log::{info, warn};
 use notify::{RecursiveMode, Watcher};
 use serde::de::DeserializeOwned;
 
-use crate::ui::UiEvent;
-
-pub trait WatchableConfig: Default + Sized + Send + Sync + 'static {
+pub trait WatchableConfig: Clone + Default + Sized + Send + 'static {
     fn try_load(path: &Path) -> Option<Self>;
     fn is_changed(&self, new: &Self) -> bool;
-    fn reload_event(&self) -> UiEvent;
 
     fn load(path: &Path) -> Self {
         Self::try_load(path).unwrap_or_default()
     }
 
-    fn load_and_watch(path: &Path, ui_tx: Sender<UiEvent>) -> Arc<RwLock<Self>> {
-        let config = Arc::new(RwLock::new(Self::load(path)));
-        let config_ref = Arc::clone(&config);
+    /// Loads `path`, and hands every changed version of it to `on_reload` from a
+    /// watcher thread.
+    fn load_and_watch(path: &Path, on_reload: impl Fn(Self) + Send + 'static) -> Self {
+        let config = Self::load(path);
+        let mut current = config.clone();
         let path = path.to_path_buf();
 
         thread::spawn(move || {
@@ -44,11 +41,10 @@ pub trait WatchableConfig: Default + Sized + Send + Sync + 'static {
                         .any(|p| p.file_name() == path.file_name());
                 if touches_config {
                     if let Some(new_cfg) = Self::try_load(&path) {
-                        if config_ref.read().unwrap().is_changed(&new_cfg) {
-                            let event = new_cfg.reload_event();
-                            *config_ref.write().unwrap() = new_cfg;
+                        if current.is_changed(&new_cfg) {
+                            current = new_cfg.clone();
                             info!("Config reloaded.");
-                            let _ = ui_tx.send(event);
+                            on_reload(new_cfg);
                         }
                     }
                 }
@@ -75,13 +71,13 @@ pub(super) fn read_toml<T: DeserializeOwned>(path: &Path) -> Option<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use serde::Deserialize;
 
     use super::*;
 
-    #[derive(Default, Deserialize, PartialEq)]
+    #[derive(Clone, Default, Deserialize, PartialEq)]
     struct Cfg {
         value: u32,
     }
@@ -93,9 +89,6 @@ mod tests {
         fn is_changed(&self, new: &Self) -> bool {
             self != new
         }
-        fn reload_event(&self) -> UiEvent {
-            UiEvent::RequestRedrawAll
-        }
     }
 
     #[test]
@@ -105,9 +98,9 @@ mod tests {
         let path = dir.join("cfg.toml");
         fs::write(&path, "value = 1").unwrap();
 
-        let (tx, _rx) = calloop::channel::channel();
-        let config = Cfg::load_and_watch(&path, tx);
-        assert_eq!(config.read().unwrap().value, 1);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let config = Cfg::load_and_watch(&path, move |c| tx.send(c.value).unwrap());
+        assert_eq!(config.value, 1);
 
         // Two saves: the second proves the watch survived the first's rename.
         for value in [2, 3] {
@@ -116,13 +109,12 @@ mod tests {
             fs::write(&tmp, format!("value = {value}")).unwrap();
             fs::rename(&tmp, &path).unwrap();
 
-            let start = Instant::now();
-            while config.read().unwrap().value != value {
-                assert!(
-                    start.elapsed() < Duration::from_secs(5),
-                    "no reload to {value}"
-                );
-                thread::sleep(Duration::from_millis(10));
+            loop {
+                match rx.recv_timeout(Duration::from_secs(5)) {
+                    Ok(got) if got == value => break,
+                    Ok(_) => continue,
+                    Err(_) => panic!("no reload to {value}"),
+                }
             }
         }
 
