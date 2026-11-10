@@ -144,7 +144,8 @@ pub fn toolbox(state: &State) -> Part {
                     notifications::panel(state, expanded)
                         .dyn_style(move |s| if shown.get() == Panel::Notifications { s } else { s.hidden() }),
                 )
-                .into_view() }),
+                .into_view(),
+            close: Rc::new(move || open.set(None)) }),
     }
 }
 

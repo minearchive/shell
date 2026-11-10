@@ -47,7 +47,9 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
   - シルエットは `svg::path`、中身は `translate` / `scale` / `opacity`、入力範囲は `frame` を読む effect から
 - [ ] `draw_overlay` の代わり（バーとアイランドの間を動くもの：toolbox のアイコン、media のアイコンと文字）
   - 今の media は、開いている間はバーの側を `opacity` 0 にして、カードに重ねているだけ
-- [ ] `captures_outside_press`（`catcher.rs`）の代わり：外のクリックで閉じる。media は今、バーの曲名のクリックでしか閉じない
+- [x] `captures_outside_press`（`catcher.rs`）の代わり：アイランドが開いている間だけ、全画面の透明な `Layer::Top` を開き、バーとアイランドの矩形を入力範囲から抜く（`ui::cut_out`）。押されたら全部の `IslandPart::close` を呼ぶ。effect の実行ごとに開き、閉じたら次の実行で消える
+  - [ ] 実機で確認：外クリックで media / toolbox が閉じる、バーとアイランドはそのまま押せる、閉じた後に画面のクリックが通る
+  - Skia 版の「バーの他の場所を押すと toolbox が閉じる」は入れていない
 - [x] 確認用の `debug_island` を消した
 - [x] clock
 - [x] media

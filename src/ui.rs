@@ -90,6 +90,15 @@ pub struct IslandPart {
     /// It stays shown while the island collapses, after the request has gone, so it should
     /// hold on to what it was showing.
     pub content: View,
+    /// Withdraws the request, for a press outside the bar and the island.
+    pub close: Rc<dyn Fn()>,
+}
+
+/// What [`bar`] makes: its view, whether an island is open, and what closes every island.
+pub struct Bar {
+    pub view: Div,
+    pub open: Memo<bool>,
+    pub close: Rc<dyn Fn()>,
 }
 
 /// Where an island is going.
@@ -290,10 +299,11 @@ fn tick(frame: Signal<u64>, islands: Rc<[Island]>, ticking: Rc<Cell<bool>>) {
 
 /// The bar on a screen `width` wide, BAR_HEIGHT + ISLAND_MAX_HEIGHT tall, with `parts` in
 /// it. `input` follows what takes the pointer: the bar, and the island taking it.
-pub fn bar(state: &State, width: f32, parts: Vec<Part>, input: Signal<Vec<RectI>>) -> Div {
+pub fn bar(state: &State, width: f32, parts: Vec<Part>, input: Signal<Vec<RectI>>) -> Bar {
     let mut slots: [Vec<View>; 3] = Default::default();
     let mut islands = Vec::new();
     let mut contents = Vec::new();
+    let mut closes = Vec::new();
     for part in parts {
         if let Some((slot, view)) = part.bar {
             slots[slot as usize].push(view);
@@ -305,6 +315,7 @@ pub fn bar(state: &State, width: f32, parts: Vec<Part>, input: Signal<Vec<RectI>
                 slot: Cell::new(None),
             });
             contents.push(island.content);
+            closes.push(island.close);
         }
     }
     let islands: Rc<[Island]> = islands.into();
@@ -458,7 +469,7 @@ pub fn bar(state: &State, width: f32, parts: Vec<Part>, input: Signal<Vec<RectI>
             .child(content)
     });
 
-    div()
+    let view = div()
         .relative()
         .w(width)
         .h(BAR_TOP + BAR_HEIGHT)
@@ -466,12 +477,64 @@ pub fn bar(state: &State, width: f32, parts: Vec<Part>, input: Signal<Vec<RectI>
         .font_family("Noto Sans CJK JP")
         .child(silhouette)
         .child(row)
-        .children(island_views)
+        .children(island_views);
+    Bar {
+        view,
+        open: memo(move || main.get().is_some()),
+        close: Rc::new(move || closes.iter().for_each(|close| close())),
+    }
+}
+
+/// `screen` with `holes` cut out of it, as rectangles: row by row between the holes' edges,
+/// what in each row no hole covers.
+pub fn cut_out(screen: RectI, holes: &[RectI]) -> Vec<RectI> {
+    let bottom = |r: &RectI| r.y + r.height;
+    let right = |r: &RectI| r.x + r.width;
+    let mut ys: Vec<i32> = [screen.y, bottom(&screen)]
+        .into_iter()
+        .chain(holes.iter().flat_map(|h| [h.y, bottom(h)]))
+        .filter(|y| (screen.y..=bottom(&screen)).contains(y))
+        .collect();
+    ys.sort_unstable();
+    ys.dedup();
+    let mut rects = Vec::new();
+    for band in ys.windows(2) {
+        let (top, height) = (band[0], band[1] - band[0]);
+        let mut covered: Vec<(i32, i32)> = holes
+            .iter()
+            .filter(|h| h.y <= top && bottom(h) >= band[1])
+            .map(|h| (h.x, right(h)))
+            .collect();
+        covered.sort_unstable();
+        let mut x = screen.x;
+        for (from, to) in covered.into_iter().chain([(right(&screen), right(&screen))]) {
+            if from > x {
+                rects.push(RectI::new(x, top, from.min(right(&screen)) - x, height));
+            }
+            x = x.max(to);
+        }
+    }
+    rects
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cut_out_leaves_everything_but_the_bar_and_the_island() {
+        let screen = RectI::new(0, 0, 100, 100);
+        let bar = RectI::new(0, 90, 100, 10);
+        let island = RectI::new(60, 50, 30, 40);
+        let rects = cut_out(screen, &[bar, island]);
+        assert_eq!(
+            rects,
+            [RectI::new(0, 0, 100, 50), RectI::new(0, 50, 60, 40), RectI::new(90, 50, 10, 40)]
+        );
+        assert_eq!(cut_out(screen, &[]), [screen]);
+        let area = |r: &[RectI]| r.iter().map(|r| r.width * r.height).sum::<i32>();
+        assert_eq!(area(&rects), 100 * 100 - 100 * 10 - 30 * 40);
+    }
 
     fn slot(placement: IslandPlacement) -> IslandSlot {
         IslandSlot {
