@@ -25,7 +25,7 @@ use crate::{
         warp::{WarpClient, WarpCommand, WarpStatus},
     },
     ipc::{self, events::IPCEvent},
-    system::{self, SystemCommand, SystemStatus},
+    system::{self, SystemCommand, SystemStatus, Volume},
 };
 
 /// How often notifications are checked for expiry.
@@ -149,7 +149,15 @@ impl State {
         let kdeconnect = KDEConnectClient::init(ui_channel(|e: KDEConnectEvent| debug!("{e:?}")));
 
         let warp_commands = WarpClient::init(ui_channel(move |s: WarpStatus| warp.set(Some(s))));
-        let system_commands = system::start(ui_channel(move |s: SystemStatus| system.set(s)));
+        // The volume comes from PipeWire, as it changes; the polled status has none.
+        let system_commands = system::start(ui_channel(move |s: SystemStatus| {
+            system.update(|status| *status = SystemStatus { volume: status.volume, ..s })
+        }));
+        let audio = anti_webui::shell::audio();
+        effect(move || {
+            let volume = audio.default_sink().map(|sink| Volume { level: sink.volume as f32, muted: sink.muted });
+            untrack(|| system.update(|s| s.volume = volume));
+        });
 
         let state = Self {
             players,

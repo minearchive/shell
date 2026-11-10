@@ -268,6 +268,7 @@ dependencies = [
  "anti-webui-wayland",
  "bitflags 2.13.0",
  "libc",
+ "libloading",
  "rustix 1.1.4",
  "wayland-backend",
  "wayland-client",

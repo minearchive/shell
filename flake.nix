@@ -51,6 +51,8 @@
             pkgs.wayland
             pkgs.libxkbcommon
             pkgs.vulkan-loader
+            # AntiWebUI loads libpipewire at run time for the volume.
+            pkgs.pipewire
           ];
           __EGL_VENDOR_LIBRARY_DIRS = "/run/opengl-driver/share/glvnd/egl_vendor.d";
         };

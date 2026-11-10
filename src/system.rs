@@ -188,10 +188,8 @@ async fn run(sender: Sender<SystemStatus>, mut cmd_rx: mpsc::UnboundedReceiver<S
     }
 }
 
+/// `volume` isn't read here: PipeWire tells the UI thread of it as it changes (`State::start`).
 async fn read_fast(status: &mut SystemStatus) {
-    status.volume = run_tool("wpctl", &["get-volume", "@DEFAULT_AUDIO_SINK@"])
-        .await
-        .and_then(|output| parse_volume(&output));
     status.brightness = read_brightness(Path::new(BACKLIGHTS));
 }
 
@@ -287,15 +285,6 @@ async fn run_tool(program: &str, args: &[&str]) -> Option<String> {
             None
         }
     }
-}
-
-/// `Volume: 0.53` or `Volume: 0.53 [MUTED]`.
-fn parse_volume(output: &str) -> Option<Volume> {
-    let level = output.split_whitespace().nth(1)?.parse().ok()?;
-    Some(Volume {
-        level,
-        muted: output.contains("[MUTED]"),
-    })
 }
 
 /// Lines of `TYPE:STATE:CONNECTION`, with colons in the name escaped. Wi-Fi wins
@@ -401,25 +390,6 @@ mod tests {
             "live: {:?} of {:?}",
             status.power_profile, status.power_profiles
         );
-    }
-
-    #[test]
-    fn parses_volume() {
-        assert_eq!(
-            parse_volume("Volume: 0.53\n"),
-            Some(Volume {
-                level: 0.53,
-                muted: false
-            })
-        );
-        assert_eq!(
-            parse_volume("Volume: 0.20 [MUTED]\n"),
-            Some(Volume {
-                level: 0.20,
-                muted: true
-            })
-        );
-        assert_eq!(parse_volume(""), None);
     }
 
     #[test]

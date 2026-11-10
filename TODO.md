@@ -66,6 +66,10 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
   - [x] 右クリックの notifications のリスト：アプリごとに重ねる、クリックで開く、ホバーで ✕、すべて消去、`overflow_y_scroll` でスクロール、毎分「n分前」を更新
   - [ ] 横にドラッグ / タッチパッドのスワイプで消す（Skia 版は自前のジェスチャ）
   - [ ] 行のアニメーション：消えた行の詰め、開いたアプリの行が見出しの下から出る、すべて消去で上から順に滑って消える
+- [x] 反応の遅さ：音量は `wpctl` の 1 秒ポーリングをやめ、AntiWebUI の `shell-audio`（PipeWire のイベント）から。電源プロファイルと WARP は押した値をすぐ出し、状態が変わるか 3 秒で実際の値に戻る
+  - 計測：描画の経路（通知 → バナー）は 50ms 以内。遅れはプロバイダのポーリングだった（ミュート切替 → アイコンが 315〜573ms）
+  - [ ] 実機で確認：音量キーでスライダーとアイコンがすぐ追従するか
+  - [ ] 明るさも 1 秒ポーリングのまま（sysfs は inotify が来ない。logind / udev のイベントにするなら `shell-session`）
 - [x] theme.toml の配色を md3e の `set_color_scheme` に写す（`ui::md3e_scheme`、テーマの再読み込みにも追従）
 - [ ] `m3_widget` を `anti-webui-md3e`（独立クレート。同じ git rev から依存に足す）に置き換える。スライダー、アイコン（Material Symbols）、ボタン、リスト項目
   - まず対応表を作る：m3_widget の各部品 → md3e の部品 / 足りないもの
@@ -86,7 +90,7 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
 ### Phase 5: 片付け
 - [ ] `ui_core` / `ui_widget` / `m3_widget` / `m3_test` / `macros` を消す（m3_widget を AntiWebUI の MD3E に置き換えると決めた場合）
 - [ ] `output.rs` / `seat.rs` / `dnd.rs` / calloop / sctk / skia を依存から外す
-- [ ] flake：skia-binaries を外し、vulkan-loader を足す。GTK の残骸も消す
+- [ ] flake：skia-binaries を外し、vulkan-loader と pipewire をパッケージの `wrapProgram` の `LD_LIBRARY_PATH` にも足す（devShell には足した）。GTK の残骸も消す
 - [ ] CLAUDE.md、docs/widgets.md、docs/components.md を書き直す
 
 ## Rendering

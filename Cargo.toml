@@ -23,7 +23,7 @@ softbuffer = "0.4"
 toml = "1.1.2"
 taffy = "0.12.2"
 # Pinned: it is days old and changes daily. See TODO.md.
-anti-webui = { git = "https://github.com/bea4dev/AntiWebUI", rev = "f2fd04c2f16006c3e8aa95047a506d9cd3db3970", default-features = false, features = ["wayland", "wayland-shell"] }
+anti-webui = { git = "https://github.com/bea4dev/AntiWebUI", rev = "f2fd04c2f16006c3e8aa95047a506d9cd3db3970", default-features = false, features = ["wayland", "wayland-shell", "shell-audio"] }
 anti-webui-md3e = { git = "https://github.com/bea4dev/AntiWebUI", rev = "f2fd04c2f16006c3e8aa95047a506d9cd3db3970" }
 kurbo = "0.13"
 # internal crates

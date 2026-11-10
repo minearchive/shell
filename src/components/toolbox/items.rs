@@ -42,6 +42,9 @@ const MIN_BRIGHTNESS: f32 = 0.01;
 /// How long a slider ignores the polled value after it was moved, so a stale poll can't pull
 /// the handle back mid-drag.
 const SLIDER_LEAD: Duration = Duration::from_millis(600);
+/// How long a click's choice shows before the status confirms it, after which the real state
+/// shows again: a change that failed snaps back.
+const CONFIRM: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DetailWidth {
@@ -61,6 +64,28 @@ pub struct Item {
     pub bar_icon: fn(&SystemStatus) -> Option<&'static Symbol>,
     /// Fills the rect the panel gives it.
     pub view: View,
+}
+
+/// `real`, or what a click just asked for until `real` changes or `CONFIRM` passes. Returns
+/// what to show and what a click calls.
+fn optimistic<T: Clone + PartialEq + 'static>(real: impl Fn() -> T + 'static) -> (impl Fn() -> T + Copy, impl Fn(T) + Copy) {
+    let real = memo(real);
+    let pending = signal(None::<(u64, T)>);
+    effect(move || {
+        real.with(|_| ());
+        untrack(|| pending.set(None));
+    });
+    let shown = move || pending.with(|p| p.as_ref().map(|(_, v)| v.clone())).unwrap_or_else(|| real.get());
+    let ask = move |value: T| {
+        let id = pending.with_untracked(|p| p.as_ref().map_or(0, |(id, _)| id + 1));
+        pending.set(Some((id, value)));
+        set_timeout(CONFIRM, move || {
+            if pending.with_untracked(|p| p.as_ref().is_some_and(|(at, _)| *at == id)) {
+                pending.set(None);
+            }
+        });
+    };
+    (shown, ask)
 }
 
 fn info_height(_: &SystemStatus) -> f32 {
@@ -236,9 +261,12 @@ pub fn items(state: &State) -> Vec<Item> {
     }
 
     // WARP: what the switch shows always comes from the status, so a failed change snaps back.
+    let (warp_shown, warp_ask) =
+        optimistic(move || warp.with(|w| w.as_ref().is_some_and(|w| w.is_connected() || w.is_connecting())));
     let warp_on = Binding::new(
-        move || warp.with(|w| w.as_ref().is_some_and(|w| w.is_connected() || w.is_connecting())),
+        warp_shown,
         move |on: bool| {
+            warp_ask(on);
             let _ = warp_commands.send(if on { WarpCommand::Connect } else { WarpCommand::Disconnect });
         },
     );
@@ -263,13 +291,15 @@ pub fn items(state: &State) -> Vec<Item> {
         tile(state, "WARP", detail, Some(warp_switch))
     };
 
+    let (profile_shown, profile_ask) = optimistic(move || system.with(|s| s.power_profile));
     let profiles = connected_button_group(
         ["省電力", "バランス", "パフォーマンス"],
         ButtonStyle::outlined(),
-        move |i| system.with(|s| s.power_profile == Some(PowerProfile::ALL[i])),
+        move |i| profile_shown() == Some(PowerProfile::ALL[i]),
         move |i| {
             let profile = PowerProfile::ALL[i];
             if system.with(|s| s.power_profiles.contains(&profile)) {
+                profile_ask(Some(profile));
                 let _ = profile_commands.send(SystemCommand::PowerProfile(profile));
             }
         },
