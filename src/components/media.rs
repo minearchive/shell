@@ -38,6 +38,7 @@ const ISLAND_WIDTH: f32 = 400.0;
 /// The card sits inside the island, concentric with the island's corners.
 const CARD_MARGIN: f32 = 8.0;
 const CARD_RADIUS: f32 = 20.0;
+const ART_INSET: f32 = 1.0;
 const CARD_PADDING: f32 = 16.0;
 /// Room for the art to show, however short the text is.
 const HEADER_MIN_HEIGHT: f32 = 76.0;
@@ -706,11 +707,25 @@ fn island_view(
             .size_full()
             .rounded(CARD_RADIUS)
             .overflow_hidden()
-            .dyn_style(move |s| match art.get() {
-                Some(art) => s.bg_image(art.pixels.clone()).bg_size(BackgroundSize::Cover)
-                .bg_position(Length::Percent(50.0), Length::Percent(50.0)),
-                None => s.bg(palette(&state, |t| t.surface_container_high)),
-            })
+            .dyn_style(move |s| if art.with(Option::is_some) { s } else { s.bg(palette(&state, |t| t.surface_container_high)) })
+            // The art is inset by a pixel: on the same edge, its anti-aliased rim would show
+            // through the scrim's and leave a bright line along the corners.
+            .child(
+                div()
+                    .absolute()
+                    .left(ART_INSET)
+                    .top(ART_INSET)
+                    .right(ART_INSET)
+                    .bottom(ART_INSET)
+                    .rounded(CARD_RADIUS - ART_INSET)
+                    .dyn_style(move |s| match art.get() {
+                        Some(art) => s
+                            .bg_image(art.pixels.clone())
+                            .bg_size(BackgroundSize::Cover)
+                            .bg_position(Length::Percent(50.0), Length::Percent(50.0)),
+                        None => s,
+                    }),
+            )
             .child(scrim)
             .child(
                 div()
