@@ -374,7 +374,9 @@ pub fn media(state: &State, bar_width: f32) -> Part {
             request,
             content: content.into_view(),
             close: Rc::new(move || open.set(false)),
+            frame: signal(None),
         }),
+        overlay: None,
     }
 }
 

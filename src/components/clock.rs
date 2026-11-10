@@ -18,5 +18,6 @@ pub fn clock(state: &State) -> Part {
     Part {
         bar: Some((BarSlot::Left, view.into_view())),
         island: None,
+        overlay: None,
     }
 }

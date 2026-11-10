@@ -13,7 +13,8 @@ use ui_core::geometry::LayoutRect;
 use self::items::{items, DetailWidth, ICON_SIZE};
 use crate::{
     state::State,
-    ui::{measure, palette, BarSlot, IslandPart, IslandPlacement, IslandRequest, Part, BAR_HEIGHT},
+    system::SystemStatus,
+    ui::{measure, palette, BarSlot, IslandFrame, IslandPart, IslandPlacement, IslandRequest, Part, BAR_HEIGHT},
 };
 
 const ICON_GAP: f32 = 14.0;
@@ -93,7 +94,8 @@ fn row_width(icons: usize) -> f32 {
 
 pub fn toolbox(state: &State) -> Part {
     let system = state.system;
-    let (items, views): (Vec<_>, Vec<_>) = items(state).into_iter().map(|i| ((i.width, i.height, i.bar_icon), i.view)).unzip();
+    let (items, views): (Vec<_>, Vec<_>) =
+        items(state).into_iter().map(|i| ((i.width, i.height, i.bar_icon, i.icon_at, i.icon_fades), i.view)).unzip();
     let items: Rc<[_]> = items.into();
     let open = signal(None::<Panel>);
     // The panel last opened, still shown while the island collapses.
@@ -114,14 +116,21 @@ pub fn toolbox(state: &State) -> Part {
     let layout = {
         let items = items.clone();
         memo(move || {
-            let entries: Vec<_> = system.with(|s| items.iter().map(|(width, height, _)| (*width, height(s))).collect());
+            let entries: Vec<_> = system.with(|s| items.iter().map(|(width, height, ..)| (*width, height(s))).collect());
             panel_layout(&entries, PANEL_WIDTH)
         })
     };
     let bar_icons = {
         let items = items.clone();
-        memo(move || system.with(|s| items.iter().filter_map(|(_, _, bar_icon)| bar_icon(s)).map(Glyph).collect::<Vec<_>>()))
+        memo(move || {
+            system.with(|s| {
+                let icons = items.iter().enumerate().filter_map(|(i, (_, _, bar_icon, ..))| Some((i, Glyph(bar_icon(s)?))));
+                icons.collect::<Vec<_>>()
+            })
+        })
     };
+    let frame = signal(None::<IslandFrame>);
+    let progress = move || frame.get().map_or(0.0, |f| f.progress);
     let request = memo(move || {
         let height = match open.get()? {
             Panel::Controls => layout.with(|l| l.1),
@@ -136,7 +145,8 @@ pub fn toolbox(state: &State) -> Part {
     });
 
     Part {
-        bar: Some((BarSlot::Right, row(state, bar_icons, open).into_view())),
+        bar: Some((BarSlot::Right, row(state, bar_icons, open, progress).into_view())),
+        overlay: Some(flying_icons(state, &items, bar_icons, layout, shown, frame).into_view()),
         island: Some(IslandPart { request, content: div()
                 .relative()
                 .child(panel(views, layout).dyn_style(move |s| if shown.get() == Panel::Controls { s } else { s.hidden() }))
@@ -145,13 +155,60 @@ pub fn toolbox(state: &State) -> Part {
                         .dyn_style(move |s| if shown.get() == Panel::Notifications { s } else { s.hidden() }),
                 )
                 .into_view(),
-            close: Rc::new(move || open.set(None)) }),
+            close: Rc::new(move || open.set(None)),
+            frame }),
     }
 }
 
-/// The icons, or a close button while a panel is open. A left click toggles the controls, a
-/// right click the notifications, and either switches from the other panel.
-fn row(state: &State, bar_icons: Memo<Vec<Glyph>>, open: Signal<Option<Panel>>) -> Div {
+type Entry = (DetailWidth, fn(&SystemStatus) -> f32, fn(&SystemStatus) -> Option<&'static icons::Symbol>, fn(LayoutRect) -> (f32, f32), bool);
+
+/// The bar's icons, which fly to their entries as the controls open, or fade out in place as
+/// the notifications do. Over everything, from the row's top-left.
+fn flying_icons(
+    state: &State,
+    items: &Rc<[Entry]>,
+    bar_icons: Memo<Vec<(usize, Glyph)>>,
+    layout: Memo<(Vec<LayoutRect>, f32)>,
+    shown: Signal<Panel>,
+    frame: Signal<Option<IslandFrame>>,
+) -> Div {
+    let items = items.clone();
+    let color = state.clone();
+    div().relative().dyn_style(move |s| s.text_color(palette(&color, |t| t.on_surface))).child(dyn_view(move || {
+        let mut icons = div();
+        for (k, (item, Glyph(symbol))) in bar_icons.get().into_iter().enumerate() {
+            let (.., icon_at, fades) = items[item];
+            icons = icons.child(sized_icon(symbol, ICON_SIZE).absolute().dyn_style(move |s| {
+                let from = (ROW_PADDING + k as f32 * (ICON_SIZE + ICON_GAP), (BAR_HEIGHT - ICON_SIZE) / 2.0);
+                let frame = frame.get();
+                let progress = frame.map_or(0.0, |f| f.progress);
+                let flying = shown.get() == Panel::Controls;
+                let to = match frame {
+                    Some(f) if flying => {
+                        let (x, y) = icon_at(layout.with(|l| l.0[item]));
+                        (f.content.x + x, f.content.y + y)
+                    }
+                    _ => from,
+                };
+                let opacity = if fades || !flying { 1.0 - progress } else { 1.0 };
+                s.left(from.0 + (to.0 - from.0) * progress)
+                    .top(from.1 + (to.1 - from.1) * progress)
+                    .opacity(opacity)
+            }));
+        }
+        icons.into_view()
+    }))
+}
+
+/// Room for the bar's icons, which [`flying_icons`] draws, and a close button that fades in as
+/// a panel opens. A left click toggles the controls, a right click the notifications, and either
+/// switches from the other panel.
+fn row(
+    state: &State,
+    bar_icons: Memo<Vec<(usize, Glyph)>>,
+    open: Signal<Option<Panel>>,
+    progress: impl Fn() -> f32 + Copy + 'static,
+) -> Div {
     let toggle = move |panel| open.update(|o| *o = (*o != Some(panel)).then_some(panel));
     let on_surface = {
         let state = state.clone();
@@ -176,27 +233,18 @@ fn row(state: &State, bar_icons: Memo<Vec<Glyph>>, open: Signal<Option<Panel>>) 
                 toggle(Panel::Notifications);
             }
         })
-        .child(dyn_view(move || {
-            if open.get().is_some() {
-                let count = bar_icons.with(Vec::len);
-                // Keeps the row's width, so the island's corner doesn't jump.
-                return div()
-                    .w(row_width(count) - ROW_PADDING * 2.0)
-                    .flex()
-                    .justify_center()
-                    .child(sized_icon(icons::CLOSE, ICON_SIZE))
-                    .into_view();
-            }
-            let mut icons_row = div().flex().flex_row().gap(ICON_GAP);
-            for Glyph(symbol) in bar_icons.get() {
-                icons_row = icons_row.child(sized_icon(symbol, ICON_SIZE));
-            }
-            icons_row.into_view()
-        }))
+        .child(
+            div()
+                .h(ICON_SIZE)
+                .flex()
+                .justify_center()
+                .dyn_style(move |s| s.w(row_width(bar_icons.with(Vec::len)) - ROW_PADDING * 2.0).opacity(progress()))
+                .child(sized_icon(icons::CLOSE, ICON_SIZE)),
+        )
         // A right click is easy to miss, so say when it has something to show.
         .child(dyn_view(move || {
             let unseen = notifications.with(|n| n.unseen_len());
-            if unseen == 0 || open.get().is_some() {
+            if unseen == 0 {
                 return div().into_view();
             }
             let label = unseen.to_string();
@@ -213,7 +261,9 @@ fn row(state: &State, bar_icons: Memo<Vec<Glyph>>, open: Signal<Option<Panel>>) 
                 .items_center()
                 .justify_center()
                 .dyn_style(move |s| {
-                    s.bg(palette(&colors, |t| t.primary)).text_color(palette(&colors, |t| t.on_primary))
+                    s.bg(palette(&colors, |t| t.primary))
+                        .text_color(palette(&colors, |t| t.on_primary))
+                        .opacity(1.0 - progress())
                 })
                 .child(text(label).text_size(BADGE_TEXT))
                 .into_view()

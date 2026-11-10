@@ -15,7 +15,7 @@ use anti_webui_md3e::{
     },
     icons::{self, Symbol},
 };
-use ui_core::util::elide;
+use ui_core::{geometry::LayoutRect, util::elide};
 
 use crate::{
     dbus::warp::WarpCommand,
@@ -60,8 +60,13 @@ pub struct Item {
     pub width: DetailWidth,
     /// Zero leaves the entry out of the panel, gap included.
     pub height: fn(&SystemStatus) -> f32,
-    /// The icon for the row in the bar. `None` keeps this entry to the panel.
+    /// The icon for the row in the bar. `None` keeps this entry to the panel. The bar's icon
+    /// travels to [`Self::icon_at`] as the panel opens, so the entry leaves its own out.
     pub bar_icon: fn(&SystemStatus) -> Option<&'static Symbol>,
+    /// Where the entry's icon sits when the entry is at the rect.
+    pub icon_at: fn(LayoutRect) -> (f32, f32),
+    /// Whether the bar's icon fades out on its way, for an entry with no icon of its own.
+    pub icon_fades: bool,
     /// Fills the rect the panel gives it.
     pub view: View,
 }
@@ -96,7 +101,23 @@ fn no_bar_icon(_: &SystemStatus) -> Option<&'static Symbol> {
     None
 }
 
-fn icon(symbol: impl Fn() -> &'static Symbol + 'static, state: &State) -> View {
+fn tile_icon_at(r: LayoutRect) -> (f32, f32) {
+    (r.x + INFO_PADDING, r.y + (r.height - ICON_SIZE) / 2.0)
+}
+
+fn row_icon_at(r: LayoutRect) -> (f32, f32) {
+    (r.x, r.y + (r.height - ICON_SIZE) / 2.0)
+}
+
+fn end_icon_at(r: LayoutRect) -> (f32, f32) {
+    (r.x + r.width - ICON_SIZE, r.y + (r.height - ICON_SIZE) / 2.0)
+}
+
+/// `symbol`, or with `own` false only its room: the bar's icon lands there.
+fn icon(symbol: impl Fn() -> &'static Symbol + 'static, state: &State, own: bool) -> View {
+    if !own {
+        return div().size(ICON_SIZE).flex_none().into_view();
+    }
     let state = state.clone();
     div()
         .flex_none()
@@ -111,6 +132,7 @@ fn tile(
     title: &'static str,
     read: impl Fn(&SystemStatus) -> (&'static Symbol, String) + Clone + 'static,
     trailing: Option<View>,
+    own_icon: bool,
 ) -> View {
     let system = state.system;
     let symbol = {
@@ -133,7 +155,7 @@ fn tile(
         .px(INFO_PADDING)
         .rounded(INFO_RADIUS)
         .dyn_style(move |s| s.bg(palette(&bg, |t| t.surface_container_high)))
-        .child(icon(symbol, state))
+        .child(icon(symbol, state, own_icon))
         .child(
             div()
                 .flex()
@@ -163,6 +185,7 @@ fn slider_row(
     symbol: fn(&SystemStatus) -> &'static Symbol,
     read: fn(&SystemStatus) -> Option<f32>,
     command: fn(f32) -> SystemCommand,
+    own_icon: bool,
 ) -> View {
     let system = state.system;
     let value = signal(min);
@@ -198,7 +221,7 @@ fn slider_row(
         .flex_row()
         .items_center()
         .gap(SLIDER_GAP)
-        .child(icon(move || system.with(symbol), state))
+        .child(icon(move || system.with(symbol), state, own_icon))
         .child(styled_slider(binding, style).flex_1().min_w(0.0))
         .child(
             div().w(VALUE_WIDTH).flex_none().flex().justify_end().child(
@@ -288,7 +311,7 @@ pub fn items(state: &State) -> Vec<Item> {
             });
             (icons::SHIELD, detail)
         };
-        tile(state, "WARP", detail, Some(warp_switch))
+        tile(state, "WARP", detail, Some(warp_switch), true)
     };
 
     let (profile_shown, profile_ask) = optimistic(move || system.with(|s| s.power_profile));
@@ -310,36 +333,48 @@ pub fn items(state: &State) -> Vec<Item> {
             width: DetailWidth::Half,
             height: info_height,
             bar_icon: |s| Some(network(s).0),
-            view: tile(state, "Wi-Fi", network, None),
+            icon_at: tile_icon_at,
+            icon_fades: false,
+            view: tile(state, "Wi-Fi", network, None, false),
         },
         Item {
             width: DetailWidth::Full,
             height: info_height,
             bar_icon: no_bar_icon,
+            icon_at: tile_icon_at,
+            icon_fades: false,
             view: warp_tile,
         },
         Item {
             width: DetailWidth::Full,
             height: |_| SLIDER_HEIGHT,
             bar_icon: |s| Some(volume(s)),
-            view: slider_row(state, 0.0, volume, |s| s.volume.map(|v| v.level.min(1.0)), SystemCommand::Volume),
+            icon_at: row_icon_at,
+            icon_fades: false,
+            view: slider_row(state, 0.0, volume, |s| s.volume.map(|v| v.level.min(1.0)), SystemCommand::Volume, false),
         },
         Item {
             width: DetailWidth::Half,
             height: info_height,
             bar_icon: |s| Some(bluetooth(s).0),
-            view: tile(state, "Bluetooth", bluetooth, None),
+            icon_at: tile_icon_at,
+            icon_fades: false,
+            view: tile(state, "Bluetooth", bluetooth, None, false),
         },
         Item {
             width: DetailWidth::Full,
             height: |_| SLIDER_HEIGHT,
             bar_icon: no_bar_icon,
-            view: slider_row(state, MIN_BRIGHTNESS, |_| icons::LIGHT_MODE, |s| s.brightness, SystemCommand::Brightness),
+            icon_at: row_icon_at,
+            icon_fades: false,
+            view: slider_row(state, MIN_BRIGHTNESS, |_| icons::LIGHT_MODE, |s| s.brightness, SystemCommand::Brightness, true),
         },
         Item {
             width: DetailWidth::Caption,
             height: |s| if s.battery.is_some() { CAPTION_HEIGHT } else { 0.0 },
             bar_icon: |s| Some(battery(s)),
+            icon_at: end_icon_at,
+            icon_fades: true,
             view: div()
                 .size_full()
                 .flex()
@@ -356,6 +391,8 @@ pub fn items(state: &State) -> Vec<Item> {
             width: DetailWidth::Full,
             height: |_| CHOICE_TOP_MARGIN + CHOICE_HEIGHT,
             bar_icon: no_bar_icon,
+            icon_at: row_icon_at,
+            icon_fades: false,
             view: div().size_full().pt(CHOICE_TOP_MARGIN).flex().child(profiles.flex_1()).into_view(),
         },
     ]

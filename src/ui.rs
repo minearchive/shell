@@ -81,6 +81,19 @@ pub struct Part {
     /// Its place in the bar and what it shows there, if anything.
     pub bar: Option<(BarSlot, View)>,
     pub island: Option<IslandPart>,
+    /// Drawn over the bar and every island, from the top-left of the part's place in the bar:
+    /// for what travels between the bar and the island as it opens, following
+    /// [`IslandPart::frame`].
+    pub overlay: Option<View>,
+}
+
+/// A part's island as of this frame, from the top-left of the part's place in the bar.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct IslandFrame {
+    /// How far open it is: 0 at rest, 1 fully open.
+    pub progress: f32,
+    /// Where its content sits once fully open.
+    pub content: LayoutRect,
 }
 
 /// A component's island.
@@ -94,6 +107,8 @@ pub struct IslandPart {
     pub content: View,
     /// Withdraws the request, for a press outside the bar and the island.
     pub close: Rc<dyn Fn()>,
+    /// Written by [`bar`]: the island while it shows, `None` otherwise.
+    pub frame: Signal<Option<IslandFrame>>,
 }
 
 /// What [`bar`] makes: its view, whether an island is open, and what closes every island.
@@ -345,14 +360,25 @@ fn tick(frame: Signal<u64>, islands: Rc<[Island]>, ticking: Rc<Cell<bool>>) {
 /// it. `input` follows what takes the pointer: the bar, and the island taking it.
 pub fn bar(state: &State, width: f32, parts: Vec<Part>, input: Signal<Vec<RectI>>) -> Bar {
     let mut slots: [Vec<View>; 3] = Default::default();
+    // Which parts are in each slot, in order, and how wide each is, for where each part is.
+    let mut members: [Vec<usize>; 3] = Default::default();
+    let widths: Rc<[Signal<f32>]> = parts.iter().map(|_| signal(0.0)).collect();
     let mut islands = Vec::new();
     let mut contents = Vec::new();
     let mut closes = Vec::new();
-    for part in parts {
+    let mut frames = Vec::new();
+    let mut overlays = Vec::new();
+    for (i, part) in parts.into_iter().enumerate() {
         if let Some((slot, view)) = part.bar {
-            slots[slot as usize].push(view);
+            members[slot as usize].push(i);
+            let width = widths[i];
+            slots[slot as usize].push(div().flex_none().on_resized(move |w, _| width.set(w)).child(view).into_view());
+        }
+        if let Some(overlay) = part.overlay {
+            overlays.push((i, overlay));
         }
         if let Some(island) = part.island {
+            frames.push((i, island.frame));
             islands.push(Island {
                 request: island.request,
                 morph: RefCell::new(IslandMorph::new(ISLAND_MORPH, std::sync::Arc::new(ease_out_cubic))),
@@ -363,6 +389,10 @@ pub fn bar(state: &State, width: f32, parts: Vec<Part>, input: Signal<Vec<RectI>
         }
     }
     let islands: Rc<[Island]> = islands.into();
+    let origin = {
+        let widths = widths.clone();
+        Rc::new(move |part: usize| part_x(&members, &widths.iter().map(|w| w.get()).collect::<Vec<_>>(), width, part))
+    };
     let frame = signal(0u64);
     let main = signal(None::<usize>);
     let ticking = Rc::new(Cell::new(false));
@@ -431,6 +461,28 @@ pub fn bar(state: &State, width: f32, parts: Vec<Part>, input: Signal<Vec<RectI>
             if *last.borrow() != rects {
                 *last.borrow_mut() = rects.clone();
                 untrack(|| input.set(rects));
+            }
+        });
+    }
+
+    // Each part's island, from its place in the bar, for what travels between the two.
+    {
+        let (islands, origin) = (islands.clone(), origin.clone());
+        effect(move || {
+            frame.get();
+            for (island, (part, signal)) in islands.iter().zip(&frames) {
+                let next = island.visible().map(|(slot, rect)| IslandFrame {
+                    progress: slot.content_transform(rect).2,
+                    content: LayoutRect::new(
+                        slot.target.x - origin(*part),
+                        slot.target.y - BAR_TOP,
+                        slot.target.width,
+                        slot.target.height,
+                    ),
+                });
+                if signal.with_untracked(|f| *f != next) {
+                    untrack(|| signal.set(next));
+                }
             }
         });
     }
@@ -521,12 +573,43 @@ pub fn bar(state: &State, width: f32, parts: Vec<Part>, input: Signal<Vec<RectI>
         .font_family("Noto Sans CJK JP")
         .child(silhouette)
         .child(row)
-        .children(island_views);
+        .children(island_views)
+        .children(overlays.into_iter().map(|(part, overlay)| {
+            let origin = origin.clone();
+            div()
+                .absolute()
+                .top(BAR_TOP)
+                .z_index(3)
+                .pointer_events_none()
+                .dyn_style(move |s| s.left(origin(part)))
+                .child(overlay)
+        }));
     Bar {
         view,
         open: memo(move || main.get().is_some()),
         close: Rc::new(move || closes.iter().for_each(|close| close())),
     }
+}
+
+/// Where `part` starts on a bar `width` wide, from which parts are in each [`BarSlot`] and how
+/// wide each part is, as the bar's row lays them out.
+fn part_x(members: &[Vec<usize>; 3], widths: &[f32], width: f32, part: usize) -> f32 {
+    let span = |parts: &[usize]| {
+        parts.iter().map(|&p| widths[p]).sum::<f32>() + BAR_GAP * parts.len().saturating_sub(1) as f32
+    };
+    for (slot, parts) in members.iter().enumerate() {
+        let Some(at) = parts.iter().position(|&p| p == part) else {
+            continue;
+        };
+        let before = span(&parts[..at]) + if at > 0 { BAR_GAP } else { 0.0 };
+        let start = match slot {
+            0 => BAR_PADDING,
+            1 => (width - span(parts)) / 2.0,
+            _ => width - span(parts),
+        };
+        return start + before;
+    }
+    0.0
 }
 
 /// `screen` with `holes` cut out of it, as rectangles: row by row between the holes' edges,
@@ -564,6 +647,19 @@ pub fn cut_out(screen: RectI, holes: &[RectI]) -> Vec<RectI> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parts_sit_where_the_row_lays_them_out() {
+        // Two on the left, one centered, two on the right running to the edge.
+        let members = [vec![0, 1], vec![2], vec![3, 4]];
+        let widths = [10.0, 20.0, 40.0, 30.0, 50.0];
+        let x = |part| part_x(&members, &widths, 1000.0, part);
+        assert_eq!(x(0), BAR_PADDING);
+        assert_eq!(x(1), BAR_PADDING + 10.0 + BAR_GAP);
+        assert_eq!(x(2), 480.0);
+        assert_eq!(x(4), 950.0);
+        assert_eq!(x(3), 950.0 - BAR_GAP - 30.0);
+    }
 
     #[test]
     fn cut_out_leaves_everything_but_the_bar_and_the_island() {
