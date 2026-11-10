@@ -368,11 +368,11 @@ pub fn bar(state: &State, width: f32, parts: Vec<Part>, input: Signal<Vec<RectI>
     let mut closes = Vec::new();
     let mut frames = Vec::new();
     let mut overlays = Vec::new();
+    let mut bar_views = Vec::new();
     for (i, part) in parts.into_iter().enumerate() {
         if let Some((slot, view)) = part.bar {
             members[slot as usize].push(i);
-            let width = widths[i];
-            slots[slot as usize].push(div().flex_none().on_resized(move |w, _| width.set(w)).child(view).into_view());
+            bar_views.push((slot, i, view));
         }
         if let Some(overlay) = part.overlay {
             overlays.push((i, overlay));
@@ -385,10 +385,39 @@ pub fn bar(state: &State, width: f32, parts: Vec<Part>, input: Signal<Vec<RectI>
                 slot: Cell::new(None),
             });
             contents.push(island.content);
-            closes.push(island.close);
+            closes.push((i, island.close));
         }
     }
     let islands: Rc<[Island]> = islands.into();
+    // A press on the bar closes the islands of every part but the one pressed, as one would
+    // otherwise keep its island over the one the press is opening. The part's own press
+    // handlers run first, from deeper in.
+    let closes: Rc<[(usize, Rc<dyn Fn()>)]> = closes.into();
+    let close_all_but = {
+        let closes = closes.clone();
+        move |part: Option<usize>| {
+            for (owner, close) in closes.iter() {
+                if Some(*owner) != part {
+                    close();
+                }
+            }
+        }
+    };
+    for (slot, i, view) in bar_views {
+        let width = widths[i];
+        let close_others = close_all_but.clone();
+        slots[slot as usize].push(
+            div()
+                .flex_none()
+                .on_resized(move |w, _| width.set(w))
+                .on_pointer_down(move |e| {
+                    e.stop_propagation();
+                    close_others(Some(i));
+                })
+                .child(view)
+                .into_view(),
+        );
+    }
     let origin = {
         let widths = widths.clone();
         Rc::new(move |part: usize| part_x(&members, &widths.iter().map(|w| w.get()).collect::<Vec<_>>(), width, part))
@@ -523,6 +552,10 @@ pub fn bar(state: &State, width: f32, parts: Vec<Part>, input: Signal<Vec<RectI>
         .flex()
         .flex_row()
         .items_center()
+        .on_pointer_down({
+            let close_all = close_all_but.clone();
+            move |_| close_all(None)
+        })
         .child(group().pl(BAR_PADDING).children(left))
         .child(div().flex_1())
         .child(group().children(right))
@@ -587,7 +620,7 @@ pub fn bar(state: &State, width: f32, parts: Vec<Part>, input: Signal<Vec<RectI>
     Bar {
         view,
         open: memo(move || main.get().is_some()),
-        close: Rc::new(move || closes.iter().for_each(|close| close())),
+        close: Rc::new(move || close_all_but(None)),
     }
 }
 

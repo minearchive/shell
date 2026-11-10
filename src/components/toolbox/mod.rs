@@ -227,11 +227,11 @@ fn row(
         .gap(ICON_GAP)
         .cursor(CursorIcon::Pointer)
         .dyn_style(move |s| s.text_color(on_surface()))
-        .on_click(move |_| toggle(Panel::Controls))
-        .on_pointer_down(move |e| {
-            if e.button == Some(PointerButton::Secondary) {
-                toggle(Panel::Notifications);
-            }
+        // On the press, not the release, as a click would: that is a moment sooner.
+        .on_pointer_down(move |e| match e.button {
+            Some(PointerButton::Primary) => toggle(Panel::Controls),
+            Some(PointerButton::Secondary) => toggle(Panel::Notifications),
+            _ => {}
         })
         .child(
             div()

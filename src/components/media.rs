@@ -545,7 +545,12 @@ fn bar_view(
             let s = s.opacity(if frame.with(Option::is_some) { 0.0 } else { 1.0 });
             if track.with(Option::is_none) { s.hidden() } else { s }
         })
-        .on_click(move |_| open.update(|o| *o = !*o))
+        // On the press, not the release, as a click would: that is a moment sooner.
+        .on_pointer_down(move |e| {
+            if e.button == Some(PointerButton::Primary) {
+                open.update(|o| *o = !*o);
+            }
+        })
         .child(dyn_view(move || match art.get() {
             Some(art) => div()
                 .w(ICON_SIZE)
