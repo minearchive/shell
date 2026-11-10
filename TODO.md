@@ -37,14 +37,18 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
   - `example/theme.toml` は .gitignore 対象で worktree に来ない。ないと既定の `Theme` が全部透明で、何も見えない。既定値を見える色にするか、ないときに警告以上を出す
   - niri の IPC は変化のときしかイベントが来ないので、起動直後は ws / タイトルが空。最初に `Request::Workspaces` / `FocusedWindow` を引く
   - 起動時に Vulkan ローダの ERROR が出る：システムの Mesa の radeon / lvp の ICD が、devShell の glibc より新しい glibc を要求して読み込めない。Intel の ICD は読めているので描画には影響しない
-  - バーの文字がマウスで選択できてしまう。Phase 2 で選択を切る
+  - [x] バーの文字がマウスで選択できてしまう → バー全体に `select_none`
 
 ### Phase 2: コンポーネント
-- [ ] `Component` トレイトを廃止し、`fn x() -> impl IntoView` にする
-- [ ] バーの並び：`BarSlot` を flex の 左 / 中央 / 右 に置き換える
-- [ ] アイランドの調停：各コンポーネントの `IslandRequest` を `Memo` にまとめ、priority 最大を main、他を畳む
-- [ ] `IslandMorph` を `animated` に置き換える。中身の伸縮は `scale` で付ける
-- [ ] clock
+- [x] `Component` トレイトを廃止し、コンポーネントは `Part` を返す関数にする（`src/ui.rs`）：バーに置く View と、アイランドの入札（`Memo<Option<IslandRequest>>`）＋中身の View
+- [x] バーの並び：`BarSlot` は flex の 左 / 中央 / 右。幅の計算（`bar_width` / `bar_origins`）は消えた
+- [x] アイランドの調停：入札を effect で読み、priority 最大（同点は後の方）を main、他を畳む
+- [x] モーフは `IslandMorph` をそのまま使い、動いている間だけ `request_frame` で `frame` signal を進める。`animation.toml` の `island` の easing もそのまま効く
+  - シルエットは `svg::path`、中身は `translate` / `scale` / `opacity`、入力範囲は `frame` を読む effect から
+- [ ] `draw_overlay` の代わり（バーとアイランドの間を動くもの：toolbox のアイコン、media のアイコンと文字）
+- [ ] `captures_outside_press`（`catcher.rs`）の代わり：外のクリックで閉じる
+- [ ] 確認用の `debug_island`（`MY_SHELL_DEBUG_ISLAND=1` と `my_shell action launcher`）を、media の移植後に消す
+- [x] clock
 - [ ] media（player_art は `bitmap_view`）
 - [ ] notifications（アイランド）
 - [ ] toolbox（スライダーは MD3E、notifications のリスト、items）

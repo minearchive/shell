@@ -39,6 +39,7 @@ edition.workspace = true
 
 [dependencies]
 anti-webui.workspace = true
+kurbo.workspace = true
 chrono = "0.4"
 env_logger = "0.11.10"
 hyprland = { git = "https://github.com/hyprland-community/hyprland-rs", branch = "master" }
