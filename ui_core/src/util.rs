@@ -47,15 +47,32 @@ impl Display for BoundingBox {
 
 /// The first line of `text`, cut off with an ellipsis at `max_width` wherever that falls.
 pub fn elide(text: &str, max_width: f32, measure: impl Fn(&str) -> f32) -> String {
-    let mut line = text.lines().next().unwrap_or_default().to_string();
-    if measure(&line) <= max_width {
-        return line;
+    let line = text.lines().next().unwrap_or_default();
+    // A notification's body can be thousands of chars, and measuring is slow with as many, so
+    // this measures short prefixes: doubling until one is too wide, then halving between.
+    let ends: Vec<usize> = line.char_indices().map(|(i, _)| i).chain([line.len()]).collect();
+    let chars = ends.len() - 1;
+    let mut too_long = 16;
+    while too_long < chars && measure(&line[..ends[too_long]]) <= max_width {
+        too_long *= 2;
     }
-    while !line.is_empty() && measure(&format!("{line}…")) > max_width {
-        line.pop();
+    if too_long >= chars {
+        if measure(line) <= max_width {
+            return line.to_string();
+        }
+        too_long = chars;
     }
-    line.push('…');
-    line
+    let with_ellipsis = |chars: usize| format!("{}…", &line[..ends[chars]]);
+    let mut fits = 0;
+    while too_long - fits > 1 {
+        let mid = (fits + too_long) / 2;
+        if measure(&with_ellipsis(mid)) <= max_width {
+            fits = mid;
+        } else {
+            too_long = mid;
+        }
+    }
+    with_ellipsis(fits)
 }
 
 /// Breaks `text` into lines no wider than `max_width`, preferring spaces and
@@ -124,6 +141,19 @@ mod tests {
         assert_eq!(elide("one two three", 10.0, measure), "one two t…");
         assert_eq!(elide("first\nsecond", 10.0, measure), "first");
         assert_eq!(elide("", 10.0, measure), "");
+        assert_eq!(elide("toolong", 0.5, measure), "…", "nothing fits but the ellipsis");
+    }
+
+    #[test]
+    fn elide_measures_a_long_line_only_a_few_times() {
+        let calls = std::cell::Cell::new(0);
+        let measure = |s: &str| {
+            calls.set(calls.get() + 1);
+            s.chars().count() as f32
+        };
+        let long = "長".repeat(5000);
+        assert_eq!(elide(&long, 10.0, measure), format!("{}…", "長".repeat(9)));
+        assert!(calls.get() < 20, "measured {} times", calls.get());
     }
 
     // Every char is 1 wide.
