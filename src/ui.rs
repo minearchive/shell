@@ -36,6 +36,7 @@ const BAR_PADDING: f32 = 20.0;
 const BAR_GAP: f32 = 16.0;
 /// Cubic control distance for a quarter circle, standing in for Skia's √2/2 conic.
 const ARC: f64 = 0.552_284_8;
+const FONT: &str = "Noto Sans CJK JP";
 
 /// Where an island rises from the bar's top edge, joined to it by curves.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -214,6 +215,12 @@ fn island_path(path: &mut BezPath, bar: LayoutRect, island: LayoutRect, corner: 
     path.line_to((bar_right, bar_bottom));
     path.line_to((bar_x, bar_bottom));
     path.close_path();
+}
+
+/// How wide `text` is at `size`, for laying text out before it is shown.
+pub fn measure(size: f32) -> impl Fn(&str) -> f32 {
+    let style = anti_webui::style::Style::default().font_family(FONT).text_size(size);
+    move |s| svg::measure_text(s, &style).0
 }
 
 pub fn color(c: ui_core::scheme::color::Color) -> Color {

@@ -57,7 +57,7 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
   - 曲名の折り返しと省略は `ui_core::util` のまま、文字幅は `svg::measure_text` で測る
   - [ ] 再生ボタンの角の変形は ease-out-cubic 固定。`animation.toml` の `media_play_pause` は読んでいない（関数の easing は AntiWebUI の `Transition` に渡せない）
   - [ ] 波と再生位置の確認：長さを報告するプレイヤーで再生中に開く（ブラウザでは試せていない）
-- [ ] notifications（アイランド）
+- [x] notifications：`rewrite` でアイランドから上端のバナーになっていたので、Phase 3 を先にやった（下）
 - [ ] toolbox（スライダーは MD3E、notifications のリスト、items）
 - [ ] `m3_widget` を `anti-webui-md3e`（独立クレート。同じ git rev から依存に足す）に置き換える。スライダー、アイコン（Material Symbols）、ボタン、リスト項目
   - まず対応表を作る：m3_widget の各部品 → md3e の部品 / 足りないもの
@@ -65,8 +65,10 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
 - [ ] animation.toml の easing と `conf::` 参照：AntiWebUI の `Transition` / `Spring` に写すか、自前の計算を残すか決める
 
 ### Phase 3: バナー
-- [ ] 出力ごとに `Layer::Overlay` を上端に開き、入力範囲は通知カードの矩形だけにする
-- [ ] 上から落ちてくる動きを `animated` で付ける
+- [x] 出力ごとに `Layer::Overlay` を上端に開き、入力範囲は通知カードの矩形だけにする
+- [x] 上から落ちてくる動き：`animated` ではなく `IslandMorph` のまま（`notification_banner` の easing が効く）
+- [x] 通知のアイコンは D-Bus のスレッドで `ImageSource` にする（`player_art::pixels`）
+- [ ] 実機で確認：`notify-send` で落ちてくる、クリックで消える、`+n`、critical の色
 
 ### Phase 4: 残り
 - [ ] DnD：AntiWebUI の OS DnD がレイヤー面で動くか確認し、`dnd.rs` の代わりにする

@@ -139,7 +139,7 @@ fn resized(image: &Image, width: i32, height: i32) -> Option<Image> {
 }
 
 /// The image's pixels as AntiWebUI takes them: RGBA with straight alpha.
-fn pixels(image: &Image) -> Option<ImageSource> {
+pub fn pixels(image: &Image) -> Option<ImageSource> {
     let (width, height) = (image.width(), image.height());
     let info = ImageInfo::new((width, height), ColorType::RGBA8888, AlphaType::Unpremul, None);
     let mut data = vec![0u8; width as usize * height as usize * 4];

@@ -2,13 +2,13 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use anti_webui::prelude::UiSender as Sender;
-use skia_safe::Image;
+use anti_webui::style::ImageSource;
 use zbus::connection;
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::Value;
 use zbus::{interface, Connection};
 
-use super::notification_icon;
+use super::{notification_icon, player_art};
 
 const NAME: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
@@ -54,7 +54,7 @@ pub struct NotificationSnapshot {
     pub app_name: String,
     pub app_icon: String,
     /// Already icon-sized, from whichever of the sender's sources worked.
-    pub icon: Option<Image>,
+    pub icon: Option<ImageSource>,
     pub summary: String,
     pub body: String,
     /// (key, label) pairs the user can invoke; the flat `as` list is paired up.
@@ -213,7 +213,7 @@ impl NotificationServer {
             .map(|pair| (pair[0].clone(), pair[1].clone()))
             .collect();
 
-        let icon = notification_icon::resolve(&app_icon, &hints);
+        let icon = notification_icon::resolve(&app_icon, &hints).and_then(|i| player_art::pixels(&i));
 
         let data = NotificationSnapshot {
             app_name,

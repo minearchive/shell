@@ -18,7 +18,7 @@ mod state;
 mod system;
 mod ui;
 
-// ponytail: the rest of the Skia UI (`banner`, `catcher`, `dnd`, `output`, `seat`, and the
+// ponytail: the rest of the Skia UI (`catcher`, `dnd`, `output`, `seat`, and the
 // components not yet in `components/mod.rs`) is out of the build while Phase 2 of TODO.md
 // ports it to AntiWebUI; the files stay as reference.
 
@@ -47,7 +47,7 @@ fn main() {
             }
         };
         for_each_output(move |output| {
-            let state = state.clone();
+            let (state, banner_state) = (state.clone(), state.clone());
             let width = output.logical_size.width as f32;
             let input = signal(Vec::new());
             let layer = open_layer(
@@ -65,6 +65,19 @@ fn main() {
                     ];
                     ui::bar(&state, width, parts, input)
                 },
+            );
+            effect(move || layer.set_input_region(InputRegion::Rects(input.get())));
+
+            // The notification banner, above the catcher's layer so it keeps its clicks.
+            let input = signal(Vec::new());
+            let layer = open_layer(
+                LayerOptions::new()
+                    .layer(Layer::Overlay)
+                    .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+                    .height(components::notifications::SURFACE_HEIGHT as i32)
+                    .input_region(InputRegion::Empty)
+                    .output(&output),
+                move || components::notifications::banner(&banner_state, width, input),
             );
             effect(move || layer.set_input_region(InputRegion::Rects(input.get())));
         });

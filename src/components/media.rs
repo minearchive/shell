@@ -9,7 +9,7 @@ use std::{
 };
 
 use anti_webui::prelude::*;
-use anti_webui::style::{BackgroundSize, Length, LineHeight, Style};
+use anti_webui::style::{BackgroundSize, Length, LineHeight};
 use anti_webui_md3e::{components::sized_icon, icons, motion::fast_spatial};
 use kurbo::BezPath;
 use mpris::PlaybackStatus;
@@ -24,10 +24,9 @@ use crate::{
         player_art::Art,
     },
     state::State,
-    ui::{color, palette, BarSlot, IslandPart, IslandPlacement, IslandRequest, Part, ISLAND_SIDE_MARGIN},
+    ui::{color, measure, palette, BarSlot, IslandPart, IslandPlacement, IslandRequest, Part, ISLAND_SIDE_MARGIN},
 };
 
-const FONT: &str = "Noto Sans CJK JP";
 const BAR_TEXT_SIZE: f32 = 16.0;
 const MAX_BAR_TEXT_WIDTH: f32 = 280.0;
 const ICON_SIZE: f32 = 24.0;
@@ -150,15 +149,6 @@ struct Card {
     title: Vec<String>,
     artist: String,
     size: (f32, f32),
-}
-
-fn text_style(size: f32) -> Style {
-    Style::default().font_family(FONT).text_size(size)
-}
-
-fn measure(size: f32) -> impl Fn(&str) -> f32 {
-    let style = text_style(size);
-    move |s| svg::measure_text(s, &style).0
 }
 
 impl Card {
