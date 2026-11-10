@@ -14,6 +14,7 @@ use anti_webui_md3e::{components::sized_icon, icons, motion::fast_spatial};
 use kurbo::BezPath;
 use mpris::PlaybackStatus;
 use ui_core::{
+    geometry::LayoutRect,
     scheme::{color::Color as ThemeColor, ColorTheme},
     util::{elide, wrap_text},
 };
@@ -24,10 +25,12 @@ use crate::{
         player_art::Art,
     },
     state::State,
-    ui::{color, eased, measure, palette, BarSlot, IslandPart, IslandPlacement, IslandRequest, Part, ISLAND_SIDE_MARGIN},
+    ui::{color, eased, measure, palette, BarSlot, IslandFrame, IslandPart, BAR_HEIGHT, IslandPlacement, IslandRequest, Part, ISLAND_SIDE_MARGIN},
 };
 
 const BAR_TEXT_SIZE: f32 = 16.0;
+/// AntiWebUI's line height for text that doesn't set one, as the bar's title doesn't.
+const DEFAULT_LINE_HEIGHT: f32 = 1.4;
 const MAX_BAR_TEXT_WIDTH: f32 = 280.0;
 const ICON_SIZE: f32 = 24.0;
 const ICON_GAP: f32 = 8.0;
@@ -74,8 +77,6 @@ const DISABLED_CONTENT_OPACITY: f32 = 0.38;
 const DISABLED_TRACK_OPACITY: f32 = 0.12;
 /// How fast the wave travels, in radians a second: a wavelength every two seconds.
 const WAVE_SPEED: f32 = std::f32::consts::PI;
-/// ponytail: animation.toml's `media_play_pause` easing isn't read here; it is a function and
-/// AntiWebUI's transitions take a cubic-bezier. This is ease-out-cubic, its default.
 const MORPH: Duration = Duration::from_millis(300);
 const MORPH_EASING_ID: &str = "media_play_pause";
 /// How long a seek gets to show up in what the player reports. A little over the time
@@ -366,7 +367,8 @@ pub fn media(state: &State, bar_width: f32) -> Part {
         }
     };
 
-    let bar = bar_view(state, track, art, open);
+    let frame = signal(None::<IslandFrame>);
+    let bar = bar_view(state, track, art, open, frame);
     let content = island_view(state, track, art, card, open, send);
     Part {
         bar: Some((BarSlot::Center, bar.into_view())),
@@ -374,19 +376,163 @@ pub fn media(state: &State, bar_width: f32) -> Part {
             request,
             content: content.into_view(),
             close: Rc::new(move || open.set(false)),
-            frame: signal(None),
+            frame,
         }),
-        overlay: None,
+        overlay: Some(traveling(state, track, art, card, frame).into_view()),
     }
 }
 
 /// The art or an icon, and the title, in the bar. A click toggles the island.
-fn bar_view(state: &State, track: Memo<Option<Track>>, art: Memo<Option<Art>>, open: Signal<bool>) -> Div {
-    let theme_state = state.clone();
-    let color = move || {
+fn bar_color(state: &State, track: Memo<Option<Track>>) -> impl Fn() -> Color + Clone + 'static {
+    let state = state.clone();
+    move || {
         let playing = track.with(|t| t.as_ref().is_some_and(|t| t.playing));
-        palette(&theme_state, |t| if playing { t.on_surface } else { t.on_surface_variant })
+        palette(&state, |t| if playing { t.on_surface } else { t.on_surface_variant })
+    }
+}
+
+fn bar_title(track: Memo<Option<Track>>) -> String {
+    let title = track.with(|t| t.as_ref().map(|t| t.title.clone()));
+    elide(&title.unwrap_or_default(), MAX_BAR_TEXT_WIDTH, measure(BAR_TEXT_SIZE))
+}
+
+/// Where a line at `from` in the bar is `progress` of the way to `to` in the card: it moves
+/// across with the island, but up only as the island's bottom-anchored content rises past it.
+fn travel(from: (f32, f32), to: (f32, f32), content: LayoutRect, progress: f32) -> (f32, f32) {
+    let bottom = content.y + content.height;
+    (from.0 + (to.0 - from.0) * progress, from.1.min(bottom - (bottom - to.1) * progress))
+}
+
+/// What moves between the bar and the card while the island shows, from the top-left of the
+/// part's place in the bar: the title and the card's lines, and the art growing into the card.
+/// The bar and the card leave these out meanwhile.
+fn traveling(
+    state: &State,
+    track: Memo<Option<Track>>,
+    art: Memo<Option<Art>>,
+    card: Signal<Option<Card>>,
+    frame: Signal<Option<IslandFrame>>,
+) -> Div {
+    let theme = state.theme;
+    let colors = move || theme.with(|t| CardColors::new(art.get().as_ref(), t.theme()));
+    let bar_color = bar_color(state, track);
+    let progress = move || frame.get().map_or(0.0, |f| f.progress);
+    // The bar's thumbnail and title, as the bar's row centers them.
+    let thumb = LayoutRect::new(0.0, (BAR_HEIGHT - ICON_SIZE) / 2.0, ICON_SIZE, ICON_SIZE);
+    let bar_text = (ICON_SIZE + ICON_GAP, (BAR_HEIGHT - BAR_TEXT_SIZE * DEFAULT_LINE_HEIGHT) / 2.0);
+    let first_line = move |f: IslandFrame| {
+        let to = (f.content.x + CARD_MARGIN + CARD_PADDING, f.content.y + CARD_MARGIN + CARD_PADDING);
+        travel(bar_text, to, f.content, f.progress)
     };
+    let inner = |f: IslandFrame| {
+        LayoutRect::new(
+            f.content.x + CARD_MARGIN,
+            f.content.y + CARD_MARGIN,
+            f.content.width - CARD_MARGIN * 2.0,
+            f.content.height - CARD_MARGIN * 2.0,
+        )
+    };
+
+    let art_view = {
+        let bar_color = bar_color.clone();
+        dyn_view(move || match art.get() {
+            // Gone by halfway, before it can be seen not to line up with the growing card.
+            Some(art) => div()
+                .absolute()
+                .bg_image(art.pixels.clone())
+                .bg_size(BackgroundSize::Cover)
+                .bg_position(Length::Percent(50.0), Length::Percent(50.0))
+                .dyn_style(move |s| {
+                    let Some(f) = frame.get() else { return s.hidden() };
+                    let (to, p) = (inner(f), f.progress);
+                    let lerp = |a: f32, b: f32| a + (b - a) * p;
+                    s.left(lerp(thumb.x, to.x))
+                        .top(lerp(thumb.y, to.y))
+                        .w(lerp(thumb.width, to.width))
+                        .h(lerp(thumb.height, to.height))
+                        .rounded(lerp(THUMBNAIL_RADIUS, CARD_RADIUS))
+                        .opacity((1.0 - p * 2.0).max(0.0))
+                })
+                .into_view(),
+            // The note goes to the play button.
+            None => {
+                let bar_color = bar_color.clone();
+                filled_icon(icons::MUSIC_NOTE)
+                    .absolute()
+                    .dyn_style(move |s| {
+                        let Some(f) = frame.get() else { return s.hidden() };
+                        let card = inner(f);
+                        let play = (card.x + card.width - CARD_PADDING - PLAY_SIZE, card.y + CARD_PADDING);
+                        let p = f.progress;
+                        s.left(thumb.x + (play.0 - thumb.x) * p)
+                            .top(thumb.y + (play.1 - thumb.y) * p)
+                            .text_color(bar_color())
+                            .opacity(1.0 - p)
+                    })
+                    .into_view()
+            }
+        })
+    };
+
+    let lines = dyn_view(move || {
+        let Some(c) = card.get() else {
+            return div().into_view();
+        };
+        let title_lines = c.title.len();
+        let mut lines: Vec<(String, f32)> = c.title.into_iter().map(|line| (line, TITLE_SIZE)).collect();
+        if !c.artist.is_empty() {
+            lines.push((c.artist, ARTIST_SIZE));
+        }
+        let mut views = div();
+        let mut offset = 0.0;
+        for (i, (line, size)) in lines.into_iter().enumerate() {
+            let at = offset;
+            offset += size * LINE_HEIGHT;
+            views = views.child(
+                text(line)
+                    .absolute()
+                    .text_size(size)
+                    .line_height(LineHeight::Relative(LINE_HEIGHT))
+                    .whitespace_nowrap()
+                    .dyn_style(move |s| {
+                        let Some(f) = frame.get() else { return s.hidden() };
+                        let to = (f.content.x + CARD_MARGIN + CARD_PADDING, f.content.y + CARD_MARGIN + CARD_PADDING + at);
+                        let (x, y) = travel(bar_text, to, f.content, f.progress);
+                        // The lines are too close together to read until the island has made room.
+                        let opacity = if i == 0 { (f.progress * 2.0).min(1.0) } else { (f.progress * 2.0 - 1.0).max(0.0) };
+                        let c = colors();
+                        s.left(x)
+                            .top(y)
+                            .opacity(opacity)
+                            .text_color(color(if i < title_lines { c.content } else { c.content_variant }))
+                    }),
+            );
+        }
+        views.into_view()
+    });
+
+    // Fading over only half the way keeps what the two titles share solid throughout.
+    let title = text(move || bar_title(track))
+        .absolute()
+        .text_size(BAR_TEXT_SIZE)
+        .whitespace_nowrap()
+        .dyn_style(move |s| {
+            let Some(f) = frame.get() else { return s.hidden() };
+            let (x, y) = first_line(f);
+            s.left(x).top(y).opacity(((1.0 - progress()) * 2.0).min(1.0)).text_color(bar_color())
+        });
+
+    div().relative().child(art_view).child(lines).child(title)
+}
+
+fn bar_view(
+    state: &State,
+    track: Memo<Option<Track>>,
+    art: Memo<Option<Art>>,
+    open: Signal<bool>,
+    frame: Signal<Option<IslandFrame>>,
+) -> Div {
+    let color = bar_color(state, track);
     let icon_color = color.clone();
     let text_color = color;
     div()
@@ -394,10 +540,9 @@ fn bar_view(state: &State, track: Memo<Option<Track>>, art: Memo<Option<Art>>, o
         .flex_row()
         .items_center()
         .gap(ICON_GAP)
-        .transition_of([Prop::Opacity], Transition::ms(150))
-        // Under the card while it is open, which has the same in it.
+        // While the island shows, what is here travels with it instead (`traveling`).
         .dyn_style(move |s| {
-            let s = if open.get() { s.opacity(0.0) } else { s.opacity(1.0) };
+            let s = s.opacity(if frame.with(Option::is_some) { 0.0 } else { 1.0 });
             if track.with(Option::is_none) { s.hidden() } else { s }
         })
         .on_click(move |_| open.update(|o| *o = !*o))
@@ -418,10 +563,7 @@ fn bar_view(state: &State, track: Memo<Option<Track>>, art: Memo<Option<Art>>, o
             }
         }))
         .child(
-            text(move || {
-                let title = track.with(|t| t.as_ref().map(|t| t.title.clone()));
-                elide(&title.unwrap_or_default(), MAX_BAR_TEXT_WIDTH, measure(BAR_TEXT_SIZE))
-            })
+            text(move || bar_title(track))
             .text_size(BAR_TEXT_SIZE)
             .whitespace_nowrap()
             .dyn_style(move |s| s.text_color(text_color())),
@@ -646,7 +788,8 @@ fn island_view(
             }))
     };
 
-    let lines = div().flex().flex_col().flex_1().child(dyn_view(move || {
+    // Laid out for the room it takes, but drawn by `traveling`, which moves it in from the bar.
+    let lines = div().flex().flex_col().flex_1().opacity(0.0).child(dyn_view(move || {
         let Some(c) = card.get() else {
             return div().into_view();
         };
@@ -757,6 +900,19 @@ mod tests {
     use mpris::LoopStatus;
 
     use super::*;
+
+    #[test]
+    fn a_line_moves_across_with_the_island_and_up_as_its_content_rises() {
+        // The card's content ends at the bar's bottom, 48, and its first line is at -150.
+        let content = LayoutRect::new(-100.0, -200.0, 400.0, 248.0);
+        let (from, to) = ((32.0, 13.0), (-76.0, -150.0));
+        assert_eq!(travel(from, to, content, 0.0), from);
+        assert_eq!(travel(from, to, content, 1.0), to);
+        let (x, y) = travel(from, to, content, 0.1);
+        assert!((x - (32.0 - 10.8)).abs() < 1e-4);
+        assert_eq!(y, 13.0, "still under the content's bottom, so it stays in the bar's row");
+        assert!(travel(from, to, content, 0.5).1 < 13.0, "rises once the content has");
+    }
 
     fn player(bus_name: &str, status: PlaybackStatus) -> (String, PlayerState) {
         let state = PlayerState {

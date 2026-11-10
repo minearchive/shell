@@ -45,8 +45,11 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
 - [x] アイランドの調停：入札を effect で読み、priority 最大（同点は後の方）を main、他を畳む
 - [x] モーフは `IslandMorph` をそのまま使い、動いている間だけ `request_frame` で `frame` signal を進める。`animation.toml` の `island` の easing もそのまま効く
   - シルエットは `svg::path`、中身は `translate` / `scale` / `opacity`、入力範囲は `frame` を読む effect から
-- [ ] `draw_overlay` の代わり（バーとアイランドの間を動くもの：toolbox のアイコン、media のアイコンと文字）
-  - 今の media は、開いている間はバーの側を `opacity` 0 にして、カードに重ねているだけ
+- [x] `draw_overlay` の代わり：`Part::overlay`（バーとアイランドの上に、パートのバーでの位置から描く）と `IslandPart::frame`（`bar` が毎フレーム書く `IslandFrame`：開き具合と、開き切ったときの中身の位置）
+  - パートの x はバーの並びから計算する（`part_x`。AntiWebUI には要素の位置を聞く API がない）
+  - toolbox：バーのアイコンがパネルの各項目へ飛ぶ（電池はフェード）、通知パネルではその場でフェード。閉じるアイコンと未読バッジは開き具合でクロスフェード
+  - media：タイトルと各行がバーの文字の位置からカードへ移る（`travel`）、アートはサムネイルからカードへ広がりつつ半分で消える、アートなしは音符が再生ボタンへ
+  - [ ] 実機で確認：位置のずれ（バーの文字の行の高さは AntiWebUI の既定 1.4 と仮定）
 - [x] `captures_outside_press`（`catcher.rs`）の代わり：アイランドが開いている間だけ、全画面の透明な `Layer::Top` を開き、バーとアイランドの矩形を入力範囲から抜く（`ui::cut_out`）。押されたら全部の `IslandPart::close` を呼ぶ
   - レイヤーは出力ごとに 1 つ開いたまま、閉じている間は 1×1 で入力なしに縮める。開くたびに作ると、AntiWebUI はウィンドウごとに wgpu のインスタンスとデバイスを作るので、開く瞬間にラグが出た
   - [ ] 実機で確認：外クリックで media / toolbox が閉じる、バーとアイランドはそのまま押せる、閉じた後に画面のクリックが通る
