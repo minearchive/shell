@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "m3_test",
+    "spike",
     "m3_widget",
     "macros",
     "ui_core",

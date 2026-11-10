@@ -50,6 +50,7 @@
             pkgs.libGL
             pkgs.wayland
             pkgs.libxkbcommon
+            pkgs.vulkan-loader
           ];
           __EGL_VENDOR_LIBRARY_DIRS = "/run/opengl-driver/share/glvnd/egl_vendor.d";
         };

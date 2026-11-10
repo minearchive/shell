@@ -1,0 +1,12 @@
+[package]
+name = "spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Phase 0 of the AntiWebUI migration (see TODO.md): throwaway, deleted after the go/no-go.
+[dependencies]
+anti-webui = { git = "https://github.com/bea4dev/AntiWebUI", rev = "f2fd04c2f16006c3e8aa95047a506d9cd3db3970", default-features = false, features = ["wayland", "wayland-shell"] }
+kurbo = "0.13"
+wgpu = "30"
+pollster = "1"
