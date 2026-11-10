@@ -2,8 +2,9 @@
 //! notifications nobody has dismissed instead.
 
 mod items;
+mod notifications;
 
-use std::rc::Rc;
+use std::{collections::HashSet, rc::Rc};
 
 use anti_webui::prelude::*;
 use anti_webui_md3e::{components::sized_icon, icons};
@@ -18,8 +19,8 @@ use crate::{
 const ICON_GAP: f32 = 14.0;
 const ROW_PADDING: f32 = 20.0;
 
-const PANEL_WIDTH: f32 = 380.0;
-const PANEL_PADDING: f32 = 16.0;
+pub(super) const PANEL_WIDTH: f32 = 380.0;
+pub(super) const PANEL_PADDING: f32 = 16.0;
 const PANEL_GAP: f32 = 12.0;
 /// Above a normal notification, so one can't pull the panel away from under a drag.
 const PANEL_PRIORITY: u8 = 150;
@@ -95,6 +96,20 @@ pub fn toolbox(state: &State) -> Part {
     let (items, views): (Vec<_>, Vec<_>) = items(state).into_iter().map(|i| ((i.width, i.height, i.bar_icon), i.view)).unzip();
     let items: Rc<[_]> = items.into();
     let open = signal(None::<Panel>);
+    // The panel last opened, still shown while the island collapses.
+    let shown = signal(Panel::Controls);
+    let expanded = signal(HashSet::new());
+    effect(move || {
+        if let Some(panel) = open.get() {
+            untrack(|| {
+                shown.set(panel);
+                // A panel opening afresh starts with every app closed.
+                if panel == Panel::Notifications {
+                    expanded.set(HashSet::new());
+                }
+            });
+        }
+    });
 
     let layout = {
         let items = items.clone();
@@ -110,8 +125,7 @@ pub fn toolbox(state: &State) -> Part {
     let request = memo(move || {
         let height = match open.get()? {
             Panel::Controls => layout.with(|l| l.1),
-            // ponytail: the notification list is not ported yet; a right click does nothing.
-            Panel::Notifications => return None,
+            Panel::Notifications => notifications::PANEL_HEIGHT,
         };
         Some(IslandRequest {
             width: PANEL_WIDTH,
@@ -123,7 +137,14 @@ pub fn toolbox(state: &State) -> Part {
 
     Part {
         bar: Some((BarSlot::Right, row(state, bar_icons, open).into_view())),
-        island: Some(IslandPart { request, content: panel(views, layout).into_view() }),
+        island: Some(IslandPart { request, content: div()
+                .relative()
+                .child(panel(views, layout).dyn_style(move |s| if shown.get() == Panel::Controls { s } else { s.hidden() }))
+                .child(
+                    notifications::panel(state, expanded)
+                        .dyn_style(move |s| if shown.get() == Panel::Notifications { s } else { s.hidden() }),
+                )
+                .into_view() }),
     }
 }
 

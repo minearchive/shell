@@ -63,7 +63,9 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
   - [x] コントロールのパネル：`panel_layout` はそのまま、各項目を絶対配置。タイル、WARP は md3e の switch、音量と明るさは md3e の slider、電源プロファイルは md3e の connected button group
     - スライダーは、動かしてから 600ms はポーリングの値を無視する（ドラッグの終わりを slider が教えてくれないため）
     - 電源プロファイルの「使えない項目」は押しても何も送らないだけで、見た目は無効にならない
-  - [ ] 右クリックの notifications のリスト（`toolbox/notifications.rs` が Skia の参照として残っている）
+  - [x] 右クリックの notifications のリスト：アプリごとに重ねる、クリックで開く、ホバーで ✕、すべて消去、`overflow_y_scroll` でスクロール、毎分「n分前」を更新
+  - [ ] 横にドラッグ / タッチパッドのスワイプで消す（Skia 版は自前のジェスチャ）
+  - [ ] 行のアニメーション：消えた行の詰め、開いたアプリの行が見出しの下から出る、すべて消去で上から順に滑って消える
 - [x] theme.toml の配色を md3e の `set_color_scheme` に写す（`ui::md3e_scheme`、テーマの再読み込みにも追従）
 - [ ] `m3_widget` を `anti-webui-md3e`（独立クレート。同じ git rev から依存に足す）に置き換える。スライダー、アイコン（Material Symbols）、ボタン、リスト項目
   - まず対応表を作る：m3_widget の各部品 → md3e の部品 / 足りないもの
