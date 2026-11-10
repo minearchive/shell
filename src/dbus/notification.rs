@@ -49,7 +49,7 @@ pub enum CloseReason {
 
 /// A snapshot of one `Notify` call — everything the UI needs to render it.
 #[allow(unused)]
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct NotificationSnapshot {
     pub app_name: String,
     pub app_icon: String,
@@ -62,6 +62,22 @@ pub struct NotificationSnapshot {
     pub urgency: Urgency,
     /// Milliseconds. `-1` = server default, `0` = never expire.
     pub expire_timeout: i32,
+}
+
+// By hand: the icon's pixels would fill the log line.
+impl std::fmt::Debug for NotificationSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NotificationSnapshot")
+            .field("app_name", &self.app_name)
+            .field("app_icon", &self.app_icon)
+            .field("icon", &self.icon.is_some())
+            .field("summary", &self.summary)
+            .field("body", &self.body)
+            .field("actions", &self.actions)
+            .field("urgency", &self.urgency)
+            .field("expire_timeout", &self.expire_timeout)
+            .finish()
+    }
 }
 
 #[allow(unused)]
