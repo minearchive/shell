@@ -58,7 +58,13 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
   - [ ] 再生ボタンの角の変形は ease-out-cubic 固定。`animation.toml` の `media_play_pause` は読んでいない（関数の easing は AntiWebUI の `Transition` に渡せない）
   - [ ] 波と再生位置の確認：長さを報告するプレイヤーで再生中に開く（ブラウザでは試せていない）
 - [x] notifications：`rewrite` でアイランドから上端のバナーになっていたので、Phase 3 を先にやった（下）
-- [ ] toolbox（スライダーは MD3E、notifications のリスト、items）
+- [ ] toolbox
+  - [x] バーのアイコン列（Material Symbols）、未読バッジ、左クリックでコントロール、開いている間は閉じるアイコン
+  - [x] コントロールのパネル：`panel_layout` はそのまま、各項目を絶対配置。タイル、WARP は md3e の switch、音量と明るさは md3e の slider、電源プロファイルは md3e の connected button group
+    - スライダーは、動かしてから 600ms はポーリングの値を無視する（ドラッグの終わりを slider が教えてくれないため）
+    - 電源プロファイルの「使えない項目」は押しても何も送らないだけで、見た目は無効にならない
+  - [ ] 右クリックの notifications のリスト（`toolbox/notifications.rs` が Skia の参照として残っている）
+- [x] theme.toml の配色を md3e の `set_color_scheme` に写す（`ui::md3e_scheme`、テーマの再読み込みにも追従）
 - [ ] `m3_widget` を `anti-webui-md3e`（独立クレート。同じ git rev から依存に足す）に置き換える。スライダー、アイコン（Material Symbols）、ボタン、リスト項目
   - まず対応表を作る：m3_widget の各部品 → md3e の部品 / 足りないもの
   - テーマ：theme.toml の配色を md3e の配色（ダイナミックカラー）に写す

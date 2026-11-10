@@ -1,36 +1,20 @@
-//! The bar's status icons, and the panel of details they open. A right click opens
-//! the notifications nobody has dismissed instead.
+//! The bar's status icons, and the panel of details they open. A right click opens the
+//! notifications nobody has dismissed instead.
 
 mod items;
-mod notifications;
 
-use std::time::Instant;
+use std::rc::Rc;
 
-use calloop::channel::Sender;
-use m3_widget::{icon::BOX_SIZE, Icon};
-use skia_safe::{Canvas, Color4f, Paint, Point, RRect, Rect};
-use smithay_client_toolkit::seat::pointer::{
-    AxisScroll, PointerEvent as SctkPointerEvent, PointerEventKind as SctkKind,
-};
-use tokio::sync::mpsc::UnboundedSender;
+use anti_webui::prelude::*;
+use anti_webui_md3e::{components::sized_icon, icons};
+use ui_core::geometry::LayoutRect;
 
-use ui_core::{
-    animation::parser::Easing, font::FontBook, geometry::LayoutRect, pointer::button,
-    scheme::ColorTheme,
-};
-
-use self::items::{default_items, DetailWidth, ToolboxItem};
-use self::notifications::{Action, NotificationPanel, PANEL_HEIGHT};
+use self::items::{items, DetailWidth, ICON_SIZE};
 use crate::{
-    dbus::warp::{WarpCommand, WarpStatus},
-    system::{SystemCommand, SystemStatus},
-    ui::{
-        to_core_event, BarSlot, Component, IslandFrame, IslandPlacement, IslandRequest, Redraw,
-        UIState, UiEvent, BAR_HEIGHT,
-    },
+    state::State,
+    ui::{measure, palette, BarSlot, IslandPart, IslandPlacement, IslandRequest, Part, BAR_HEIGHT},
 };
 
-const FONT: &str = "noto_sans";
 const ICON_GAP: f32 = 14.0;
 const ROW_PADDING: f32 = 20.0;
 
@@ -45,7 +29,7 @@ const BADGE_TEXT: f32 = 11.0;
 /// Which panel the row opens: a left click opens the controls, a right click the
 /// notifications.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum View {
+enum Panel {
     Controls,
     Notifications,
 }
@@ -91,332 +75,150 @@ fn panel_layout(entries: &[(DetailWidth, f32)], panel_width: f32) -> (Vec<Layout
     (rects, (y - PANEL_GAP).max(PANEL_PADDING))
 }
 
-/// Where an icon `progress` of the way from `from` to `to` is.
-pub fn lerp_box(from: Rect, to: Rect, progress: f32) -> Rect {
-    Rect::from_xywh(
-        from.left + (to.left - from.left) * progress,
-        from.top + (to.top - from.top) * progress,
-        from.width(),
-        from.height(),
-    )
-}
+/// A symbol, compared by which one it is.
+#[derive(Clone, Copy)]
+struct Glyph(&'static icons::Symbol);
 
-pub struct Toolbox {
-    items: Vec<Box<dyn ToolboxItem>>,
-    rects: Vec<LayoutRect>,
-    panel_height: f32,
-    notifications: NotificationPanel,
-    ui_tx: Sender<UiEvent>,
-    open: Option<View>,
-    /// The panel last opened, still drawn while the island collapses.
-    shown: View,
-    /// The row's width on the last draw, for hit testing.
-    row_width: f32,
-}
-
-impl Toolbox {
-    pub fn new(
-        commands: UnboundedSender<SystemCommand>,
-        warp_commands: UnboundedSender<WarpCommand>,
-        ui_tx: Sender<UiEvent>,
-    ) -> Self {
-        let mut toolbox = Self {
-            items: default_items(commands, warp_commands),
-            rects: Vec::new(),
-            panel_height: 0.0,
-            notifications: NotificationPanel::default(),
-            ui_tx,
-            open: None,
-            shown: View::Controls,
-            row_width: 0.0,
-        };
-        toolbox.lay_out(&SystemStatus::default());
-        toolbox
-    }
-
-    /// Entries can come and go with the status, such as a battery's caption.
-    fn lay_out(&mut self, status: &SystemStatus) {
-        let entries: Vec<_> = self
-            .items
-            .iter()
-            .map(|item| (item.width(), item.height(status)))
-            .collect();
-        (self.rects, self.panel_height) = panel_layout(&entries, PANEL_WIDTH);
+impl PartialEq for Glyph {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.0, other.0)
     }
 }
 
-impl Toolbox {
-    fn close(&mut self) -> Redraw {
-        if self.open.is_some() {
-            self.open = None;
-            Redraw::Now
-        } else {
-            Redraw::None
-        }
-    }
-
-    /// The row toggles `view`, or switches to it from the other panel, and anywhere
-    /// else in the bar dismisses it. `x` and `y` are relative to the row, so the rest of
-    /// the bar is out of its range.
-    fn on_bar_press(&mut self, x: f64, y: f64, view: View) -> Redraw {
-        let in_row =
-            (0.0..self.row_width as f64).contains(&x) && (0.0..BAR_HEIGHT as f64).contains(&y);
-        if in_row {
-            self.open = (self.open != Some(view)).then_some(view);
-            if let Some(view) = self.open {
-                if view == View::Notifications {
-                    self.notifications.reset();
-                }
-                self.shown = view;
-            }
-            Redraw::Now
-        } else {
-            self.close()
-        }
-    }
+fn row_width(icons: usize) -> f32 {
+    let icons = icons as f32;
+    ROW_PADDING * 2.0 + icons * ICON_SIZE + (icons - 1.0).max(0.0) * ICON_GAP
 }
 
-impl Component for Toolbox {
-    fn bar_slot(&self) -> BarSlot {
-        BarSlot::Right
-    }
+pub fn toolbox(state: &State) -> Part {
+    let system = state.system;
+    let (items, views): (Vec<_>, Vec<_>) = items(state).into_iter().map(|i| ((i.width, i.height, i.bar_icon), i.view)).unzip();
+    let items: Rc<[_]> = items.into();
+    let open = signal(None::<Panel>);
 
-    fn bar_width(&self, state: &UIState, _fonts: &FontBook) -> f32 {
-        let icons = self
-            .items
-            .iter()
-            .filter(|item| item.bar_icon(&state.system).is_some())
-            .count() as f32;
-        ROW_PADDING * 2.0 + icons * BOX_SIZE + (icons - 1.0).max(0.0) * ICON_GAP
-    }
-
-    /// The bar's icons live here rather than in `draw`, so that they can fly over the
-    /// panel to their entries as it opens.
-    fn draw_overlay(
-        &mut self,
-        canvas: &Canvas,
-        island: Option<IslandFrame>,
-        state: &UIState,
-        fonts: &FontBook,
-        theme: &ColorTheme,
-    ) -> Redraw {
-        self.row_width = self.bar_width(state, fonts);
-        let top = (BAR_HEIGHT as f32 - BOX_SIZE) / 2.0;
-        let progress = island.map_or(0.0, |frame| frame.progress);
-        // Only the controls have entries for the icons to fly to.
-        let flying = self.shown == View::Controls;
-
-        let mut x = ROW_PADDING;
-        for (item, rect) in self.items.iter().zip(&self.rects) {
-            let Some(icon) = item.bar_icon(&state.system) else {
-                continue;
-            };
-            let in_bar = Rect::from_xywh(x, top, BOX_SIZE, BOX_SIZE);
-            let at = island.filter(|_| flying).map_or(in_bar, |frame| {
-                let in_panel = item
-                    .icon_box(*rect)
-                    .with_offset((frame.content.x, frame.content.y));
-                lerp_box(in_bar, in_panel, progress)
-            });
-            let alpha = if item.icon_fades() || !flying {
-                1.0 - progress
-            } else {
-                1.0
-            };
-            icon.draw(canvas, at, theme.on_surface.with_alpha(alpha));
-            x += BOX_SIZE + ICON_GAP;
-        }
-
-        // The row is empty once its icons have left: this is what closes the panel.
-        let close = Rect::from_xywh((self.row_width - BOX_SIZE) / 2.0, top, BOX_SIZE, BOX_SIZE);
-        Icon::Close.draw(canvas, close, theme.on_surface.with_alpha(progress));
-
-        // A right click is easy to miss, so say when it has something to show.
-        let unseen = state.notifications.unseen_len();
-        if unseen > 0 {
-            let text = unseen.to_string();
-            let width = (fonts.measure(FONT, BADGE_TEXT, &text) + 8.0).max(BADGE_HEIGHT);
-            let right = x - ICON_GAP + BADGE_HEIGHT / 4.0;
-            let badge =
-                Rect::from_xywh(right - width, top - BADGE_HEIGHT / 2.0, width, BADGE_HEIGHT);
-            let alpha = 1.0 - progress;
-            let mut paint = Paint::new(Color4f::from(theme.primary.with_alpha(alpha)), None);
-            paint.set_anti_alias(true);
-            let radius = BADGE_HEIGHT / 2.0;
-            canvas.draw_rrect(RRect::new_rect_xy(badge, radius, radius), &paint);
-            paint.set_color4f(Color4f::from(theme.on_primary.with_alpha(alpha)), None);
-            let text_width = fonts.measure(FONT, BADGE_TEXT, &text);
-            let baseline = Point::new(
-                badge.center_x() - text_width / 2.0,
-                badge.center_y() + BADGE_TEXT * 0.35,
-            );
-            fonts.draw(canvas, FONT, BADGE_TEXT, &text, baseline, &paint);
-        }
-        Redraw::None
-    }
-
-    fn on_cursor(&mut self, event: &SctkPointerEvent) -> Redraw {
-        let (x, y) = event.position;
-        match event.kind {
-            SctkKind::Press { button, .. } if button == button::LEFT => {
-                self.on_bar_press(x, y, View::Controls)
-            }
-            SctkKind::Press { button, .. } if button == button::RIGHT => {
-                self.on_bar_press(x, y, View::Notifications)
-            }
-            _ => Redraw::None,
-        }
-    }
-
-    fn on_easing_updated(&mut self, id: &str, easing: &Easing) -> Redraw {
-        for item in &mut self.items {
-            item.on_easing_updated(id, easing);
-        }
-        Redraw::None
-    }
-
-    fn on_warp(&mut self, _status: &WarpStatus) -> Redraw {
-        if self.open == Some(View::Controls) {
-            Redraw::Now
-        } else {
-            Redraw::None
-        }
-    }
-
-    fn captures_outside_press(&self) -> bool {
-        self.open.is_some()
-    }
-
-    fn on_outside_press(&mut self) -> Redraw {
-        self.close()
-    }
-
-    fn island(
-        &mut self,
-        state: &UIState,
-        fonts: &FontBook,
-        _bar_width: f32,
-    ) -> Option<IslandRequest> {
-        let height = match self.open? {
-            View::Controls => {
-                self.lay_out(&state.system);
-                self.panel_height
-            }
-            View::Notifications => {
-                self.notifications
-                    .lay_out(&state.notifications, fonts, Instant::now());
-                PANEL_HEIGHT
-            }
+    let layout = {
+        let items = items.clone();
+        memo(move || {
+            let entries: Vec<_> = system.with(|s| items.iter().map(|(width, height, _)| (*width, height(s))).collect());
+            panel_layout(&entries, PANEL_WIDTH)
+        })
+    };
+    let bar_icons = {
+        let items = items.clone();
+        memo(move || system.with(|s| items.iter().filter_map(|(_, _, bar_icon)| bar_icon(s)).map(Glyph).collect::<Vec<_>>()))
+    };
+    let request = memo(move || {
+        let height = match open.get()? {
+            Panel::Controls => layout.with(|l| l.1),
+            // ponytail: the notification list is not ported yet; a right click does nothing.
+            Panel::Notifications => return None,
         };
         Some(IslandRequest {
             width: PANEL_WIDTH,
             height,
-            placement: IslandPlacement::Corner {
-                from_width: self.bar_width(state, fonts),
-            },
+            placement: IslandPlacement::Corner { from_width: bar_icons.with(|i| row_width(i.len())) },
             priority: PANEL_PRIORITY,
         })
-    }
+    });
 
-    fn draw_island(
-        &mut self,
-        canvas: &Canvas,
-        size: (f32, f32),
-        state: &UIState,
-        fonts: &FontBook,
-        theme: &ColorTheme,
-    ) -> Redraw {
-        if self.shown == View::Notifications {
-            for id in self.notifications.take_flung() {
-                let _ = self.ui_tx.send(UiEvent::DismissNotification(id));
-            }
-            if self.notifications.take_cleared() {
-                let _ = self.ui_tx.send(UiEvent::ClearNotifications);
-            }
-            return if self.notifications.draw(canvas, size, fonts, theme) {
-                Redraw::Animating
-            } else {
-                Redraw::None
-            };
-        }
-        let mut animating = false;
-        for (item, rect) in self.items.iter_mut().zip(&self.rects) {
-            animating |= item.draw(canvas, *rect, state, fonts, theme);
-        }
-        if animating {
-            Redraw::Animating
-        } else {
-            Redraw::None
-        }
+    Part {
+        bar: Some((BarSlot::Right, row(state, bar_icons, open).into_view())),
+        island: Some(IslandPart { request, content: panel(views, layout).into_view() }),
     }
+}
 
-    fn on_island_cursor(&mut self, event: &SctkPointerEvent) -> Redraw {
-        if self.shown == View::Notifications {
-            let (x, y) = (event.position.0 as f32, event.position.1 as f32);
-            let panel = &mut self.notifications;
-            let action = match &event.kind {
-                SctkKind::Motion { .. } | SctkKind::Enter { .. } => {
-                    panel.on_motion(x, y).then_some(Action::Repaint)
-                }
-                SctkKind::Leave { .. } => panel.on_leave().then_some(Action::Repaint),
-                SctkKind::Press { button, .. } if *button == button::LEFT => {
-                    panel.on_press(x, y);
-                    None
-                }
-                SctkKind::Release { button, .. } if *button == button::LEFT => {
-                    panel.on_release(x, y)
-                }
-                SctkKind::Axis {
-                    horizontal,
-                    vertical,
-                    ..
-                } => {
-                    // A wheel counts in steps; a touchpad doesn't.
-                    let steps = |axis: &AxisScroll| axis.discrete != 0 || axis.value120 != 0;
-                    let continuous = !steps(horizontal) && !steps(vertical);
-                    let moved = panel.on_scroll(
-                        horizontal.absolute as f32,
-                        vertical.absolute as f32,
-                        continuous,
-                        horizontal.stop,
-                    );
-                    moved.then_some(Action::Repaint)
-                }
-                _ => None,
-            };
-            // Dismissals repaint from main, once the store has changed.
-            match action {
-                Some(Action::Dismiss(ids)) => {
-                    for id in ids {
-                        let _ = self.ui_tx.send(UiEvent::DismissNotification(id));
-                    }
-                }
-                Some(Action::Repaint) => return Redraw::Now,
-                None => {}
+/// The icons, or a close button while a panel is open. A left click toggles the controls, a
+/// right click the notifications, and either switches from the other panel.
+fn row(state: &State, bar_icons: Memo<Vec<Glyph>>, open: Signal<Option<Panel>>) -> Div {
+    let toggle = move |panel| open.update(|o| *o = (*o != Some(panel)).then_some(panel));
+    let on_surface = {
+        let state = state.clone();
+        move || palette(&state, |t| t.on_surface)
+    };
+    let notifications = state.notifications;
+    let badge_colors = state.clone();
+
+    div()
+        .relative()
+        .h(BAR_HEIGHT)
+        .px(ROW_PADDING)
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(ICON_GAP)
+        .cursor(CursorIcon::Pointer)
+        .dyn_style(move |s| s.text_color(on_surface()))
+        .on_click(move |_| toggle(Panel::Controls))
+        .on_pointer_down(move |e| {
+            if e.button == Some(PointerButton::Secondary) {
+                toggle(Panel::Notifications);
             }
-            return Redraw::None;
-        }
-        let Some(event) = to_core_event(event) else {
-            return Redraw::None;
-        };
-        let mut dirty = false;
-        for item in &mut self.items {
-            dirty |= item.on_pointer(&event);
-        }
-        if dirty {
-            Redraw::Now
-        } else {
-            Redraw::None
-        }
+        })
+        .child(dyn_view(move || {
+            if open.get().is_some() {
+                let count = bar_icons.with(Vec::len);
+                // Keeps the row's width, so the island's corner doesn't jump.
+                return div()
+                    .w(row_width(count) - ROW_PADDING * 2.0)
+                    .flex()
+                    .justify_center()
+                    .child(sized_icon(icons::CLOSE, ICON_SIZE))
+                    .into_view();
+            }
+            let mut icons_row = div().flex().flex_row().gap(ICON_GAP);
+            for Glyph(symbol) in bar_icons.get() {
+                icons_row = icons_row.child(sized_icon(symbol, ICON_SIZE));
+            }
+            icons_row.into_view()
+        }))
+        // A right click is easy to miss, so say when it has something to show.
+        .child(dyn_view(move || {
+            let unseen = notifications.with(|n| n.unseen_len());
+            if unseen == 0 || open.get().is_some() {
+                return div().into_view();
+            }
+            let label = unseen.to_string();
+            let width = (measure(BADGE_TEXT)(&label) + 8.0).max(BADGE_HEIGHT);
+            let colors = badge_colors.clone();
+            div()
+                .absolute()
+                .right(ROW_PADDING - BADGE_HEIGHT / 4.0)
+                .top((BAR_HEIGHT - ICON_SIZE) / 2.0 - BADGE_HEIGHT / 2.0)
+                .w(width)
+                .h(BADGE_HEIGHT)
+                .rounded(BADGE_HEIGHT / 2.0)
+                .flex()
+                .items_center()
+                .justify_center()
+                .dyn_style(move |s| {
+                    s.bg(palette(&colors, |t| t.primary)).text_color(palette(&colors, |t| t.on_primary))
+                })
+                .child(text(label).text_size(BADGE_TEXT))
+                .into_view()
+        }))
+}
+
+/// The controls, each entry at its place from [`panel_layout`].
+fn panel(views: Vec<View>, layout: Memo<(Vec<LayoutRect>, f32)>) -> Div {
+    let mut panel = div().relative().w(PANEL_WIDTH).dyn_style(move |s| s.h(layout.with(|l| l.1)));
+    for (i, view) in views.into_iter().enumerate() {
+        panel = panel.child(
+            div()
+                .absolute()
+                .dyn_style(move |s| {
+                    let r = layout.with(|l| l.0[i]);
+                    let s = s.left(r.x).top(r.y).w(r.width).h(r.height);
+                    if r.height > 0.0 { s } else { s.hidden() }
+                })
+                .child(view),
+        );
     }
+    panel
 }
 
 #[cfg(test)]
 mod tests {
-    use tokio::sync::mpsc;
-
     use super::*;
-    use crate::system::{Battery, BatteryState};
 
     use DetailWidth::{Caption, Full, Half};
 
@@ -448,28 +250,6 @@ mod tests {
     }
 
     #[test]
-    fn battery_caption_appears_with_a_battery() {
-        let (tx, _rx) = mpsc::unbounded_channel();
-        let mut toolbox = Toolbox::new(
-            tx,
-            mpsc::unbounded_channel().0,
-            calloop::channel::channel().0,
-        );
-
-        toolbox.lay_out(&SystemStatus::default());
-        let without = toolbox.panel_height;
-
-        toolbox.lay_out(&SystemStatus {
-            battery: Some(Battery {
-                percent: 72,
-                state: BatteryState::Discharging,
-            }),
-            ..Default::default()
-        });
-        assert_eq!(toolbox.panel_height, without + 16.0 + PANEL_GAP);
-    }
-
-    #[test]
     fn extra_half_entries_start_a_new_row() {
         let entries = [(Half, 50.0), (Half, 60.0), (Half, 50.0)];
         let (rects, height) = panel_layout(&entries, 216.0);
@@ -479,92 +259,8 @@ mod tests {
     }
 
     #[test]
-    fn icons_travel_from_the_bar_to_their_panel_entries() {
-        let from = Rect::from_xywh(100.0, 18.0, 24.0, 24.0);
-        let to = Rect::from_xywh(-200.0, -240.0, 24.0, 24.0);
-
-        assert_eq!(lerp_box(from, to, 0.0), from);
-        assert_eq!(lerp_box(from, to, 1.0), to);
-        assert_eq!(
-            lerp_box(from, to, 0.5),
-            Rect::from_xywh(-50.0, -111.0, 24.0, 24.0)
-        );
-    }
-
-    #[test]
-    fn warp_status_repaints_only_an_open_panel() {
-        let (tx, _rx) = mpsc::unbounded_channel();
-        let mut toolbox = Toolbox::new(
-            tx,
-            mpsc::unbounded_channel().0,
-            calloop::channel::channel().0,
-        );
-        let status = WarpStatus::default();
-
-        assert_eq!(toolbox.on_warp(&status), Redraw::None);
-        toolbox.open = Some(View::Controls);
-        assert_eq!(toolbox.on_warp(&status), Redraw::Now);
-    }
-
-    #[test]
-    fn row_toggles_and_presses_elsewhere_only_close() {
-        let (tx, _rx) = mpsc::unbounded_channel();
-        let mut toolbox = Toolbox::new(
-            tx,
-            mpsc::unbounded_channel().0,
-            calloop::channel::channel().0,
-        );
-        toolbox.row_width = 100.0;
-        let (left, right) = (View::Controls, View::Notifications);
-
-        assert_eq!(
-            toolbox.on_bar_press(-500.0, 30.0, left),
-            Redraw::None,
-            "stays closed"
-        );
-        assert!(!toolbox.captures_outside_press());
-
-        assert_eq!(toolbox.on_bar_press(50.0, 30.0, left), Redraw::Now);
-        assert_eq!(toolbox.open, Some(left), "a left click opens the controls");
-        assert!(toolbox.captures_outside_press());
-
-        toolbox.on_bar_press(50.0, 30.0, right);
-        assert_eq!(toolbox.open, Some(right), "a right click switches");
-        assert_eq!(toolbox.shown, right);
-
-        toolbox.on_bar_press(50.0, 30.0, right);
-        assert_eq!(toolbox.open, None, "the same click closes");
-        assert_eq!(toolbox.shown, right, "still drawn while collapsing");
-
-        toolbox.open = Some(left);
-        assert_eq!(toolbox.on_bar_press(-500.0, 30.0, right), Redraw::Now);
-        assert_eq!(toolbox.open, None, "the rest of the bar closes");
-
-        toolbox.open = Some(right);
-        assert_eq!(toolbox.on_outside_press(), Redraw::Now);
-        assert_eq!(toolbox.open, None, "outside the bar closes");
-    }
-
-    #[test]
-    fn bar_shows_the_four_icons_and_the_panel_fits_the_headroom() {
-        let (tx, _rx) = mpsc::unbounded_channel();
-        let toolbox = Toolbox::new(
-            tx,
-            mpsc::unbounded_channel().0,
-            calloop::channel::channel().0,
-        );
-
-        let status = SystemStatus {
-            battery: Some(Battery {
-                percent: 72,
-                state: BatteryState::Discharging,
-            }),
-            ..Default::default()
-        };
-        let mut toolbox = toolbox;
-        toolbox.lay_out(&status);
-        let icons = toolbox.items.iter().filter_map(|i| i.bar_icon(&status));
-        assert_eq!(icons.count(), 4);
-        assert!(toolbox.panel_height <= crate::ui::ISLAND_MAX_HEIGHT as f32);
+    fn the_row_is_as_wide_as_its_icons() {
+        assert_eq!(row_width(0), ROW_PADDING * 2.0);
+        assert_eq!(row_width(4), ROW_PADDING * 2.0 + 4.0 * ICON_SIZE + 3.0 * ICON_GAP);
     }
 }

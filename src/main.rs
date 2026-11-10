@@ -46,6 +46,8 @@ fn main() {
                 return;
             }
         };
+        let theme = state.theme;
+        effect(move || anti_webui_md3e::set_color_scheme(theme.with(|t| ui::md3e_scheme(t.theme()))));
         for_each_output(move |output| {
             let (state, banner_state) = (state.clone(), state.clone());
             let width = output.logical_size.width as f32;
@@ -62,6 +64,7 @@ fn main() {
                     let parts = vec![
                         components::clock::clock(&state),
                         components::media::media(&state, width),
+                        components::toolbox::toolbox(&state),
                     ];
                     ui::bar(&state, width, parts, input)
                 },

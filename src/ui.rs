@@ -227,6 +227,45 @@ pub fn color(c: ui_core::scheme::color::Color) -> Color {
     Color::new(c.r, c.g, c.b, c.a)
 }
 
+/// The palette for the md3e components, which read theirs from one global scheme.
+pub fn md3e_scheme(t: &ColorTheme) -> anti_webui_md3e::ColorScheme {
+    anti_webui_md3e::ColorScheme {
+        primary: color(t.primary),
+        on_primary: color(t.on_primary),
+        primary_container: color(t.primary_container),
+        on_primary_container: color(t.on_primary_container),
+        secondary: color(t.secondary),
+        on_secondary: color(t.on_secondary),
+        secondary_container: color(t.secondary_container),
+        on_secondary_container: color(t.on_secondary_container),
+        tertiary: color(t.tertiary),
+        on_tertiary: color(t.on_tertiary),
+        tertiary_container: color(t.tertiary_container),
+        on_tertiary_container: color(t.on_tertiary_container),
+        error: color(t.error),
+        on_error: color(t.on_error),
+        error_container: color(t.error_container),
+        on_error_container: color(t.on_error_container),
+        surface: color(t.surface),
+        surface_dim: color(t.surface_dim),
+        surface_bright: color(t.surface_bright),
+        surface_variant: color(t.surface_variant),
+        on_surface: color(t.on_surface),
+        on_surface_variant: color(t.on_surface_variant),
+        inverse_surface: color(t.inverse_surface),
+        inverse_on_surface: color(t.inverse_on_surface),
+        inverse_primary: color(t.inverse_primary),
+        scrim: color(t.scrim),
+        surface_container_lowest: color(t.surface_container_lowest),
+        surface_container_low: color(t.surface_container_low),
+        surface_container: color(t.surface_container),
+        surface_container_high: color(t.surface_container_high),
+        surface_container_highest: color(t.surface_container_highest),
+        outline: color(t.outline),
+        outline_variant: color(t.outline_variant),
+    }
+}
+
 /// A color from the active palette, read reactively.
 pub fn palette(state: &State, pick: impl Fn(&ColorTheme) -> ui_core::scheme::color::Color) -> Color {
     state.theme.with(|t| color(pick(t.theme())))

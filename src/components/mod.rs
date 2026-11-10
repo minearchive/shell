@@ -1,5 +1,6 @@
-// ponytail: only what Phase 2 of TODO.md has ported is built; `toolbox` stays on disk as the
-// Skia reference until it is.
+// ponytail: `toolbox/notifications.rs` is not built yet; it stays on disk as the Skia reference
+// until the notification list is ported.
 pub mod clock;
 pub mod media;
 pub mod notifications;
+pub mod toolbox;
