@@ -58,7 +58,7 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
   - `Art` は skia の `Image` ではなく `ImageSource`（RGBA）を持つ。デコード・縮小・アクセント色は今まで通り skia で、プロバイダのスレッドで
   - シークバーは `slider_with`（挙動だけ）に自前の見た目。md3e の `wavy` は色が全体のスキーム固定で、波もホバー中しか流れないため使わない。アートの色と「再生中に流れる波」は今まで通り
   - 曲名の折り返しと省略は `ui_core::util` のまま、文字幅は `svg::measure_text` で測る
-  - [ ] 再生ボタンの角の変形は ease-out-cubic 固定。`animation.toml` の `media_play_pause` は読んでいない（関数の easing は AntiWebUI の `Transition` に渡せない）
+  - [x] 再生ボタンの角の変形は `animation.toml` の `media_play_pause` で動く（`ui::eased`：ui_core の `Animation` を `request_frame` で進める）
   - [ ] 波と再生位置の確認：長さを報告するプレイヤーで再生中に開く（ブラウザでは試せていない）
 - [x] notifications：`rewrite` でアイランドから上端のバナーになっていたので、Phase 3 を先にやった（下）
 - [ ] toolbox

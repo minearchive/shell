@@ -24,7 +24,7 @@ use crate::{
         player_art::Art,
     },
     state::State,
-    ui::{color, measure, palette, BarSlot, IslandPart, IslandPlacement, IslandRequest, Part, ISLAND_SIDE_MARGIN},
+    ui::{color, eased, measure, palette, BarSlot, IslandPart, IslandPlacement, IslandRequest, Part, ISLAND_SIDE_MARGIN},
 };
 
 const BAR_TEXT_SIZE: f32 = 16.0;
@@ -76,7 +76,8 @@ const DISABLED_TRACK_OPACITY: f32 = 0.12;
 const WAVE_SPEED: f32 = std::f32::consts::PI;
 /// ponytail: animation.toml's `media_play_pause` easing isn't read here; it is a function and
 /// AntiWebUI's transitions take a cubic-bezier. This is ease-out-cubic, its default.
-const MORPH: Transition = Transition::ms(300).cubic_bezier(0.33, 1.0, 0.68, 1.0);
+const MORPH: Duration = Duration::from_millis(300);
+const MORPH_EASING_ID: &str = "media_play_pause";
 /// How long a seek gets to show up in what the player reports. A little over the time
 /// between polling its position.
 const SEEK_SETTLE: Duration = Duration::from_secs(2);
@@ -436,7 +437,7 @@ fn island_view(
     let theme = state.theme;
     let colors = move || theme.with(|t| CardColors::new(art.get().as_ref(), t.theme()));
     let playing = memo(move || track.with(|t| t.as_ref().is_some_and(|t| t.playing)));
-    let play_morph = follow(move || if playing.get() { 1.0f32 } else { 0.0 }, MORPH);
+    let play_morph = eased(state, MORPH_EASING_ID, MORPH, move || if playing.get() { 1.0 } else { 0.0 });
     let card_size = move || card.with(|c| c.as_ref().map_or((0.0, 0.0), |c| c.size));
     let (inner_w, inner_h) = (
         move || card_size().0 - CARD_MARGIN * 2.0,

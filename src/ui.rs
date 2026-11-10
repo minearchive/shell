@@ -12,7 +12,9 @@ use std::{
 use anti_webui::prelude::*;
 use kurbo::BezPath;
 use ui_core::{
-    animation::animation::easing::ease_out_cubic, geometry::LayoutRect, island::IslandMorph,
+    animation::animation::{easing::ease_out_cubic, Animation},
+    geometry::LayoutRect,
+    island::IslandMorph,
     scheme::ColorTheme,
 };
 
@@ -278,6 +280,48 @@ pub fn md3e_scheme(t: &ColorTheme) -> anti_webui_md3e::ColorScheme {
 /// A color from the active palette, read reactively.
 pub fn palette(state: &State, pick: impl Fn(&ColorTheme) -> ui_core::scheme::color::Color) -> Color {
     state.theme.with(|t| color(pick(t.theme())))
+}
+
+/// `target`, moving to each new value over `duration` along `animation.toml`'s `easing_id`
+/// (ease-out-cubic until it names one), a frame at a time. For what AntiWebUI's own transitions
+/// can't do: they take a curve, not the config's easing functions.
+pub fn eased(
+    state: &State,
+    easing_id: &'static str,
+    duration: Duration,
+    target: impl Fn() -> f32 + 'static,
+) -> Signal<f32> {
+    fn step(value: Signal<f32>, animation: Rc<RefCell<Animation<f32>>>, ticking: Rc<Cell<bool>>) {
+        request_frame(move |_| {
+            value.set(animation.borrow().value());
+            if animation.borrow().is_traveling() {
+                step(value, animation, ticking);
+            } else {
+                ticking.set(false);
+            }
+        });
+    }
+
+    let target = memo(target);
+    let start = untrack(|| target.get());
+    let value = signal(start);
+    let animation = Rc::new(RefCell::new(Animation::new(start, start, duration, std::sync::Arc::new(ease_out_cubic))));
+    let ticking = Rc::new(Cell::new(false));
+    {
+        let (animation, config) = (animation.clone(), state.animation);
+        effect(move || {
+            if let Some(easing) = config.with(|a| a.easings().get(easing_id).cloned()) {
+                animation.borrow_mut().set_easing(easing);
+            }
+        });
+    }
+    effect(move || {
+        animation.borrow_mut().set_target(target.get());
+        if !ticking.replace(true) {
+            step(value, animation.clone(), ticking.clone());
+        }
+    });
+    value
 }
 
 /// Repaints every frame for as long as an island moves.
