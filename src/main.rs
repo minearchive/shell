@@ -9,6 +9,7 @@ use calloop::{
     EventLoop, LoopHandle,
 };
 use calloop_wayland_source::WaylandSource;
+use clap::Parser;
 use log::{debug, info, warn};
 use skia_safe::{surfaces, ImageInfo};
 use smithay_client_toolkit::{
@@ -39,7 +40,10 @@ use wayland_client::{
 use mpris::Event as MprisEvent;
 
 use crate::{
-    config::{animation::AnimationConfig, config_path, theme::Theme, WatchableConfig},
+    cli::{Cli, Command},
+    config::{
+        animation::AnimationConfig, config_path, set_config_dir, theme::Theme, WatchableConfig,
+    },
     dbus::{
         kdeconnect::{KDEConnectClient, KDEConnectCommand, KDEConnectEvent},
         mpris::{PlayerCommand, PlayerState},
@@ -55,6 +59,7 @@ use ui_core::font::FontBook;
 
 mod banner;
 mod catcher;
+mod cli;
 mod components;
 mod config;
 mod dbus;
@@ -135,6 +140,24 @@ fn on_msg<T: 'static>(
 
 fn main() {
     env_logger::init();
+
+    let cli = Cli::parse();
+    if let Some(Command::Action { action }) = cli.command {
+        if let Err(e) = cli::send(&action) {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if let Some(dir) = cli.config_directory {
+        set_config_dir(dir);
+    }
+
+    let (action_tx, action_rx) = channel::channel::<cli::Action>();
+    if let Err(e) = cli::listen(action_tx) {
+        eprintln!("{e}");
+        std::process::exit(1);
+    }
 
     let connection = Connection::connect_to_env().expect("Failed to connect to env");
 
@@ -217,6 +240,11 @@ fn main() {
     on_msg(&loop_handle, system_rx, |status, shell| {
         shell.state.system = status;
         shell.request_redraw_all();
+    });
+
+    on_msg(&loop_handle, action_rx, |action, shell| {
+        info!("CLI action: {action:?}");
+        shell.dispatch(|ui| ui.on_action(&action));
     });
 
     let (ui_tx, ui_rx) = channel::channel::<UiEvent>();

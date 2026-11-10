@@ -27,6 +27,8 @@ needed by Skia and GL/Wayland. The EGL vendor path assumes NixOS's
 nix develop
 cargo build
 RUST_LOG=debug cargo run      # env_logger reads RUST_LOG; use info/debug
+cargo run -- -c ./example      # --config-directory: read theme.toml etc. from there
+cargo run -- action launcher   # send an action to the running bar
 cargo test
 cargo test test_run -- --ignored --nocapture   # mpris event stream (needs a live MPRIS player, runs until it quits)
 ```
@@ -105,7 +107,7 @@ The owner draws its content in `draw_island` and receives pointer events in
 `on_island_cursor`. `Shell::update_input_region` limits input to the bar and island.
 See [docs/components.md](docs/components.md).
 
-### The five async input channels (wired in `main()`)
+### The six async input channels (wired in `main()`)
 Background threads/providers feed the calloop event loop through
 `calloop::channel`s. `main()` registers each channel with `on_msg`; each closure
 calls `shell.dispatch`, which fans the message out to every `Screen` and calls
@@ -118,13 +120,20 @@ calls `shell.dispatch`, which fans the message out to every `Screen` and calls
 | `IPCEvent` | `screen.ui.on_ipc` |
 | `KDEConnectEvent` | `screen.ui.on_kde_connect_event` |
 | `WarpStatus` | `screen.ui.on_warp` |
+| `cli::Action` | `screen.ui.on_action` |
+
+`src/cli.rs` holds the clap CLI. `my_shell action <name>` connects to
+`$XDG_RUNTIME_DIR/my_shell.sock`, writes the `Action` as one JSON line and waits for
+`ok`; the bar binds that socket at startup (refusing to start if another instance
+answers on it). To add an action, add a variant to `cli::Action` and match it in
+the component's `on_action`.
 
 `SystemStatus` (`src/system.rs`) has its own channel too: its closure updates
 `UIState.system` and repaints every screen, since the toolbox always shows it. So does
 player art (`src/dbus/player_art.rs`), which updates `UIState.player_art`, and players'
 polled positions, which correct `UIState.players` when they have drifted.
 
-A sixth channel, `UiEvent` (`RequestRedrawAll`/`AnimationUpdated`/`DismissNotification`/`ClearNotifications`), drives `Shell` directly rather than going through a
+A seventh channel, `UiEvent` (`RequestRedrawAll`/`AnimationUpdated`/`DismissNotification`/`ClearNotifications`), drives `Shell` directly rather than going through a
 `Component` method.
 
 `UserInterface` (`src/ui.rs`) holds `Vec<Box<dyn Component>>`; every `on_*` handler

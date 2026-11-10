@@ -23,6 +23,7 @@ use ui_core::{
 };
 
 use crate::{
+    cli::Action,
     components::{clock::Clock, media::Media, toolbox::Toolbox},
     config::{animation::AnimationConfig, theme::Theme},
     dbus::{
@@ -254,6 +255,9 @@ pub trait Component {
     fn on_warp(&mut self, _status: &WarpStatus) -> Redraw {
         Redraw::None
     }
+    fn on_action(&mut self, _action: &Action) -> Redraw {
+        Redraw::None
+    }
     fn on_notification(&mut self, _event: &NotificationEvent) -> Redraw {
         Redraw::None
     }
@@ -479,6 +483,10 @@ impl UserInterface {
 
     pub fn on_warp(&mut self, status: &WarpStatus) -> Redraw {
         self.fan_out(|c| c.on_warp(status))
+    }
+
+    pub fn on_action(&mut self, action: &Action) -> Redraw {
+        self.fan_out(|c| c.on_action(action))
     }
 
     pub fn on_notification(&mut self, event: &NotificationEvent) -> Redraw {

@@ -27,6 +27,7 @@ pub trait Component {
     fn on_mpris(&mut self, _state: &PlayerState, _event: &MprisEvent) -> Redraw { Redraw::None }
     fn on_kde_connect_event(&mut self, _event: &KDEConnectEvent) -> Redraw { Redraw::None }
     fn on_warp(&mut self, _status: &WarpStatus) -> Redraw { Redraw::None }
+    fn on_action(&mut self, _action: &Action) -> Redraw { Redraw::None }
     fn on_notification(&mut self, _event: &NotificationEvent) -> Redraw { Redraw::None }
     fn on_easing_updated(&mut self, _id: &str, _easing: &Easing) -> Redraw { Redraw::None }
 }
