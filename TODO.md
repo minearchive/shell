@@ -59,7 +59,7 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
   - シークバーは `slider_with`（挙動だけ）に自前の見た目。md3e の `wavy` は色が全体のスキーム固定で、波もホバー中しか流れないため使わない。アートの色と「再生中に流れる波」は今まで通り
   - 曲名の折り返しと省略は `ui_core::util` のまま、文字幅は `svg::measure_text` で測る
   - [x] 再生ボタンの角の変形は `animation.toml` の `media_play_pause` で動く（`ui::eased`：ui_core の `Animation` を `request_frame` で進める）
-  - [ ] 波と再生位置の確認：長さを報告するプレイヤーで再生中に開く（ブラウザでは試せていない）
+  - [x] 波と再生位置の確認：Firefox（長さを報告する）の再生中のカードで、10:02 / 12:55 と波が出ているのをスクリーンショットで確認
 - [x] notifications：`rewrite` でアイランドから上端のバナーになっていたので、Phase 3 を先にやった（下）
 - [ ] toolbox
   - [x] バーのアイコン列（Material Symbols）、未読バッジ、左クリックでコントロール、開いている間は閉じるアイコン
