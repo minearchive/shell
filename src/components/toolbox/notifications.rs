@@ -5,6 +5,7 @@
 //! a panel three rows tall.
 
 use std::{
+    cell::Cell,
     collections::HashSet,
     rc::Rc,
     time::{Duration, Instant},
@@ -53,6 +54,19 @@ const LIST_TOP: f32 = TOP_PADDING + HEADER_HEIGHT + HEADER_GAP;
 /// Below the last row, inside the scrolling list.
 const LIST_BOTTOM: f32 = 12.0;
 const ROW_WIDTH: f32 = PANEL_WIDTH - PANEL_PADDING * 2.0;
+/// How much of its width a row must be dragged to go once let go.
+const DISMISS_RATIO: f32 = 0.4;
+/// Where a row slides away to: out past the panel's edge.
+const GONE: f32 = ROW_WIDTH + PANEL_PADDING;
+const SLIDE: Transition = Transition::ms(200).cubic_bezier(0.33, 1.0, 0.68, 1.0);
+/// How long rows take to close a gap, or to make room for an app opening.
+const MOVE: Transition = Transition::ms(250).cubic_bezier(0.33, 1.0, 0.68, 1.0);
+/// How far below its place a row coming in starts.
+const ENTER_RISE: f32 = 16.0;
+/// "すべて消去" slides the rows away one after another, from the top, this far apart.
+const CLEAR_STAGGER: Duration = Duration::from_millis(50);
+/// Past this many, the rows go together: the panel shows about three.
+const CLEAR_STAGGERED: usize = 3;
 /// Always three cards tall, whatever there is.
 pub const PANEL_HEIGHT: f32 = LIST_TOP + CARD_HEIGHT * 3.0 + ROW_GAP * 2.0 + LIST_BOTTOM;
 
@@ -79,7 +93,7 @@ fn group_by_app<'a>(unseen: &[&'a ActiveNotification]) -> Vec<Vec<&'a ActiveNoti
     groups
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Kind {
     /// A notification, or with more than one in its group an app's, stacked.
     Card,
@@ -88,7 +102,11 @@ enum Kind {
     Child,
 }
 
+/// Which row, across updates: a group's heading and its first notification share an id.
+type RowKey = (u32, Kind);
+
 /// One row, as it is shown.
+#[derive(Clone, PartialEq)]
 struct Row {
     kind: Kind,
     /// What dismissing it dismisses: one, or a stacked app's.
@@ -124,6 +142,10 @@ impl Row {
         }
     }
 
+    fn key(&self) -> RowKey {
+        (self.ids[0], self.kind)
+    }
+
     /// Whether clicking it opens or closes its app.
     fn toggles(&self) -> bool {
         self.group_len > 1 && self.kind != Kind::Child
@@ -152,8 +174,15 @@ fn rows(unseen: &[&ActiveNotification], expanded: &HashSet<String>, now: Instant
 pub fn panel(state: &State, expanded: Signal<HashSet<String>>) -> Div {
     let notifications = state.notifications;
     let colors = state.clone();
-    let color = move |pick: fn(&ui_core::scheme::ColorTheme) -> ui_core::scheme::color::Color| palette(&colors, pick);
+    let color = move |pick: Pick| palette(&colors, pick);
     let color = Rc::new(color);
+    let rows = memo(move || {
+        // Again every minute too, for the "5分前".
+        local_time(Every::Minute);
+        notifications.with(|n| rows(&n.unseen(), &expanded.get(), Instant::now()))
+    });
+    // "すべて消去" pressed: the rows are sliding away, and the store clears once they have.
+    let clearing = signal(false);
 
     let header = {
         let (state, c1, c2) = (state.clone(), color.clone(), color.clone());
@@ -179,36 +208,57 @@ pub fn panel(state: &State, expanded: Signal<HashSet<String>>) -> Div {
                         let s = s
                             .bg(c2(|t| t.secondary_container))
                             .text_color(c2(|t| t.on_secondary_container));
-                        if notifications.with(|n| n.unseen_len()) == 0 { s.hidden() } else { s }
+                        if rows.with(Vec::is_empty) { s.hidden() } else { s }
                     })
-                    .on_click(move |_| state.clear_notifications())
+                    .on_click(move |_| {
+                        if clearing.get_untracked() {
+                            return;
+                        }
+                        clearing.set(true);
+                        let state = state.clone();
+                        set_timeout(clear_duration(untrack(|| rows.with(Vec::len))), move || {
+                            state.clear_notifications();
+                            clearing.set(false);
+                        });
+                    })
                     .child(text("すべて消去").text_size(CLEAR_SIZE)),
             )
     };
 
+    let empty = {
+        let c = color.clone();
+        div()
+            .flex_1()
+            .flex()
+            .items_center()
+            .justify_center()
+            .dyn_style(move |s| if rows.with(Vec::is_empty) { s } else { s.hidden() })
+            .child(text("通知はありません").text_size(TEXT_SIZE).dyn_style(move |s| s.text_color(c(|t| t.on_surface_variant))))
+    };
+
     let state = state.clone();
-    let list = dyn_view(move || {
-        // Rebuilt every minute too, for the "5分前".
-        local_time(Every::Minute);
-        let now = Instant::now();
-        let rows = notifications.with(|n| rows(&n.unseen(), &expanded.get(), now));
-        if rows.is_empty() {
-            let c = color.clone();
-            return div()
-                .flex_1()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(text("通知はありません").text_size(TEXT_SIZE).dyn_style(move |s| s.text_color(c(|t| t.on_surface_variant))))
-                .into_view();
-        }
-        let last = rows.len() - 1;
-        let mut list = div().flex_1().min_h(0.0).overflow_y_scroll().flex().flex_col().gap(ROW_GAP).pb(LIST_BOTTOM);
-        for (i, row) in rows.into_iter().enumerate() {
-            list = list.child(row_view(&state, row, (i == 0, i == last), expanded, color.clone()));
-        }
-        list.into_view()
-    });
+    let list = div()
+        .flex_1()
+        .min_h(0.0)
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .gap(ROW_GAP)
+        .pb(LIST_BOTTOM)
+        .dyn_style(move |s| if rows.with(Vec::is_empty) { s.hidden() } else { s })
+        .child(
+            for_each(
+                move || rows.get(),
+                Row::key,
+                move |row| row_view(&state, row.key(), rows, expanded, clearing, color.clone()),
+            )
+            // Rows close a gap, make room for an app opening, and an opened app's
+            // notifications come out from under its heading.
+            .moves(MOVE)
+            .enter(|s| s.opacity(0.0).translate(0.0, -ENTER_RISE))
+            .exit(|s| s.opacity(0.0))
+            .transition(MOVE),
+        );
 
     div()
         .w(PANEL_WIDTH)
@@ -219,30 +269,136 @@ pub fn panel(state: &State, expanded: Signal<HashSet<String>>) -> Div {
         .flex_col()
         .gap(HEADER_GAP)
         .child(header)
+        .child(empty)
         .child(list)
 }
 
 type Pick = fn(&ui_core::scheme::ColorTheme) -> ui_core::scheme::color::Color;
 
+/// How long "すべて消去" takes to slide `rows` away: each starts `CLEAR_STAGGER` after the one
+/// above it, up to the rows the panel shows.
+fn clear_duration(rows: usize) -> Duration {
+    CLEAR_STAGGER * rows.saturating_sub(1).min(CLEAR_STAGGERED) as u32 + SLIDE.duration
+}
+
+/// Where a row goes when it is let go of `offset` from its place: away to that side, or back.
+fn let_go(offset: f32) -> f32 {
+    if offset.abs() > ROW_WIDTH * DISMISS_RATIO { offset.signum() * GONE } else { 0.0 }
+}
+
+/// A row: its shape, and what moves it sideways. What is in it follows `rows`, so that it stays
+/// the same row while that changes, like its "5分前".
 fn row_view(
     state: &State,
-    row: Row,
-    (first, last): (bool, bool),
+    key: RowKey,
+    rows: Memo<Vec<Row>>,
     expanded: Signal<HashSet<String>>,
+    clearing: Signal<bool>,
     color: Rc<impl Fn(Pick) -> Color + 'static>,
 ) -> Div {
+    let current = move || rows.with(|rs| rs.iter().find(|r| r.key() == key).cloned());
     let hovered = signal(false);
-    let height = match row.kind {
+    let offset = animated(0.0f32);
+    let sideways = Rc::new(Cell::new(false));
+    let height = match key.1 {
         Kind::Card => CARD_HEIGHT,
         Kind::Head => HEAD_HEIGHT,
         Kind::Child => CHILD_HEIGHT,
     };
+    // Slides away to `to`, then dismisses what the row holds.
+    let slide_away = {
+        let state = state.clone();
+        Rc::new(move |to: f32| {
+            offset.to(to, SLIDE);
+            let ids = untrack(current).map(|r| r.ids).unwrap_or_default();
+            let state = state.clone();
+            set_timeout(SLIDE.duration, move || {
+                for id in &ids {
+                    state.dismiss_notification(*id);
+                }
+            });
+        })
+    };
+
+    // The store clears them all at the end; this only moves the row.
+    effect(move || {
+        if !clearing.get() {
+            return;
+        }
+        let index = untrack(|| rows.with(|rs| rs.iter().position(|r| r.key() == key))).unwrap_or(0);
+        set_timeout(CLEAR_STAGGER * index.min(CLEAR_STAGGERED) as u32, move || offset.to(GONE, SLIDE));
+    });
+
+    let content = {
+        let (color, slide_away) = (color.clone(), slide_away.clone());
+        dyn_view(move || match current() {
+            Some(row) => row_content(row, height, hovered, color.clone(), slide_away.clone()).into_view(),
+            None => div().into_view(),
+        })
+    };
+
+    let toggle = move |_: &PointerEvent| {
+        let Some(row) = untrack(current) else { return };
+        if row.toggles() {
+            expanded.update(|e| {
+                if !e.remove(&row.app) {
+                    e.insert(row.app.clone());
+                }
+            });
+        }
+    };
+
+    div()
+        .relative()
+        .w_full()
+        .h(height)
+        .flex_none()
+        .on_hover(move |h| hovered.set(h))
+        .dyn_style({
+            let c = color.clone();
+            move |s| {
+                let (first, last) = rows.with(|rs| {
+                    (rs.first().is_some_and(|r| r.key() == key), rs.last().is_some_and(|r| r.key() == key))
+                });
+                let toggles = current().is_some_and(|r| r.toggles());
+                let x = offset.get();
+                let s = s
+                    .bg(c(|t| t.surface_container_high))
+                    .rounded_t(if first { OUTER_RADIUS } else { INNER_RADIUS })
+                    .rounded_b(if last { OUTER_RADIUS } else { INNER_RADIUS })
+                    .translate(x, 0.0)
+                    .opacity(1.0 - (x.abs() / ROW_WIDTH).min(1.0) * 0.8);
+                if toggles { s.cursor(CursorIcon::Pointer) } else { s }
+            }
+        })
+        // Dragged sideways with the mouse, it follows; let go far enough and it goes.
+        .on_grab(move |e| match e.phase {
+            GrabPhase::Start => sideways.set(e.total.x.abs() > e.total.y.abs()),
+            GrabPhase::Move if sideways.get() => offset.set(e.total.x),
+            GrabPhase::End if sideways.get() => match let_go(offset.get_untracked()) {
+                0.0 => offset.to(0.0, SLIDE),
+                to => slide_away(to),
+            },
+            GrabPhase::Cancel => offset.to(0.0, SLIDE),
+            _ => {}
+        })
+        .on_click(toggle)
+        .child(content)
+}
+
+/// What is in a row: the icon, the lines, and the ✕ and the count.
+fn row_content(
+    row: Row,
+    height: f32,
+    hovered: Signal<bool>,
+    color: Rc<impl Fn(Pick) -> Color + 'static>,
+    slide_away: Rc<dyn Fn(f32)>,
+) -> Div {
     let pill = row.pill();
     // The ✕ only shows on hover, but the text stops short of it anyway, so that hovering
     // doesn't reflow it.
     let pill_width = pill.as_ref().map_or(0.0, |count| 10.0 + measure(SMALL_SIZE)(count) + 2.0 + CHEVRON + 6.0 + 4.0);
     let text_width = ROW_WIDTH - TEXT_X - ROW_PADDING - pill_width - BUTTON_SIZE - 8.0;
-    let critical = row.critical;
 
     let line = |content: &str, size: f32, pick: Pick| {
         let color = color.clone();
@@ -252,7 +408,7 @@ fn row_view(
             .whitespace_nowrap()
             .dyn_style(move |s| s.text_color(color(pick)))
     };
-    let primary: Pick = if critical { |t| t.error } else { |t| t.on_surface };
+    let primary: Pick = if row.critical { |t| t.error } else { |t| t.on_surface };
     let mut lines = div().flex().flex_col();
     if row.kind != Kind::Child {
         lines = lines.child(line(&row.header, SMALL_SIZE, |t| t.on_surface_variant));
@@ -261,16 +417,6 @@ fn row_view(
         lines = lines.child(line(&row.title, TEXT_SIZE, primary)).child(line(&row.text, TEXT_SIZE, |t| t.on_surface_variant));
     }
 
-    let ids = row.ids.clone();
-    let dismiss = {
-        let state = state.clone();
-        move |e: &PointerEvent| {
-            e.stop_propagation();
-            for id in &ids {
-                state.dismiss_notification(*id);
-            }
-        }
-    };
     let button_bg = color.clone();
     let mut controls = div().flex().flex_row().items_center().gap(4.0).child(
         div()
@@ -284,7 +430,10 @@ fn row_view(
                 let s = s.bg(button_bg(|t| t.surface_container_highest)).text_color(button_bg(|t| t.on_surface_variant));
                 if hovered.get() { s } else { s.opacity(0.0) }
             })
-            .on_click(dismiss)
+            .on_click(move |e| {
+                e.stop_propagation();
+                slide_away(GONE);
+            })
             .child(sized_icon(icons::CLOSE, BUTTON_ICON)),
     );
     if let Some(count) = pill {
@@ -307,37 +456,14 @@ fn row_view(
     }
 
     let top = if row.kind == Kind::Child { CHILD_PADDING } else { ROW_PADDING };
-    let mut view = div()
-        .relative()
-        .w_full()
-        .h(height)
-        .flex_none()
-        .rounded_t(if first { OUTER_RADIUS } else { INNER_RADIUS })
-        .rounded_b(if last { OUTER_RADIUS } else { INNER_RADIUS })
-        .on_hover(move |h| hovered.set(h))
-        .dyn_style({
-            let c = color.clone();
-            move |s| s.bg(c(|t| t.surface_container_high))
-        });
+    let mut view = div().absolute().left(0.0).top(0.0).size_full();
     if row.kind != Kind::Child {
         let icon_top = if row.kind == Kind::Head { (height - ICON_SIZE) / 2.0 } else { ROW_PADDING };
         view = view.child(icon(&row, color.clone()).absolute().left(ROW_PADDING).top(icon_top));
     }
     let lines_top = if row.kind == Kind::Head { (height - SMALL_SIZE * LINE_HEIGHT) / 2.0 } else { top };
-    view = view
-        .child(lines.absolute().left(TEXT_X).top(lines_top))
-        .child(controls.absolute().right(ROW_PADDING).top(ROW_PADDING));
-    if row.toggles() {
-        let app = row.app.clone();
-        view = view.cursor(CursorIcon::Pointer).on_click(move |_| {
-            expanded.update(|e| {
-                if !e.remove(&app) {
-                    e.insert(app.clone());
-                }
-            })
-        });
-    }
-    view
+    view.child(lines.absolute().left(TEXT_X).top(lines_top))
+        .child(controls.absolute().right(ROW_PADDING).top(ROW_PADDING))
 }
 
 /// The sender's icon in a circle, or its app's initial without one.
@@ -365,6 +491,22 @@ mod tests {
         assert_eq!(ago(Duration::from_secs(5 * 60)), "5分前");
         assert_eq!(ago(Duration::from_secs(3 * 3600)), "3時間前");
         assert_eq!(ago(Duration::from_secs(2 * 86400)), "2日前");
+    }
+
+    #[test]
+    fn a_row_let_go_far_enough_goes_to_that_side_and_otherwise_comes_back() {
+        let far = ROW_WIDTH * DISMISS_RATIO + 1.0;
+        assert_eq!(let_go(far), GONE);
+        assert_eq!(let_go(-far), -GONE);
+        assert_eq!(let_go(ROW_WIDTH * DISMISS_RATIO - 1.0), 0.0);
+        assert_eq!(let_go(0.0), 0.0);
+    }
+
+    #[test]
+    fn clearing_staggers_only_the_rows_in_view() {
+        assert_eq!(clear_duration(1), SLIDE.duration);
+        assert_eq!(clear_duration(3), CLEAR_STAGGER * 2 + SLIDE.duration);
+        assert_eq!(clear_duration(50), CLEAR_STAGGER * CLEAR_STAGGERED as u32 + SLIDE.duration);
     }
 
     #[test]
