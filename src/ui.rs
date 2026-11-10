@@ -604,6 +604,9 @@ pub fn bar(state: &State, width: f32, parts: Vec<Part>, input: Signal<Vec<RectI>
         .h(BAR_TOP + BAR_HEIGHT)
         .select_none()
         .font_family("Noto Sans CJK JP")
+        // ponytail: drops are only logged, as in the Skia bar; a part takes them when one needs to.
+        .on_drop_files(|files, _| log::info!("Dropped files: {files:?}"))
+        .on_drop_text(|text, _| log::info!("Dropped text: {text:?}"))
         .child(silhouette)
         .child(row)
         .children(island_views)

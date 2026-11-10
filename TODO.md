@@ -94,8 +94,10 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
 - [ ] 実機で確認：`notify-send` で落ちてくる、クリックで消える、`+n`、critical の色
 
 ### Phase 4: 残り
-- [ ] DnD：AntiWebUI の OS DnD がレイヤー面で動くか確認し、`dnd.rs` の代わりにする
-- [ ] notification_icon（D-Bus の画像データ → bitmap）
+- [x] DnD：`dnd.rs` を消し、バーの root の `on_drop_files` / `on_drop_text` にした。Skia 版と同じくログに出すだけ（受け取るパートはまだない）
+  - AntiWebUI の `wl_data_device` は面を区別しないので、レイヤー面にも届くはず
+  - [ ] 実機で確認：ファイルマネージャからバーにファイルを落とすと `RUST_LOG=info` で `Dropped files` が出る
+- [x] notification_icon：Phase 3 でやった（`player_art::pixels` で `ImageSource`）
 - [ ] 出力の抜き差し（`for_each_output` に任せる）を確かめる
 
 ### Phase 5: 片付け

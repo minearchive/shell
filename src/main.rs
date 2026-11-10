@@ -18,7 +18,7 @@ mod state;
 mod system;
 mod ui;
 
-// ponytail: the rest of the Skia UI (`dnd`, `output`, `seat`, and the
+// ponytail: the rest of the Skia UI (`output`, `seat`, and the
 // components not yet in `components/mod.rs`) is out of the build while Phase 2 of TODO.md
 // ports it to AntiWebUI; the files stay as reference.
 
