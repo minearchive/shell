@@ -75,7 +75,7 @@ The bar itself is one event loop (`calloop`) driving N `Screen`s (one per
 Wayland output). `Shell` (in `src/main.rs`) owns all Wayland/SCTK state; its SCTK
 handlers live in `src/output.rs` (compositor, output, layer), `src/seat.rs` (seat,
 pointer) and `src/dnd.rs` (data device). Per output it creates a `Top`-layer surface anchored to the
-bottom/left/right edges with a 60px exclusive zone. The surface is taller than that:
+bottom/left/right edges with a `BAR_HEIGHT` (48px) exclusive zone. The surface is taller than that:
 the headroom above the bar is transparent and click-through, and islands grow into it.
 A second, `Overlay`-layer surface per output along the top edge (`src/banner.rs`) shows the
 notification on display as a card that drops in from the top; it is not an island.

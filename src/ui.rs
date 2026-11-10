@@ -37,7 +37,7 @@ use crate::{
     system::{SystemCommand, SystemStatus},
 };
 
-pub const BAR_HEIGHT: u32 = 60;
+pub const BAR_HEIGHT: u32 = 48;
 /// Headroom above the bar that islands can grow into. The surface always includes
 /// it, transparent and click-through, so growing never waits on a configure.
 ///
@@ -708,7 +708,7 @@ mod tests {
 
     const SIZE: (i32, i32) = (800, (ISLAND_MAX_HEIGHT + BAR_HEIGHT) as i32);
     const ABOVE_BAR: i32 = BAR_TOP as i32 - 5;
-    const IN_BAR: i32 = BAR_TOP as i32 + 50;
+    const IN_BAR: i32 = BAR_TOP as i32 + BAR_HEIGHT as i32 / 2;
 
     #[test]
     fn center_slots_stay_centered_on_the_bar() {

@@ -177,11 +177,11 @@ mod tests {
     #[test]
     fn holes_cover_the_bar_and_map_the_island_onto_the_screen() {
         let size = (1920, 1080);
-        let bar = [0, 1020, 1920, 60];
+        let bar = [0, 1080 - BAR_HEIGHT as i32, 1920, BAR_HEIGHT as i32];
         assert_eq!(catcher_holes(size, None), [bar]);
 
         // The bar's surface starts this far down the screen.
-        let surface_top = 1080 - 60 - ISLAND_MAX_HEIGHT as i32;
+        let surface_top = 1080 - BAR_HEIGHT as i32 - ISLAND_MAX_HEIGHT as i32;
         let island = LayoutRect::new(1540.0, 44.5, 380.0, 255.5);
         assert_eq!(
             catcher_holes(size, Some(island)),
