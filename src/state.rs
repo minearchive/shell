@@ -149,14 +149,22 @@ impl State {
         let kdeconnect = KDEConnectClient::init(ui_channel(|e: KDEConnectEvent| debug!("{e:?}")));
 
         let warp_commands = WarpClient::init(ui_channel(move |s: WarpStatus| warp.set(Some(s))));
-        // The volume comes from PipeWire, as it changes; the polled status has none.
+        // The volume comes from PipeWire and the brightness from the backlight's inotify, as
+        // they change; the polled status has neither.
         let system_commands = system::start(ui_channel(move |s: SystemStatus| {
-            system.update(|status| *status = SystemStatus { volume: status.volume, ..s })
+            system.update(|status| {
+                *status = SystemStatus { volume: status.volume, brightness: status.brightness, ..s }
+            })
         }));
         let audio = anti_webui::shell::audio();
         effect(move || {
             let volume = audio.default_sink().map(|sink| Volume { level: sink.volume as f32, muted: sink.muted });
             untrack(|| system.update(|s| s.volume = volume));
+        });
+        let session = anti_webui::shell::session();
+        effect(move || {
+            let brightness = session.brightness().map(|b| b as f32);
+            untrack(|| system.update(|s| s.brightness = brightness));
         });
 
         let state = Self {

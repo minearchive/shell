@@ -11,13 +11,11 @@ use tokio::{
 use zbus::{proxy::CacheProperties, zvariant::OwnedValue, Connection};
 
 /// What the user adjusts from the bar: a change made elsewhere shows up this fast.
-const FAST_POLL: Duration = Duration::from_secs(1);
 const SLOW_POLL: Duration = Duration::from_secs(5);
 /// `bluetoothctl` waits forever when bluetoothd is down or stuck.
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
 
 const POWER_SUPPLIES: &str = "/sys/class/power_supply";
-const BACKLIGHTS: &str = "/sys/class/backlight";
 const BLUETOOTH_ADAPTERS: &str = "/sys/class/bluetooth";
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -135,9 +133,7 @@ async fn run(sender: Sender<SystemStatus>, mut cmd_rx: mpsc::UnboundedReceiver<S
         .map_err(|e| log::warn!("system: no system bus: {e}"))
         .ok();
 
-    let mut fast = interval(FAST_POLL);
     let mut slow = interval(SLOW_POLL);
-    fast.set_missed_tick_behavior(MissedTickBehavior::Skip);
     slow.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
     let mut status = SystemStatus::default();
@@ -170,9 +166,7 @@ async fn run(sender: Sender<SystemStatus>, mut cmd_rx: mpsc::UnboundedReceiver<S
                     set_power_profile(bus, value).await;
                     read_power_profiles(&mut status, bus).await;
                 }
-                read_fast(&mut status).await;
             }
-            _ = fast.tick() => read_fast(&mut status).await,
             _ = slow.tick() => {
                 read_slow(&mut status).await;
                 if let Some(bus) = &system_bus {
@@ -186,11 +180,6 @@ async fn run(sender: Sender<SystemStatus>, mut cmd_rx: mpsc::UnboundedReceiver<S
             last = Some(status.clone());
         }
     }
-}
-
-/// `volume` isn't read here: PipeWire tells the UI thread of it as it changes (`State::start`).
-async fn read_fast(status: &mut SystemStatus) {
-    status.brightness = read_brightness(Path::new(BACKLIGHTS));
 }
 
 async fn read_slow(status: &mut SystemStatus) {
@@ -342,13 +331,6 @@ fn read_battery(power_supplies: &Path) -> Option<Battery> {
         })
 }
 
-fn read_brightness(backlights: &Path) -> Option<f32> {
-    let path = fs::read_dir(backlights).ok()?.flatten().next()?.path();
-    let current: f32 = read_trimmed(&path.join("brightness"))?.parse().ok()?;
-    let max: f32 = read_trimmed(&path.join("max_brightness"))?.parse().ok()?;
-    (max > 0.0).then_some(current / max)
-}
-
 fn read_trimmed(path: &Path) -> Option<String> {
     Some(fs::read_to_string(path).ok()?.trim().to_string())
 }
@@ -459,15 +441,6 @@ mod tests {
         write_files(&supplies.join("BAT0"), &[("status", "Not charging\n")]);
         let limited = read_battery(&supplies).unwrap();
         assert_eq!(limited.state, BatteryState::Discharging);
-
-        let backlights = root.join("backlights");
-        fs::create_dir_all(&backlights).unwrap();
-        assert_eq!(read_brightness(&backlights), None);
-        write_files(
-            &backlights.join("intel"),
-            &[("brightness", "50\n"), ("max_brightness", "200\n")],
-        );
-        assert_eq!(read_brightness(&backlights), Some(0.25));
 
         fs::remove_dir_all(&root).unwrap();
     }
