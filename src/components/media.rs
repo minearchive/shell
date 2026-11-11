@@ -474,8 +474,11 @@ fn traveling(
         })
     };
 
+    // The texts exist only while the island shows: hidden ones here still painted, faintly,
+    // above the bar's title (AntiWebUI f2fd04c).
+    let shown = memo(move || frame.with(Option::is_some));
     let lines = dyn_view(move || {
-        let Some(c) = card.get() else {
+        let Some(c) = card.get().filter(|_| shown.get()) else {
             return div().into_view();
         };
         let title_lines = c.title.len();
@@ -512,15 +515,22 @@ fn traveling(
     });
 
     // Fading over only half the way keeps what the two titles share solid throughout.
-    let title = text(move || bar_title(track))
-        .absolute()
-        .text_size(BAR_TEXT_SIZE)
-        .whitespace_nowrap()
-        .dyn_style(move |s| {
-            let Some(f) = frame.get() else { return s.hidden() };
-            let (x, y) = first_line(f);
-            s.left(x).top(y).opacity(((1.0 - progress()) * 2.0).min(1.0)).text_color(bar_color())
-        });
+    let title = dyn_view(move || {
+        if !shown.get() {
+            return div().into_view();
+        }
+        let bar_color = bar_color.clone();
+        text(move || bar_title(track))
+            .absolute()
+            .text_size(BAR_TEXT_SIZE)
+            .whitespace_nowrap()
+            .dyn_style(move |s| {
+                let Some(f) = frame.get() else { return s.hidden() };
+                let (x, y) = first_line(f);
+                s.left(x).top(y).opacity(((1.0 - progress()) * 2.0).min(1.0)).text_color(bar_color())
+            })
+            .into_view()
+    });
 
     div().relative().child(art_view).child(lines).child(title)
 }
