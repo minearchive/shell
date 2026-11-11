@@ -32,10 +32,10 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
 - [x] `CLOCK_TICK`：期限切れの確認は毎秒の tick スレッド＋`ui_channel`（`set_timeout` はウィンドウごとのタイマーで、Shell のルートでは使えない）。時計は `local_time(Every::Minute)`
 - [x] 単一インスタンスのソケットはそのまま。`action` は連番付きの signal（同じ action が 2 回来ても読む側が走り直す）
 - [x] 仮のバー（`main.rs` の `bar`）に全プロバイダの値が出ることを確認した。Phase 2 で消す
-- [ ] テーマを MD3E の配色に写す → Phase 2（md3e の対応表と一緒に）
+- [x] テーマを MD3E の配色に写す → Phase 2 でやった（`ui::md3e_scheme`）
 - 気付いたこと
-  - `example/theme.toml` は .gitignore 対象で worktree に来ない。ないと既定の `Theme` が全部透明で、何も見えない。既定値を見える色にするか、ないときに警告以上を出す
-  - niri の IPC は変化のときしかイベントが来ないので、起動直後は ws / タイトルが空。最初に `Request::Workspaces` / `FocusedWindow` を引く
+  - [ ] `example/theme.toml` は .gitignore 対象で worktree に来ない。ないと既定の `Theme` が全部透明で、何も見えない。既定値を見える色にするか、ないときに警告以上を出す
+  - [ ] niri の IPC は変化のときしかイベントが来ないので、起動直後は ws / タイトルが空。最初に `Request::Workspaces` / `FocusedWindow` を引く
   - 起動時に Vulkan ローダの ERROR が出る：システムの Mesa の radeon / lvp の ICD が、devShell の glibc より新しい glibc を要求して読み込めない。Intel の ICD は読めているので描画には影響しない
   - [x] バーの文字がマウスで選択できてしまう → バー全体に `select_none`
 
@@ -111,89 +111,50 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
   - AntiWebUI の git 依存の `outputHashes` を足した。rev を上げたら更新する
 - [x] CLAUDE.md と docs を AntiWebUI の構成に書き直した。docs/widgets.md は部品のクレートと一緒に消した
 
-## Rendering
-- [ ] Optimized rendering
+## フォント
+- [ ] フォールバック：Roboto を主にし、CJK の字は Noto Sans CJK JP で出す（今はバーの root で Noto Sans CJK JP だけを指定している）。AntiWebUI のフォント指定でフォールバックが組めるか調べる
+- [ ] フォントをファイルから読む
 
-## Fonts
-- [ ] Font fallback: Roboto as primary + Noto Sans CJK JP as fallback for CJK glyphs (currently `FontBook` only holds one typeface per key; needs per-char `unichar_to_glyph` check + `match_family_style_character`, with the fallback typeface resolution cached, not called per-draw)
-- [ ] From file
-
-## Audio
-- [x] status provider
-- [ ] setting for each process
+## 音声
+- [x] 状態（AntiWebUI の `shell-audio`）
+- [ ] アプリごとの音量
 - [ ] EQ
-- [ ] OSD
+- [ ] OSD（音量・明るさを変えたとき）
 
-## Battery
-- [x] status provider
-- [ ] alert
+## 電池
+- [x] 状態
+- [ ] 残量が少ないときの警告
 
-## Monitor
-- [ ] light level
-- [ ] mirroring in niri
+## モニター
+- [ ] 状態
+- [ ] 明るさセンサー（light level）
+- [ ] niri でのミラーリング
+- [ ] システムの資源（CPU、メモリ、温度。AntiWebUI の `shell-system` が使えるかも）
 
-## LocalSend & Quickshare
-- [ ] support
-- [ ] custom widget
-- [ ] drag and drop
+## LocalSend / Quick Share
+- [ ] 対応
+- [ ] 専用の表示
+- [ ] ドラッグ＆ドロップ（バーの root の `on_drop_files` から）
 
 ## IPC
-- [ ] mapping all niri events
-- [ ] mapping all hyprland events
-- [ ] IPC events
+- [ ] niri のイベントを全部写す
+- [ ] Hyprland のイベントを写す（今はスタブ。AntiWebUI の `shell-hyprland` も候補）
+- [ ] `IPCEvent` を増やす
 
-## DBUS
-- [ ] kde-connect
-  - [x] Handling Connect/Disconnect
-  - [ ] Notification mapping, tagging it from which device
-- [x] notification
-- [x] cloudflare-warp 
-- [ ] network stats, event
+## D-Bus
+- [ ] KDE Connect
+  - [x] 接続・切断
+  - [ ] 通知を写し、どの端末からかを付ける
+  - [ ] どこかに表示する（今はどこにも出ていない）
+- [x] 通知
+- [x] Cloudflare WARP
+- [ ] ネットワークの統計とイベント（今は 5 秒のポーリング。AntiWebUI の `shell-network` が候補）
 
-## Monitor
-- [ ] status provider
-- [ ] mirroring in niri
-- [ ] system resources
+## シェル
+- [ ] キーボード入力（バーで要るようになったら）
+- [ ] デザインを決める
 
-## Shell
-- [x] set keyboard interactivity to None at creation, drop the pointer Enter hack
-- [ ] keyboard input, only if the bar ever needs it (needs get_keyboard_with_repeat)
-- [ ] make design.
-- [ ] z-order based rendering
-
-## Component
-- [ ] Material3 Main Component
-  - [x] Button
-    - [x] Normal
-    - [x] Icon
-    - [x] Radio
-    - [x] Segmented
-  - [x] Slider
-  - [x] CheckBox
-  - [x] Divider
-  - [x] ListItem
-  - [ ] Textbox
-    - [x] keyboard input, cursor, paste
-    - [x] selection range
-    - [x] copy/cut
-    - [ ] IME / preedit, adapters only since Commit is the one insertion path
-  - [ ] DatePicker
-  - [x] Chips
-    - [x] Assist
-    - [x] Filter
-    - [ ] Input
-    - [ ] Suggestion
-  - [ ] Navigation
-    - [ ] drawer
-    - [ ] rail
-- [ ] General Positioning Component
-  - [x] Scrollable
-  - [x] Row
-  - [x] Column
-  - [ ] Stack
-  - [x] Align
-
-# Setting GUI
-- [ ] Itegrate with main
-  - [ ] realtime mapping with config
-  - [ ] event separate from bar
+# 設定 GUI
+- [ ] 本体と統合する
+  - [ ] 設定ファイルとリアルタイムに対応させる
+  - [ ] イベントをバーと分ける
