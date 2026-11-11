@@ -14,8 +14,8 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
 - [x] effect から `LayerHandle::set_input_region(Rects)` を呼び、余白をクリックが通り抜ける
 - [x] アニメーションの途中でクリックしても反転する（easing で止まって見えただけだった）
 - [x] 計測：CPU / メモリ / GPU を今のバーと比べる
-  - `spike/measure.sh <プロセス名> [秒]`：CPU、RSS / PSS、DRM fdinfo の GPU 使用率
-  - `spike/shmem.sh "$PWD" <バイナリ>`：実際の RAM（i915 の GPU バッファも wl_shm も Shmem に載る）
+  - `scripts/measure.sh <プロセス名> [秒]`：CPU、RSS / PSS、DRM fdinfo の GPU 使用率
+  - `scripts/shmem.sh "$PWD" <バイナリ>`：実際の RAM（i915 の GPU バッファも wl_shm も Shmem に載る）
   - CPU：spike は開閉させ続けても 0.3〜0.4%、render エンジン 0.03%
   - fdinfo の「GPU メモリ 225 MB」は見かけ。i915 はドライバが作ったバッファの大きさを数えていて、裏のページではない
     - 素の wgpu Vulkan デバイス（`spike/src/bin/bare.rs`）だけで 216 MB と出る。アダプタだけなら 0。AntiWebUI のせいではない
@@ -101,9 +101,14 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
 - [ ] 出力の抜き差し（`for_each_output` に任せる）を確かめる
 
 ### Phase 5: 片付け
-- [ ] `ui_core` / `ui_widget` / `m3_widget` / `m3_test` / `macros` を消す（m3_widget を AntiWebUI の MD3E に置き換えると決めた場合）
-- [ ] `output.rs` / `seat.rs` / `dnd.rs` / calloop / sctk / skia を依存から外す
-- [ ] flake：skia-binaries を外し、vulkan-loader と pipewire をパッケージの `wrapProgram` の `LD_LIBRARY_PATH` にも足す（devShell には足した）。GTK の残骸も消す
+- [x] `ui_widget` / `m3_widget` / `m3_test` / `macros` と `spike` クレートを消した（計測スクリプトは `scripts/` に残した）
+  - `ui_core` は残し、skia を使う所（`island_path`、`FontBook`、`BoundingBox`、`to_skia`、`Color4f`）と `pointer` / `keyboard` を消した。残りは幾何、配色、easing、`IslandMorph`、`elide` / `wrap_text`
+  - skia の `island_path` のテストは `ui.rs` の kurbo 版に移した
+- [x] `output.rs` / `seat.rs` / `dnd.rs` を消し、skia を依存から外した（calloop / sctk はもう入っていなかった）
+  - 画像のデコード・縮小・アクセント色・通知アイコンの角丸は `image` クレート（AntiWebUI と同じ 0.25 なので、ビルドに増えるものはない）
+- [x] flake：skia-binaries と GTK、clang / cmake / ninja を外した。リンクに要るのは dbus、fontconfig、wayland、libxkbcommon、libxcb（AntiWebUI の X11 バックエンドが常に入るため）
+  - パッケージの `wrapProgram` に、devShell と同じ `LD_LIBRARY_PATH`（vulkan-loader、mesa、libGL、wayland、libxkbcommon、pipewire）を足した。`nix build` が通ることを確認済み
+  - AntiWebUI の git 依存の `outputHashes` を足した。rev を上げたら更新する
 - [ ] CLAUDE.md、docs/widgets.md、docs/components.md を書き直す
 
 ## Rendering

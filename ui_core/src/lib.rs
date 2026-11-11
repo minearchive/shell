@@ -1,11 +1,8 @@
-//! Generic widget toolkit: presentation-only building blocks
-//! (drawing, color scheme, fonts, animation)
+//! What the bar keeps from its old widget toolkit: geometry, the color scheme, easing and the
+//! island's morph, text fitting.
 
 pub mod animation;
-pub mod font;
 pub mod geometry;
 pub mod island;
-pub mod keyboard;
-pub mod pointer;
 pub mod scheme;
 pub mod util;

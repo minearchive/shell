@@ -2,8 +2,8 @@
 # Real RAM a GPU process costs: Shmem and MemAvailable before and while it runs, several times.
 # i915 keeps GPU buffers in shmem, and wl_shm buffers are memfds, so Shmem catches both bars'.
 # MemAvailable is too noisy to read alone; it is there to catch a gross difference.
-# Usage: spike/shmem.sh <worktree> <binary path> [env...]
-#   spike/shmem.sh "$PWD" ./target/release/spike
+# Usage: scripts/shmem.sh <worktree> <binary path> [env...]
+#   scripts/shmem.sh "$PWD" ./target/release/my_shell
 cd "$1"; bin=$2; shift 2
 name=$(basename "$bin")
 m() { awk -v k="$1" '$1 == k":" { print $2 }' /proc/meminfo; }

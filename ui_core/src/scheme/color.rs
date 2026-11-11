@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use skia_safe::Color4f;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
 #[serde(try_from = "String")]
@@ -61,16 +60,6 @@ impl TryFrom<String> for Color {
     }
 }
 
-impl From<Color> for Color4f {
-    fn from(val: Color) -> Self {
-        Color4f {
-            r: val.r,
-            g: val.g,
-            b: val.b,
-            a: val.a,
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

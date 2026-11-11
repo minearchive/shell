@@ -1,12 +1,5 @@
 [workspace]
-members = [
-    "m3_test",
-    "spike",
-    "m3_widget",
-    "macros",
-    "ui_core",
-    "ui_widget"
-]
+members = ["ui_core"]
 
 
 [workspace.package]
@@ -15,23 +8,14 @@ edition = "2021"
 # Shared dependency versions for every workspace member. Members opt in with
 # `<name>.workspace = true` and may add extra features locally.
 [workspace.dependencies]
-skia-safe = "0.97.2"
-skia-bindings = "0.97.2"
 serde = { version = "1.0.228", features = ["derive"] }
-winit = "0.30"
-softbuffer = "0.4"
 toml = "1.1.2"
-taffy = "0.12.2"
 # Pinned: it is days old and changes daily. See TODO.md.
 anti-webui = { git = "https://github.com/bea4dev/AntiWebUI", rev = "f2fd04c2f16006c3e8aa95047a506d9cd3db3970", default-features = false, features = ["wayland", "wayland-shell", "shell-audio", "shell-session"] }
 anti-webui-md3e = { git = "https://github.com/bea4dev/AntiWebUI", rev = "f2fd04c2f16006c3e8aa95047a506d9cd3db3970" }
 kurbo = "0.13"
 # internal crates
-macros = { path = "./macros" }
 ui_core = { path = "./ui_core" }
-ui_widget = { path = "./ui_widget" }
-m3_widget = { path = "./m3_widget" }
-m3_test = { path = "./m3_test" }
 
 [package]
 name = "my_shell"
@@ -52,10 +36,10 @@ notify = "8.2.0"
 serde.workspace = true
 serde_json = "1.0"
 clap = { version = "4", features = ["derive"] }
-skia-bindings.workspace = true
-skia-safe.workspace = true
 tokio = { version = "1.52.3", features=["rt","macros","sync","time","process"]}
 zbus = { version = "5.16.0", default-features = false, features = ["tokio"] }
 toml.workspace = true
 futures-util = "0.3.32"
+# The version AntiWebUI decodes with, so it adds nothing to the build.
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 ui_core.workspace = true

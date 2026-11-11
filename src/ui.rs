@@ -194,8 +194,8 @@ fn island_rects(request: &IslandRequest, width: f32) -> (LayoutRect, LayoutRect)
     }
 }
 
-/// The outline of `bar` with `island` growing from its top edge, as
-/// `ui_core::island::island_path` draws it. `island`'s bottom must sit on `bar`'s top.
+/// The outline of `bar` with `island` growing from its top edge. `island`'s bottom must sit
+/// on `bar`'s top.
 /// `corner` rounds the island's top corners and `fillet` flares its base into the bar; both
 /// shrink as the island gets too small to fit them. A side flush with the end of the bar
 /// stays square, since that is the edge of the screen.
@@ -790,5 +790,37 @@ mod tests {
         island_path(&mut path, bar, LayoutRect::new(400.0, BAR_TOP, 0.0, 0.0), 28.0, 20.0);
         let bounds = kurbo::Shape::bounding_box(&path);
         assert_eq!(bounds, kurbo::Rect::new(0.0, BAR_TOP as f64, 800.0, (BAR_TOP + BAR_HEIGHT) as f64));
+    }
+
+    fn path_of(bar: LayoutRect, island: LayoutRect) -> BezPath {
+        let mut path = BezPath::new();
+        island_path(&mut path, bar, island, 24.0, 12.0);
+        path
+    }
+
+    fn contains(path: &BezPath, (x, y): (f64, f64)) -> bool {
+        kurbo::Shape::contains(path, kurbo::Point::new(x, y))
+    }
+
+    #[test]
+    fn island_path_joins_the_island_to_the_bar() {
+        let bar = LayoutRect::new(0.0, 100.0, 400.0, 60.0);
+        let path = path_of(bar, LayoutRect::new(150.0, 40.0, 100.0, 60.0));
+        assert!(contains(&path, (200.0, 45.0)), "island body");
+        assert!(contains(&path, (200.0, 130.0)), "bar body");
+        assert!(!contains(&path, (151.0, 41.0)), "rounded top corner");
+        assert!(contains(&path, (149.0, 99.0)), "fillet flares into the bar");
+        assert!(!contains(&path, (140.0, 90.0)), "outside the fillet");
+    }
+
+    #[test]
+    fn island_path_stays_square_at_the_end_of_the_bar() {
+        let bar = LayoutRect::new(0.0, 100.0, 400.0, 60.0);
+        let path = path_of(bar, LayoutRect::new(300.0, 40.0, 100.0, 60.0));
+        assert!(contains(&path, (399.5, 40.5)), "flush side stays square");
+        assert!(!contains(&path, (301.0, 41.0)), "free side is rounded");
+        assert!(contains(&path, (299.0, 99.0)), "free side flares into the bar");
+        let edge = path_of(bar, LayoutRect::new(0.0, 40.0, 100.0, 60.0));
+        assert_eq!(kurbo::Shape::bounding_box(&edge).x0, 0.0);
     }
 }

@@ -4,15 +4,12 @@
 use std::{collections::HashMap, env, fs, path::PathBuf};
 
 use log::debug;
-use skia_safe::{
-    images, surfaces, AlphaType, ColorType, Data, FilterMode, Image, ImageInfo, MipmapMode, Paint,
-    RRect, Rect, SamplingOptions,
-};
+use image::{imageops::FilterType, RgbaImage};
 use zbus::zvariant::Value;
 
 /// The size icons are drawn at in the island, which they get scaled to right here so
 /// that repaints don't have to.
-pub const ICON_SIZE: i32 = 48;
+pub const ICON_SIZE: u32 = 48;
 const ICON_RADIUS: f32 = 10.0;
 /// More than any real icon. A sender can name any file, even a huge one.
 const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
@@ -27,7 +24,7 @@ type RawImage = (i32, i32, i32, bool, i32, i32, Vec<u8>);
 
 /// Tries each source in the spec's order, moving on from any that doesn't work out.
 /// `desktop-entry` isn't an icon by the spec, but usually names one.
-pub fn resolve(app_icon: &str, hints: &HashMap<String, Value<'_>>) -> Option<Image> {
+pub fn resolve(app_icon: &str, hints: &HashMap<String, Value<'_>>) -> Option<RgbaImage> {
     let hint_str = |key: &str| hints.get(key).and_then(|v| <&str>::try_from(v).ok());
     let raw = |key: &str| hints.get(key).and_then(from_hint);
 
@@ -38,15 +35,15 @@ pub fn resolve(app_icon: &str, hints: &HashMap<String, Value<'_>>) -> Option<Ima
         .or_else(|| from_name(app_icon))
         .or_else(|| raw("icon_data"))
         .or_else(|| from_name(hint_str("desktop-entry")?))
-        .and_then(|image| thumbnail(&image))
+        .map(|image| thumbnail(&image))
 }
 
-fn from_hint(value: &Value<'_>) -> Option<Image> {
+fn from_hint(value: &Value<'_>) -> Option<RgbaImage> {
     let raw: RawImage = value.try_clone().ok()?.try_into().ok()?;
     from_raw(raw)
 }
 
-fn from_raw((width, height, stride, _alpha, bits, channels, data): RawImage) -> Option<Image> {
+fn from_raw((width, height, stride, _alpha, bits, channels, data): RawImage) -> Option<RgbaImage> {
     let dimensions_ok =
         (1..=MAX_DIMENSION).contains(&width) && (1..=MAX_DIMENSION).contains(&height);
     if !dimensions_ok || bits != 8 || !matches!(channels, 3 | 4) {
@@ -69,16 +66,10 @@ fn from_raw((width, height, stride, _alpha, bits, channels, data): RawImage) -> 
             rgba.push(if channels == 4 { pixel[3] } else { 255 });
         }
     }
-    let info = ImageInfo::new(
-        (width, height),
-        ColorType::RGBA8888,
-        AlphaType::Unpremul,
-        None,
-    );
-    images::raster_from_data(&info, Data::new_copy(&rgba), w * 4)
+    RgbaImage::from_raw(w as u32, h as u32, rgba)
 }
 
-fn from_name(name: &str) -> Option<Image> {
+fn from_name(name: &str) -> Option<RgbaImage> {
     let path = icon_path(name, &data_dirs())?;
     let metadata = fs::metadata(&path).ok()?;
     if !metadata.is_file() || metadata.len() > MAX_FILE_BYTES {
@@ -86,11 +77,10 @@ fn from_name(name: &str) -> Option<Image> {
         return None;
     }
     let bytes = fs::read(&path).ok()?;
-    let image = Image::from_encoded(Data::new_copy(&bytes));
-    if image.is_none() {
-        debug!("Could not decode notification icon {path:?}");
-    }
-    image
+    image::load_from_memory(&bytes)
+        .inspect_err(|err| debug!("Could not decode notification icon {path:?}: {err}"))
+        .ok()
+        .map(|image| image.into_rgba8())
 }
 
 /// A `file://` URI, an absolute path, or an icon's name.
@@ -108,8 +98,7 @@ fn icon_path(name: &str, data_dirs: &[PathBuf]) -> Option<PathBuf> {
 }
 
 /// ponytail: PNGs in hicolor and pixmaps only, which is what apps install for
-/// themselves. Named icons from the user's theme are mostly SVGs, which take Skia's `svg`
-/// feature or resvg to decode.
+/// themselves. Named icons from the user's theme are mostly SVGs, which take resvg to decode.
 fn find_in_theme(name: &str, data_dirs: &[PathBuf]) -> Option<PathBuf> {
     let file = format!("{name}.png");
     let in_hicolor = HICOLOR_SIZES.iter().flat_map(|size| {
@@ -159,24 +148,29 @@ pub fn percent_decode(text: &str) -> String {
 }
 
 /// Fits `image` in an icon-sized square, centered, with rounded corners.
-fn thumbnail(image: &Image) -> Option<Image> {
-    let mut surface = surfaces::raster_n32_premul((ICON_SIZE, ICON_SIZE))?;
-    let canvas = surface.canvas();
+fn thumbnail(image: &RgbaImage) -> RgbaImage {
     let size = ICON_SIZE as f32;
     let scale = size / image.width().max(image.height()) as f32;
-    let (width, height) = (image.width() as f32 * scale, image.height() as f32 * scale);
-    let rect = Rect::from_xywh((size - width) / 2.0, (size - height) / 2.0, width, height);
+    let fit = |side: u32| ((side as f32 * scale).round() as u32).clamp(1, ICON_SIZE);
+    let (width, height) = (fit(image.width()), fit(image.height()));
+    let (left, top) = ((ICON_SIZE - width) / 2, (ICON_SIZE - height) / 2);
 
-    canvas.clip_rrect(
-        RRect::new_rect_xy(rect, ICON_RADIUS, ICON_RADIUS),
-        None,
-        true,
-    );
-    let sampling = SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear);
-    let mut paint = Paint::default();
-    paint.set_anti_alias(true);
-    canvas.draw_image_rect_with_sampling_options(image, None, rect, sampling, &paint);
-    Some(surface.image_snapshot())
+    let mut thumb = RgbaImage::new(ICON_SIZE, ICON_SIZE);
+    let resized = image::imageops::resize(image, width, height, FilterType::Triangle);
+    image::imageops::replace(&mut thumb, &resized, left.into(), top.into());
+
+    // How much of each pixel the rounded rectangle covers, antialiased over a pixel.
+    let radius = ICON_RADIUS.min(width as f32 / 2.0).min(height as f32 / 2.0);
+    let inner = |at: f32, start: u32, len: u32| {
+        let (low, high) = (start as f32 + radius, (start + len) as f32 - radius);
+        (low - at).max(at - high).max(0.0)
+    };
+    for (x, y, pixel) in thumb.enumerate_pixels_mut() {
+        let (dx, dy) = (inner(x as f32 + 0.5, left, width), inner(y as f32 + 0.5, top, height));
+        let coverage = (radius - dx.hypot(dy) + 0.5).clamp(0.0, 1.0);
+        pixel[3] = (pixel[3] as f32 * coverage).round() as u8;
+    }
+    thumb
 }
 
 #[cfg(test)]
@@ -189,25 +183,17 @@ mod tests {
         (width, height, stride, channels == 4, 8, channels, data)
     }
 
-    fn color_at(image: &Image, x: i32, y: i32) -> skia_safe::Color {
-        let mut surface = surfaces::raster_n32_premul((ICON_SIZE, ICON_SIZE)).unwrap();
-        surface.canvas().draw_image(image, (0, 0), None);
-        surface.peek_pixels().unwrap().get_color((x, y))
-    }
-
     #[test]
     fn raw_images_honor_rowstride_and_missing_alpha() {
         // Two rows of one RGB pixel, with a padding byte that must not shift the second.
         let data = vec![1, 2, 3, 99, 4, 5, 6];
         let image = from_raw(raw(1, 2, 4, 3, data)).unwrap();
-        assert_eq!((image.width(), image.height()), (1, 2));
-        assert_eq!(image.alpha_type(), AlphaType::Unpremul);
+        assert_eq!(image.dimensions(), (1, 2));
+        assert_eq!(image.get_pixel(0, 1).0, [4, 5, 6, 255]);
 
-        let thumb = thumbnail(&from_raw(raw(1, 1, 3, 3, vec![255, 0, 0])).unwrap()).unwrap();
-        assert_eq!(
-            color_at(&thumb, 24, 24),
-            skia_safe::Color::from_rgb(255, 0, 0)
-        );
+        let thumb = thumbnail(&from_raw(raw(1, 1, 3, 3, vec![255, 0, 0])).unwrap());
+        assert_eq!(thumb.get_pixel(24, 24).0, [255, 0, 0, 255]);
+        assert_eq!(thumb.get_pixel(0, 0)[3], 0, "rounded corner");
     }
 
     #[test]
@@ -230,10 +216,10 @@ mod tests {
     #[test]
     fn thumbnails_fit_inside_without_stretching() {
         let wide = from_raw(raw(4, 1, 12, 3, [0, 255, 0].repeat(4))).unwrap();
-        let thumb = thumbnail(&wide).unwrap();
-        assert_eq!((thumb.width(), thumb.height()), (ICON_SIZE, ICON_SIZE));
-        assert_eq!(color_at(&thumb, 24, 24).g(), 255);
-        assert_eq!(color_at(&thumb, 24, 2).a(), 0, "letterboxed");
+        let thumb = thumbnail(&wide);
+        assert_eq!(thumb.dimensions(), (ICON_SIZE, ICON_SIZE));
+        assert_eq!(thumb.get_pixel(24, 24)[1], 255);
+        assert_eq!(thumb.get_pixel(24, 2)[3], 0, "letterboxed");
     }
 
     #[test]

@@ -18,10 +18,6 @@ mod state;
 mod system;
 mod ui;
 
-// ponytail: the rest of the Skia UI (`output`, `seat`, and the
-// components not yet in `components/mod.rs`) is out of the build while Phase 2 of TODO.md
-// ports it to AntiWebUI; the files stay as reference.
-
 /// While an island is open, a transparent layer over the whole screen but the bar and the island
 /// closes it on a press: Wayland shows a client nothing of other surfaces' input, so the only way
 /// to see a press elsewhere is to be what it lands on. `input` is the bar's, in its surface.

@@ -229,7 +229,7 @@ impl NotificationServer {
             .map(|pair| (pair[0].clone(), pair[1].clone()))
             .collect();
 
-        let icon = notification_icon::resolve(&app_icon, &hints).and_then(|i| player_art::pixels(&i));
+        let icon = notification_icon::resolve(&app_icon, &hints).map(player_art::pixels);
 
         let data = NotificationSnapshot {
             app_name,

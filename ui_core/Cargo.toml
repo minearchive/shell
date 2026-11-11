@@ -5,5 +5,3 @@ edition.workspace = true
 
 [dependencies]
 serde.workspace = true
-skia-bindings.workspace = true
-skia-safe.workspace = true

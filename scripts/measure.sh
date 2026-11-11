@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Measures a running process over a window: CPU time, memory, and GPU memory and time.
-#   spike/measure.sh <process name> [seconds]     e.g. spike/measure.sh spike 30
+#   scripts/measure.sh <process name> [seconds]     e.g. scripts/measure.sh my_shell 30
 # Run it once for each bar, under the same load (idle, or SPIKE_AUTO=1), and compare.
 #
 # CPU:  utime+stime from /proc/<pid>/stat, as a % of one core.
@@ -8,7 +8,7 @@
 # GPU:  the DRM fdinfo of each GPU client the process holds (i915/xe/amdgpu): memory it has, and
 #       time each engine spent on it. On i915 "total"/"resident" are the sizes of the buffers the
 #       driver made, not the pages behind them: a bare Vulkan device shows 216 MB here and costs
-#       82 MiB. For real RAM use spike/shmem.sh.
+#       82 MiB. For real RAM use scripts/shmem.sh.
 set -eu
 name=$1
 secs=${2:-30}
