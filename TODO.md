@@ -34,8 +34,10 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
 - [x] 仮のバー（`main.rs` の `bar`）に全プロバイダの値が出ることを確認した。Phase 2 で消す
 - [x] テーマを MD3E の配色に写す → Phase 2 でやった（`ui::md3e_scheme`）
 - 気付いたこと
-  - [ ] `example/theme.toml` は .gitignore 対象で worktree に来ない。ないと既定の `Theme` が全部透明で、何も見えない。既定値を見える色にするか、ないときに警告以上を出す
-  - [ ] niri の IPC は変化のときしかイベントが来ないので、起動直後は ws / タイトルが空。最初に `Request::Workspaces` / `FocusedWindow` を引く
+  - [x] `example/theme.toml` は .gitignore 対象で worktree に来ない。ないと既定の `Theme` が全部透明で、何も見えない
+    - 読めないときは警告を出し、組み込みの `src/config/default_theme.toml` を使う
+  - [x] 起動直後は ws / タイトルが空だった
+    - niri のイベントストリームは最初に `WorkspacesChanged` / `WindowsChanged` で今の状態を送ってくる（`niri msg event-stream` で確認）。これを読んでいなかったので、そこから focus を拾うようにした
   - 起動時に Vulkan ローダの ERROR が出る：システムの Mesa の radeon / lvp の ICD が、devShell の glibc より新しい glibc を要求して読み込めない。Intel の ICD は読めているので描画には影響しない
   - [x] バーの文字がマウスで選択できてしまう → バー全体に `select_none`
 

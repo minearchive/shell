@@ -31,12 +31,28 @@ pub fn listen(sender: Sender<IPCEvent>) -> Result<(), String> {
                 }
             };
 
+            // The stream opens with `WorkspacesChanged` and `WindowsChanged` carrying the
+            // current state, so the bar isn't blank until the first change.
             match event {
+                Event::WorkspacesChanged { workspaces } => {
+                    if let Some(ws) = workspaces.iter().find(|w| w.is_focused) {
+                        if ws.id != focused_ws_id {
+                            let _ = sender
+                                .send(IPCEvent::FocusedWorkspaceChanged(focused_ws_id, ws.id));
+                            focused_ws_id = ws.id;
+                        }
+                    }
+                }
                 Event::WorkspaceActivated { id, focused: true } if id != focused_ws_id => {
                     let _ = sender.send(IPCEvent::FocusedWorkspaceChanged(focused_ws_id, id));
                     focused_ws_id = id;
                 }
                 Event::WindowsChanged { windows } => {
+                    let title = windows
+                        .iter()
+                        .find(|w| w.is_focused)
+                        .and_then(|w| w.title.clone());
+                    let _ = sender.send(IPCEvent::FocusedWindowTitleChanged(title));
                     window_map = windows.into_iter().map(|w| (w.id, w)).collect();
                 }
                 Event::WindowOpenedOrChanged { window } => {
