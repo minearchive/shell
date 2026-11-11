@@ -37,10 +37,6 @@ const CHOICE_HEIGHT: f32 = 40.0;
 /// On top of the panel's gap: the buttons fill their row, unlike the thin sliders.
 const CHOICE_TOP_MARGIN: f32 = 6.0;
 const CAPTION_HEIGHT: f32 = 16.0;
-const TOGGLE_HEIGHT: f32 = 48.0;
-const TOGGLE_GAP: f32 = 8.0;
-const TOGGLE_ICON: f32 = 20.0;
-const TOGGLE_LABEL_SIZE: f32 = 11.0;
 /// Keeps a dragged-down backlight from turning the screen fully black.
 const MIN_BRIGHTNESS: f32 = 0.01;
 /// How long a slider ignores the polled value after it was moved, so a stale poll can't pull
@@ -239,8 +235,8 @@ fn slider_row(
         .into_view()
 }
 
-/// A quarter of a row: an icon over a label, filled while `on`. `on` is `None` while there is
-/// nothing to switch.
+/// A tile that switches something: an icon, a title and whether it is on, filled while `on`.
+/// `on` is `None` while there is nothing to switch.
 fn toggle(
     state: &State,
     label: &'static str,
@@ -250,14 +246,13 @@ fn toggle(
 ) -> Div {
     let colors = state.clone();
     div()
-        .flex_1()
-        .h_full()
-        .rounded(INFO_RADIUS)
+        .size_full()
         .flex()
-        .flex_col()
+        .flex_row()
         .items_center()
-        .justify_center()
-        .gap(2.0)
+        .gap(INFO_PADDING)
+        .px(INFO_PADDING)
+        .rounded(INFO_RADIUS)
         .cursor(CursorIcon::Pointer)
         .dyn_style(move |s| {
             let s = match on() {
@@ -271,8 +266,22 @@ fn toggle(
                 set(!v);
             }
         })
-        .child(dyn_view(move || sized_icon(symbol(on() == Some(true)), TOGGLE_ICON).into_view()))
-        .child(text(label).text_size(TOGGLE_LABEL_SIZE).whitespace_nowrap())
+        .child(dyn_view(move || sized_icon(symbol(on() == Some(true)), ICON_SIZE).into_view()))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .child(text(label).text_size(TITLE_SIZE).whitespace_nowrap())
+                .child(
+                    text(move || match on() {
+                        Some(true) => "オン",
+                        Some(false) => "オフ",
+                        None => "利用不可",
+                    })
+                    .text_size(DETAIL_SIZE)
+                    .dyn_style(move |s| s.opacity(0.8)),
+                ),
+        )
 }
 
 /// The toolbox's contents. Their order is the order in the bar, and in the panel within each
@@ -356,27 +365,23 @@ pub fn items(state: &State) -> Vec<Item> {
 
     let (quiet, awake, night_light) = (state.quiet, state.awake, state.night_light);
     let audio = anti_webui::shell::audio();
-    let toggles = div()
-        .size_full()
-        .flex()
-        .flex_row()
-        .gap(TOGGLE_GAP)
-        .child(toggle(
+    let toggles = [
+        toggle(
             state,
             "おやすみ",
             |_| icons::NOTIFICATIONS_OFF,
             move || Some(quiet.get()),
             move |v| quiet.set(v),
-        ))
-        .child(toggle(state, "画面オン", |_| icons::COFFEE, move || Some(awake.get()), move |v| awake.set(v)))
-        .child(toggle(
+        ),
+        toggle(state, "画面オン", |_| icons::COFFEE, move || Some(awake.get()), move |v| awake.set(v)),
+        toggle(
             state,
             "ナイトライト",
             |_| icons::NIGHTLIGHT,
             move || Some(night_light.get()),
             move |v| night_light.set(v),
-        ))
-        .child(toggle(
+        ),
+        toggle(
             state,
             "マイク",
             |on| if on { icons::KEYBOARD_VOICE } else { icons::MIC_OFF },
@@ -386,7 +391,8 @@ pub fn items(state: &State) -> Vec<Item> {
                     let _ = mic.set_muted(!on);
                 }
             },
-        ));
+        ),
+    ];
 
     let (profile_shown, profile_ask) = optimistic(move || system.with(|s| s.power_profile));
     let profiles = connected_button_group(
@@ -402,7 +408,7 @@ pub fn items(state: &State) -> Vec<Item> {
         },
     );
 
-    vec![
+    let mut items = vec![
         Item {
             width: DetailWidth::Half,
             height: info_height,
@@ -410,14 +416,6 @@ pub fn items(state: &State) -> Vec<Item> {
             icon_at: tile_icon_at,
             icon_fades: false,
             view: tile(state, "Wi-Fi", network, None, false),
-        },
-        Item {
-            width: DetailWidth::Full,
-            height: |_| TOGGLE_HEIGHT,
-            bar_icon: no_bar_icon,
-            icon_at: row_icon_at,
-            icon_fades: false,
-            view: toggles.into_view(),
         },
         Item {
             width: DetailWidth::Full,
@@ -477,5 +475,15 @@ pub fn items(state: &State) -> Vec<Item> {
             icon_fades: false,
             view: div().size_full().pt(CHOICE_TOP_MARGIN).flex().child(profiles.flex_1()).into_view(),
         },
-    ]
+    ];
+    // After Wi-Fi and Bluetooth, two to a row.
+    items.extend(toggles.map(|view| Item {
+        width: DetailWidth::Half,
+        height: info_height,
+        bar_icon: no_bar_icon,
+        icon_at: tile_icon_at,
+        icon_fades: false,
+        view: view.into_view(),
+    }));
+    items
 }

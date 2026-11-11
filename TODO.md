@@ -120,7 +120,7 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
 - [x] CLAUDE.md と docs を AntiWebUI の構成に書き直した。docs/widgets.md は部品のクレートと一緒に消した
 
 ## toolbox のトグル
-- [x] おやすみ・画面オン・ナイトライト・マイクの 4 つを 1 行に（`ISLAND_MAX_HEIGHT` を 360 → 400 に）
+- [x] おやすみ・画面オン・ナイトライト・マイクを、Wi-Fi / Bluetooth と同じ半分幅のタイルで 2 行に（`ISLAND_MAX_HEIGHT` を 360 → 480 に）
   - おやすみ：重大以外の通知はバナーに出さず、次の tick で見逃した通知へ
   - 画面オン：logind の idle inhibitor（hypridle / swayidle が従う）
   - ナイトライト：`gammastep -O 4000` を子プロセスで。バーが落ちたら `PR_SET_PDEATHSIG` で止まる。gammastep は flake に足した
