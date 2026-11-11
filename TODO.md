@@ -82,10 +82,8 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
   - [ ] 実機で確認：音量キー・明るさキーでスライダーとアイコンがすぐ追従するか
   - [x] 明るさも `shell-session` のバックライト監視（`actual_brightness` の inotify）から。1 秒のポーリングはなくなった（このマシンで書き込み直後にイベントが来るのを確認済み）
 - [x] theme.toml の配色を md3e の `set_color_scheme` に写す（`ui::md3e_scheme`、テーマの再読み込みにも追従）
-- [ ] `m3_widget` を `anti-webui-md3e`（独立クレート。同じ git rev から依存に足す）に置き換える。スライダー、アイコン（Material Symbols）、ボタン、リスト項目
-  - まず対応表を作る：m3_widget の各部品 → md3e の部品 / 足りないもの
-  - テーマ：theme.toml の配色を md3e の配色（ダイナミックカラー）に写す
-- [ ] animation.toml の easing と `conf::` 参照：AntiWebUI の `Transition` / `Spring` に写すか、自前の計算を残すか決める
+- [x] `m3_widget` を `anti-webui-md3e` に置き換えた：スライダー、スイッチ、ボタン群、アイコン（Material Symbols）。シークバーだけは `slider_with` に自前の見た目（上の media）
+- [x] animation.toml の easing と `conf::` 参照：自前の計算（ui_core の `Animation` / `IslandMorph`）を残した。AntiWebUI の `Transition` は CSS の `linear()` を取れないため。設定と関係ない動き（通知の行など）は `animated`
 
 ### Phase 3: バナー
 - [x] 出力ごとに `Layer::Overlay` を上端に開き、入力範囲は通知カードの矩形だけにする
