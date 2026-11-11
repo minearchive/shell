@@ -76,6 +76,7 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
     - タッチパッドの横スクロールで消すのは入れない（Skia 版で誤作動が多かった）
   - [x] 行のアニメーション：`for_each` をキー（先頭の id と種類）で。消えた行の詰めとアプリの開閉は `moves`、出てくる行は上から少し下りつつフェード、消える行はフェード。すべて消去は上から 50ms ずつずらして滑る（4 行目以降は一緒）
     - 行の中身は `rows` の memo から読むので、毎分の「n分前」の更新で行が作り直されない
+    - 横に滑る動きは `ui::Eased`（`animation.toml` の `notification_row`、`linear()` も使える）。詰め・出入りは `for_each` の `moves` / `enter` / `exit` で、AntiWebUI の `Transition`（cubic-bezier のみ）のまま
   - [ ] 実機で確認：ドラッグで消える／戻る、✕、すべて消去、アプリの開閉の動き
 - [x] 反応の遅さ：音量は `wpctl` の 1 秒ポーリングをやめ、AntiWebUI の `shell-audio`（PipeWire のイベント）から。電源プロファイルと WARP は押した値をすぐ出し、状態が変わるか 3 秒で実際の値に戻る
   - 計測：描画の経路（通知 → バナー）は 50ms 以内。遅れはプロバイダのポーリングだった（ミュート切替 → アイコンが 315〜573ms）

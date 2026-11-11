@@ -136,6 +136,7 @@ The bar reads these names:
 | `island` | Islands growing, shrinking and morphing | ease-out cubic |
 | `media_play_pause` | The media card's play button shape | ease-out cubic |
 | `notification_banner` | The notification card dropping in from the top of the screen and leaving | ease-out cubic |
+| `notification_row` | A row in the toolbox's notification list sliding away or back | ease-out cubic |
 
 Any other name is free for your own definitions to reuse. Separate words with `_`,
 not `.`: a bare `a.b = …` is a nested TOML table and the file fails to parse. An easing that fails to parse is skipped with

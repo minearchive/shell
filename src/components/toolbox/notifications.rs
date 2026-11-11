@@ -21,7 +21,7 @@ use super::{PANEL_PADDING, PANEL_WIDTH};
 use crate::{
     dbus::notification::{ActiveNotification, Urgency},
     state::State,
-    ui::{measure, palette},
+    ui::{measure, palette, Eased},
 };
 
 const TOP_PADDING: f32 = 12.0;
@@ -58,7 +58,9 @@ const ROW_WIDTH: f32 = PANEL_WIDTH - PANEL_PADDING * 2.0;
 const DISMISS_RATIO: f32 = 0.4;
 /// Where a row slides away to: out past the panel's edge.
 const GONE: f32 = ROW_WIDTH + PANEL_PADDING;
-const SLIDE: Transition = Transition::ms(200).cubic_bezier(0.33, 1.0, 0.68, 1.0);
+/// How long a row takes to slide away or back, along `animation.toml`'s `notification_row`.
+const SLIDE: Duration = Duration::from_millis(200);
+const SLIDE_EASING_ID: &str = "notification_row";
 /// How long rows take to close a gap, or to make room for an app opening.
 const MOVE: Transition = Transition::ms(250).cubic_bezier(0.33, 1.0, 0.68, 1.0);
 /// How far below its place a row coming in starts.
@@ -278,7 +280,7 @@ type Pick = fn(&ui_core::scheme::ColorTheme) -> ui_core::scheme::color::Color;
 /// How long "すべて消去" takes to slide `rows` away: each starts `CLEAR_STAGGER` after the one
 /// above it, up to the rows the panel shows.
 fn clear_duration(rows: usize) -> Duration {
-    CLEAR_STAGGER * rows.saturating_sub(1).min(CLEAR_STAGGERED) as u32 + SLIDE.duration
+    CLEAR_STAGGER * rows.saturating_sub(1).min(CLEAR_STAGGERED) as u32 + SLIDE
 }
 
 /// Where a row goes when it is let go of `offset` from its place: away to that side, or back.
@@ -298,7 +300,7 @@ fn row_view(
 ) -> Div {
     let current = move || rows.with(|rs| rs.iter().find(|r| r.key() == key).cloned());
     let hovered = signal(false);
-    let offset = animated(0.0f32);
+    let offset = Eased::new(state, SLIDE_EASING_ID, SLIDE, 0.0);
     let sideways = Rc::new(Cell::new(false));
     let height = match key.1 {
         Kind::Card => CARD_HEIGHT,
@@ -309,10 +311,10 @@ fn row_view(
     let slide_away = {
         let state = state.clone();
         Rc::new(move |to: f32| {
-            offset.to(to, SLIDE);
+            offset.to(to);
             let ids = untrack(current).map(|r| r.ids).unwrap_or_default();
             let state = state.clone();
-            set_timeout(SLIDE.duration, move || {
+            set_timeout(SLIDE, move || {
                 for id in &ids {
                     state.dismiss_notification(*id);
                 }
@@ -326,7 +328,7 @@ fn row_view(
             return;
         }
         let index = untrack(|| rows.with(|rs| rs.iter().position(|r| r.key() == key))).unwrap_or(0);
-        set_timeout(CLEAR_STAGGER * index.min(CLEAR_STAGGERED) as u32, move || offset.to(GONE, SLIDE));
+        set_timeout(CLEAR_STAGGER * index.min(CLEAR_STAGGERED) as u32, move || offset.to(GONE));
     });
 
     let content = {
@@ -376,10 +378,10 @@ fn row_view(
             GrabPhase::Start => sideways.set(e.total.x.abs() > e.total.y.abs()),
             GrabPhase::Move if sideways.get() => offset.set(e.total.x),
             GrabPhase::End if sideways.get() => match let_go(offset.get_untracked()) {
-                0.0 => offset.to(0.0, SLIDE),
+                0.0 => offset.to(0.0),
                 to => slide_away(to),
             },
-            GrabPhase::Cancel => offset.to(0.0, SLIDE),
+            GrabPhase::Cancel => offset.to(0.0),
             _ => {}
         })
         .on_click(toggle)
@@ -504,9 +506,9 @@ mod tests {
 
     #[test]
     fn clearing_staggers_only_the_rows_in_view() {
-        assert_eq!(clear_duration(1), SLIDE.duration);
-        assert_eq!(clear_duration(3), CLEAR_STAGGER * 2 + SLIDE.duration);
-        assert_eq!(clear_duration(50), CLEAR_STAGGER * CLEAR_STAGGERED as u32 + SLIDE.duration);
+        assert_eq!(clear_duration(1), SLIDE);
+        assert_eq!(clear_duration(3), CLEAR_STAGGER * 2 + SLIDE);
+        assert_eq!(clear_duration(50), CLEAR_STAGGER * CLEAR_STAGGERED as u32 + SLIDE);
     }
 
     #[test]

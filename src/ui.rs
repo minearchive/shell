@@ -297,46 +297,91 @@ pub fn palette(state: &State, pick: impl Fn(&ColorTheme) -> ui_core::scheme::col
     state.theme.with(|t| color(pick(t.theme())))
 }
 
-/// `target`, moving to each new value over `duration` along `animation.toml`'s `easing_id`
-/// (ease-out-cubic until it names one), a frame at a time. For what AntiWebUI's own transitions
-/// can't do: they take a curve, not the config's easing functions.
+/// `target`, moving to each new value as [`Eased::to`] does.
 pub fn eased(
     state: &State,
     easing_id: &'static str,
     duration: Duration,
     target: impl Fn() -> f32 + 'static,
 ) -> Signal<f32> {
-    fn step(value: Signal<f32>, animation: Rc<RefCell<Animation<f32>>>, ticking: Rc<Cell<bool>>) {
-        request_frame(move |_| {
-            value.set(animation.borrow().value());
-            if animation.borrow().is_traveling() {
-                step(value, animation, ticking);
-            } else {
-                ticking.set(false);
+    let target = memo(target);
+    let value = Eased::new(state, easing_id, duration, untrack(|| target.get()));
+    effect(move || value.to(target.get()));
+    value.value
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Goal {
+    Ease(f32),
+    Jump(f32),
+}
+
+/// A value that moves over `duration` along `animation.toml`'s `easing_id` (ease-out-cubic
+/// until it names one), a frame at a time. For what AntiWebUI's own transitions can't do: they
+/// take a curve, not the config's easing functions, so no `linear()` springs.
+#[derive(Clone, Copy)]
+pub struct Eased {
+    value: Signal<f32>,
+    goal: Signal<Goal>,
+}
+
+impl Eased {
+    pub fn new(state: &State, easing_id: &'static str, duration: Duration, start: f32) -> Self {
+        fn step(value: Signal<f32>, animation: Rc<RefCell<Animation<f32>>>, ticking: Rc<Cell<bool>>) {
+            request_frame(move |_| {
+                value.set(animation.borrow().value());
+                if animation.borrow().is_traveling() {
+                    step(value, animation, ticking);
+                } else {
+                    ticking.set(false);
+                }
+            });
+        }
+
+        let value = signal(start);
+        let goal = signal(Goal::Jump(start));
+        let animation = Rc::new(RefCell::new(Animation::new(start, start, duration, std::sync::Arc::new(ease_out_cubic))));
+        let ticking = Rc::new(Cell::new(false));
+        {
+            let (animation, config) = (animation.clone(), state.animation);
+            effect(move || {
+                if let Some(easing) = config.with(|a| a.easings().get(easing_id).cloned()) {
+                    animation.borrow_mut().set_easing(easing);
+                }
+            });
+        }
+        effect(move || match goal.get() {
+            Goal::Jump(to) => {
+                animation.borrow_mut().reset(to, to);
+                value.set(to);
+            }
+            Goal::Ease(to) => {
+                animation.borrow_mut().set_target(to);
+                if !ticking.replace(true) {
+                    step(value, animation.clone(), ticking.clone());
+                }
             }
         });
+        Self { value, goal }
     }
 
-    let target = memo(target);
-    let start = untrack(|| target.get());
-    let value = signal(start);
-    let animation = Rc::new(RefCell::new(Animation::new(start, start, duration, std::sync::Arc::new(ease_out_cubic))));
-    let ticking = Rc::new(Cell::new(false));
-    {
-        let (animation, config) = (animation.clone(), state.animation);
-        effect(move || {
-            if let Some(easing) = config.with(|a| a.easings().get(easing_id).cloned()) {
-                animation.borrow_mut().set_easing(easing);
-            }
-        });
+    pub fn get(self) -> f32 {
+        self.value.get()
     }
-    effect(move || {
-        animation.borrow_mut().set_target(target.get());
-        if !ticking.replace(true) {
-            step(value, animation.clone(), ticking.clone());
-        }
-    });
-    value
+
+    pub fn get_untracked(self) -> f32 {
+        untrack(|| self.value.get())
+    }
+
+    /// Moves to `to` from wherever it is now.
+    pub fn to(self, to: f32) {
+        self.goal.set(Goal::Ease(to));
+    }
+
+    /// Is at `to` at once, as under a dragging pointer.
+    pub fn set(self, to: f32) {
+        self.goal.set(Goal::Jump(to));
+    }
 }
 
 /// Repaints every frame for as long as an island moves.
