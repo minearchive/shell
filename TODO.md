@@ -119,6 +119,15 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
   - AntiWebUI の git 依存の `outputHashes` を足した。rev を上げたら更新する
 - [x] CLAUDE.md と docs を AntiWebUI の構成に書き直した。docs/widgets.md は部品のクレートと一緒に消した
 
+## toolbox のトグル
+- [x] おやすみ・画面オン・ナイトライト・マイクの 4 つを 1 行に（`ISLAND_MAX_HEIGHT` を 360 → 400 に）
+  - おやすみ：重大以外の通知はバナーに出さず、次の tick で見逃した通知へ
+  - 画面オン：logind の idle inhibitor（hypridle / swayidle が従う）
+  - ナイトライト：`gammastep -O 4000` を子プロセスで。バーが落ちたら `PR_SET_PDEATHSIG` で止まる。gammastep は flake に足した
+  - マイク：PipeWire の既定の入力のミュート
+- [ ] 実機で確認：4 つとも
+- [ ] おやすみ中はバーにアイコンを出す。オン・オフを再起動後も覚える
+
 ## フォント
 - [ ] フォールバック：Roboto を主にし、CJK の字は Noto Sans CJK JP で出す（今はバーの root で Noto Sans CJK JP だけを指定している）。AntiWebUI のフォント指定でフォールバックが組めるか調べる
 - [ ] フォントをファイルから読む

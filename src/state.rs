@@ -2,6 +2,7 @@
 //! threads and send here through `ui_channel`s, whose closures run on the UI thread.
 
 use std::{
+    cell::RefCell,
     collections::HashMap,
     rc::Rc,
     sync::mpsc,
@@ -26,6 +27,7 @@ use crate::{
     },
     ipc::{self, events::IPCEvent},
     system::{self, SystemCommand, SystemStatus, Volume},
+    toggles,
 };
 
 /// How often notifications are checked for expiry.
@@ -62,6 +64,11 @@ pub struct State {
     /// The last action from `my_shell action`, with a count so the same one twice still
     /// reruns what reads it.
     pub action: Signal<Option<(u64, Action)>>,
+    /// Do not disturb: notifications go straight to the missed ones, except critical ones.
+    pub quiet: Signal<bool>,
+    /// The screen doesn't blank.
+    pub awake: Signal<bool>,
+    pub night_light: Signal<bool>,
     pub commands: Rc<Commands>,
 }
 
@@ -167,6 +174,31 @@ impl State {
             untrack(|| system.update(|s| s.brightness = brightness));
         });
 
+        let (quiet, awake, night_light) = (signal(false), signal(false), signal(false));
+        let inhibitor = RefCell::new(None);
+        effect(move || {
+            *inhibitor.borrow_mut() = awake.get().then(toggles::inhibit_idle).and_then(|r| {
+                r.map_err(|e| warn!("Cannot keep the screen on: {e}")).ok()
+            });
+            if awake.get_untracked() && inhibitor.borrow().is_none() {
+                untrack(|| awake.set(false));
+            }
+        });
+        let gammastep = RefCell::new(None);
+        effect(move || {
+            if night_light.get() {
+                match toggles::night_light() {
+                    Ok(child) => *gammastep.borrow_mut() = Some(child),
+                    Err(e) => {
+                        warn!("Cannot start gammastep: {e}");
+                        untrack(|| night_light.set(false));
+                    }
+                }
+            } else if let Some(child) = gammastep.take() {
+                toggles::stop(child);
+            }
+        });
+
         let state = Self {
             players,
             player_art,
@@ -179,6 +211,9 @@ impl State {
             theme,
             animation,
             action,
+            quiet,
+            awake,
+            night_light,
             commands: Rc::new(Commands {
                 system: system_commands,
                 warp: warp_commands,
@@ -219,7 +254,7 @@ impl State {
         // notification ever needs sub-second timing.
         let expired = self
             .notifications
-            .update_untracked(|n| n.take_expired(Instant::now()));
+            .update_untracked(|n| n.take_expired(Instant::now(), self.quiet.get_untracked()));
         if expired.is_empty() {
             return;
         }

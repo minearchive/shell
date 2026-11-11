@@ -124,3 +124,4 @@ channel; send commands through `state.commands`.
 | `focused_title`, `focused_workspace` | compositor IPC |
 | `theme`, `animation` | config reloads |
 | `action` | `my_shell action` |
+| `quiet`, `awake`, `night_light` | the toolbox's toggles; `State::start` holds the inhibitor and `gammastep` while on (`src/toggles.rs`) |

@@ -43,9 +43,11 @@
           ]
         );
 
-        # Programs the bar runs: curl fetches players' remote cover art.
+        # Programs the bar runs: curl fetches players' remote cover art, gammastep is the
+        # night light.
         runtimePackages = with pkgs; [
           curl
+          gammastep
         ];
 
         env = {

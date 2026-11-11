@@ -40,6 +40,7 @@ tokio = { version = "1.52.3", features=["rt","macros","sync","time","process"]}
 zbus = { version = "5.16.0", default-features = false, features = ["tokio"] }
 toml.workspace = true
 futures-util = "0.3.32"
+libc = "0.2"
 # The version AntiWebUI decodes with, so it adds nothing to the build.
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 ui_core.workspace = true

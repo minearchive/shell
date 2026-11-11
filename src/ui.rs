@@ -23,7 +23,7 @@ use crate::state::State;
 pub const BAR_HEIGHT: f32 = 48.0;
 /// Headroom above the bar that islands can grow into. The surface always includes it,
 /// transparent and click-through, so growing never waits on a configure.
-pub const ISLAND_MAX_HEIGHT: f32 = 360.0;
+pub const ISLAND_MAX_HEIGHT: f32 = 400.0;
 
 const BAR_TOP: f32 = ISLAND_MAX_HEIGHT;
 const ISLAND_CORNER: f32 = 28.0;

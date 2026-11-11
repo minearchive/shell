@@ -167,11 +167,11 @@ impl NotificationStore {
     }
 
     /// Moves the notifications whose time is up to the missed ones, and returns their ids.
-    pub fn take_expired(&mut self, now: Instant) -> Vec<u32> {
-        let (expired, active) = self
-            .active
-            .drain(..)
-            .partition(|n| n.expires.is_some_and(|at| at <= now));
+    /// `quiet` (do not disturb) has every one but the critical ones's time up.
+    pub fn take_expired(&mut self, now: Instant, quiet: bool) -> Vec<u32> {
+        let (expired, active) = self.active.drain(..).partition(|n| {
+            n.expires.is_some_and(|at| at <= now) || (quiet && n.data.urgency != Urgency::Critical)
+        });
         self.active = active;
         let ids = expired.iter().map(|n| n.id).collect();
         self.missed.extend(expired);
@@ -366,16 +366,28 @@ mod tests {
         store.apply(&posted(4, Urgency::Critical, 100), now);
 
         assert_eq!(
-            store.take_expired(now + Duration::from_millis(99)),
+            store.take_expired(now + Duration::from_millis(99), false),
             [0u32; 0]
         );
-        assert_eq!(store.take_expired(now + Duration::from_millis(100)), [3]);
-        assert_eq!(store.take_expired(now + DEFAULT_TIMEOUT), [1]);
+        assert_eq!(store.take_expired(now + Duration::from_millis(100), false), [3]);
+        assert_eq!(store.take_expired(now + DEFAULT_TIMEOUT, false), [1]);
         assert_eq!(
-            store.take_expired(now + Duration::from_secs(3600)),
+            store.take_expired(now + Duration::from_secs(3600), false),
             [0u32; 0]
         );
         assert_eq!(store.len(), 2);
+    }
+
+    #[test]
+    fn quiet_misses_all_but_critical_ones_at_once() {
+        let now = Instant::now();
+        let mut store = NotificationStore::default();
+        store.apply(&posted(1, Urgency::Normal, 0), now);
+        store.apply(&posted(2, Urgency::Critical, -1), now);
+
+        assert_eq!(store.take_expired(now, true), [1]);
+        assert_eq!(store.current().unwrap().id, 2);
+        assert_eq!(store.unseen_len(), 2);
     }
 
     #[test]
@@ -387,7 +399,7 @@ mod tests {
         store.apply(&posted(1, Urgency::Normal, -1), later);
 
         assert_eq!(store.len(), 1);
-        assert!(store.take_expired(later).is_empty());
+        assert!(store.take_expired(later, false).is_empty());
     }
 
     #[test]
@@ -411,7 +423,7 @@ mod tests {
         store.apply(&posted(1, Urgency::Normal, 100), now);
         store.apply(&posted(2, Urgency::Normal, 100), now);
         store.apply(&posted(3, Urgency::Normal, 0), now);
-        assert_eq!(store.take_expired(now + DEFAULT_TIMEOUT), [1, 2]);
+        assert_eq!(store.take_expired(now + DEFAULT_TIMEOUT, false), [1, 2]);
 
         assert_eq!(store.len(), 1, "only 3 is still on display");
         assert_eq!(ids(&store), [3, 2, 1]);
@@ -421,7 +433,7 @@ mod tests {
         assert_eq!(ids(&store), [3]);
 
         store.apply(&posted(4, Urgency::Normal, 100), now);
-        store.take_expired(now + DEFAULT_TIMEOUT);
+        store.take_expired(now + DEFAULT_TIMEOUT, false);
         assert_eq!(store.clear(), [3]);
         assert!(store.unseen().is_empty());
     }
@@ -433,7 +445,7 @@ mod tests {
         for id in 0..MISSED_LIMIT as u32 + 5 {
             store.apply(&posted(id, Urgency::Normal, 100), now);
         }
-        store.take_expired(now + DEFAULT_TIMEOUT);
+        store.take_expired(now + DEFAULT_TIMEOUT, false);
         let unseen = store.unseen();
         assert_eq!(unseen.len(), MISSED_LIMIT);
         assert_eq!(unseen.last().unwrap().id, 5, "the oldest went first");

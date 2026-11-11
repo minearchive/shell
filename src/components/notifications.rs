@@ -61,8 +61,10 @@ struct Shown {
 }
 
 impl Shown {
-    fn new(store: &NotificationStore, width: f32) -> Option<Self> {
-        let current = store.current()?;
+    /// `quiet` (do not disturb) shows only a critical one: the others go to the missed ones
+    /// on the next tick.
+    fn new(store: &NotificationStore, width: f32, quiet: bool) -> Option<Self> {
+        let current = store.current().filter(|n| !quiet || n.data.urgency == Urgency::Critical)?;
         let icon = current.data.icon.clone();
         let text_width = width - text_x(icon.is_some()) - PADDING;
         let wrap = |text: &str, size: f32, lines: usize| wrap_text(text, text_width, lines, measure(size));
@@ -123,10 +125,10 @@ pub fn banner(state: &State, width: f32, input: Signal<Vec<RectI>>) -> Div {
     let shown = signal(None::<Shown>);
 
     {
-        let (morph, notifications) = (morph.clone(), state.notifications);
+        let (morph, notifications, quiet) = (morph.clone(), state.notifications, state.quiet);
         let card_width = card_rects(width, 0.0).0.width;
         effect(move || {
-            match notifications.with(|n| Shown::new(n, card_width)) {
+            match notifications.with(|n| Shown::new(n, card_width, quiet.get())) {
                 Some(next) => {
                     let (target, rest) = card_rects(width, next.height());
                     morph.borrow_mut().morph_to(target, rest);

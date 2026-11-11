@@ -16,6 +16,7 @@ mod dbus;
 mod ipc;
 mod state;
 mod system;
+mod toggles;
 mod ui;
 
 /// While an island is open, a transparent layer over the whole screen but the bar and the island
