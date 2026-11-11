@@ -61,10 +61,8 @@ const GONE: f32 = ROW_WIDTH + PANEL_PADDING;
 /// How long a row takes to slide away or back, along `animation.toml`'s `notification_row`.
 const SLIDE: Duration = Duration::from_millis(200);
 const SLIDE_EASING_ID: &str = "notification_row";
-/// How long rows take to close a gap, or to make room for an app opening.
-const MOVE: Transition = Transition::ms(250).cubic_bezier(0.33, 1.0, 0.68, 1.0);
-/// How far below its place a row coming in starts.
-const ENTER_RISE: f32 = 16.0;
+/// How long a row takes to grow in or shrink away, closing its gap as it goes.
+const MOVE: Transition = Transition::ms(200).cubic_bezier(0.33, 1.0, 0.68, 1.0);
 /// "すべて消去" slides the rows away one after another, from the top, this far apart.
 const CLEAR_STAGGER: Duration = Duration::from_millis(50);
 /// Past this many, the rows go together: the panel shows about three.
@@ -245,8 +243,8 @@ pub fn panel(state: &State, expanded: Signal<HashSet<String>>) -> Div {
         .overflow_y_scroll()
         .flex()
         .flex_col()
-        .gap(ROW_GAP)
-        .pb(LIST_BOTTOM)
+        // Rows keep their gap as `mb`, so that it closes with them.
+        .pb(LIST_BOTTOM - ROW_GAP)
         .dyn_style(move |s| if rows.with(Vec::is_empty) { s.hidden() } else { s })
         .child(
             for_each(
@@ -254,11 +252,11 @@ pub fn panel(state: &State, expanded: Signal<HashSet<String>>) -> Div {
                 Row::key,
                 move |row| row_view(&state, row.key(), rows, expanded, clearing, color.clone()),
             )
-            // Rows close a gap, make room for an app opening, and an opened app's
-            // notifications come out from under its heading.
-            .moves(MOVE)
-            .enter(|s| s.opacity(0.0).translate(0.0, -ENTER_RISE))
-            .exit(|s| s.opacity(0.0))
+            // Rows grow in and shrink away, so the ones below follow at once. With `exit`
+            // alone a going row would hold its place until it had faded, and `moves` would
+            // only then close the gap.
+            .enter(|s| s.opacity(0.0).h(0.0).mb(0.0))
+            .exit(|s| s.opacity(0.0).h(0.0).mb(0.0))
             .transition(MOVE),
         );
 
@@ -299,9 +297,17 @@ fn row_view(
     color: Rc<impl Fn(Pick) -> Color + 'static>,
 ) -> Div {
     let current = move || rows.with(|rs| rs.iter().find(|r| r.key() == key).cloned());
+    // What it last showed: gone from `rows`, it keeps that while it shrinks away.
+    let shown = signal(untrack(current));
+    effect(move || {
+        if let Some(row) = current() {
+            shown.set(Some(row));
+        }
+    });
     let hovered = signal(false);
     let offset = Eased::new(state, SLIDE_EASING_ID, SLIDE, 0.0);
-    let sideways = Rc::new(Cell::new(false));
+    // Decided by the first move: `Start` comes with nothing moved yet.
+    let sideways = Rc::new(Cell::new(None::<bool>));
     let height = match key.1 {
         Kind::Card => CARD_HEIGHT,
         Kind::Head => HEAD_HEIGHT,
@@ -333,7 +339,7 @@ fn row_view(
 
     let content = {
         let (color, slide_away) = (color.clone(), slide_away.clone());
-        dyn_view(move || match current() {
+        dyn_view(move || match shown.get() {
             Some(row) => row_content(row, height, hovered, color.clone(), slide_away.clone()).into_view(),
             None => div().into_view(),
         })
@@ -354,7 +360,9 @@ fn row_view(
         .relative()
         .w_full()
         .h(height)
+        .mb(ROW_GAP)
         .flex_none()
+        .overflow_hidden()
         .on_hover(move |h| hovered.set(h))
         .dyn_style({
             let c = color.clone();
@@ -375,9 +383,15 @@ fn row_view(
         })
         // Dragged sideways with the mouse, it follows; let go far enough and it goes.
         .on_grab(move |e| match e.phase {
-            GrabPhase::Start => sideways.set(e.total.x.abs() > e.total.y.abs()),
-            GrabPhase::Move if sideways.get() => offset.set(e.total.x),
-            GrabPhase::End if sideways.get() => match let_go(offset.get_untracked()) {
+            GrabPhase::Start => sideways.set(None),
+            GrabPhase::Move => {
+                let side = sideways.get().unwrap_or(e.total.x.abs() > e.total.y.abs());
+                sideways.set(Some(side));
+                if side {
+                    offset.set(e.total.x);
+                }
+            }
+            GrabPhase::End if sideways.get() == Some(true) => match let_go(offset.get_untracked()) {
                 0.0 => offset.to(0.0),
                 to => slide_away(to),
             },
