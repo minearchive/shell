@@ -102,8 +102,20 @@ enum Kind {
     Child,
 }
 
-/// Which row, across updates: a group's heading and its first notification share an id.
-type RowKey = (u32, Kind);
+impl Kind {
+    fn height(self) -> f32 {
+        match self {
+            Kind::Card => CARD_HEIGHT,
+            Kind::Head => HEAD_HEIGHT,
+            Kind::Child => CHILD_HEIGHT,
+        }
+    }
+}
+
+/// Which row, across updates, and whether it is a `Child`. A stacked app and its heading are one
+/// row, which changes height as the app opens and closes; the heading and its first
+/// notification share an id.
+type RowKey = (u32, bool);
 
 /// One row, as it is shown.
 #[derive(Clone, PartialEq)]
@@ -143,7 +155,7 @@ impl Row {
     }
 
     fn key(&self) -> RowKey {
-        (self.ids[0], self.kind)
+        (self.ids[0], self.kind == Kind::Child)
     }
 
     /// Whether clicking it opens or closes its app.
@@ -308,11 +320,6 @@ fn row_view(
     let offset = Eased::new(state, SLIDE_EASING_ID, SLIDE, 0.0);
     // Decided by the first move: `Start` comes with nothing moved yet.
     let sideways = Rc::new(Cell::new(None::<bool>));
-    let height = match key.1 {
-        Kind::Card => CARD_HEIGHT,
-        Kind::Head => HEAD_HEIGHT,
-        Kind::Child => CHILD_HEIGHT,
-    };
     // Slides away to `to`, then dismisses what the row holds.
     let slide_away = {
         let state = state.clone();
@@ -340,7 +347,7 @@ fn row_view(
     let content = {
         let (color, slide_away) = (color.clone(), slide_away.clone());
         dyn_view(move || match shown.get() {
-            Some(row) => row_content(row, height, hovered, color.clone(), slide_away.clone()).into_view(),
+            Some(row) => row_content(row, hovered, color.clone(), slide_away.clone()).into_view(),
             None => div().into_view(),
         })
     };
@@ -359,7 +366,6 @@ fn row_view(
     div()
         .relative()
         .w_full()
-        .h(height)
         .mb(ROW_GAP)
         .flex_none()
         .overflow_hidden()
@@ -372,7 +378,10 @@ fn row_view(
                 });
                 let toggles = current().is_some_and(|r| r.toggles());
                 let x = offset.get();
+                let height = shown.with(|r| r.as_ref().map_or(CARD_HEIGHT, |r| r.kind.height()));
                 let s = s
+                    .h(height)
+                    .transition_of([Prop::Height], MOVE)
                     .bg(c(|t| t.surface_container_high))
                     .rounded_t(if first { OUTER_RADIUS } else { INNER_RADIUS })
                     .rounded_b(if last { OUTER_RADIUS } else { INNER_RADIUS })
@@ -405,12 +414,12 @@ fn row_view(
 /// What is in a row: the icon, the lines, and the ✕ and the count.
 fn row_content(
     row: Row,
-    height: f32,
     hovered: Signal<bool>,
     color: Rc<impl Fn(Pick) -> Color + 'static>,
     slide_away: Rc<dyn Fn(f32)>,
 ) -> Div {
     let pill = row.pill();
+    let height = row.kind.height();
     // The ✕ only shows on hover, but the text stops short of it anyway, so that hovering
     // doesn't reflow it.
     let pill_width = pill.as_ref().map_or(0.0, |count| 10.0 + measure(SMALL_SIZE)(count) + 2.0 + CHEVRON + 6.0 + 4.0);
