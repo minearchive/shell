@@ -1,180 +1,83 @@
 # Adding a data source
 
-Use this pattern when adding providers for audio, battery, network, backlight,
-D-Bus services, or anything else that runs in the background and pushes state
-updates to the bar. This is about **bar-side** providers (`src/dbus/`,
-`src/ipc/`) feeding `Component`s — unrelated to the `m3_widget` stack, see
-[docs/widgets.md](widgets.md) for that.
+Use this for anything that runs in the background and reports state to the bar: D-Bus
+services, sysfs, compositor IPC.
 
-Reference styles already exist in the tree:
+## First, check AntiWebUI
 
-- `src/dbus/mpris.rs` — event-stream (D-Bus) client. Spawns one thread per
-  player and sends `(PlayerState, mpris::Event)` tuples. More complex than you
-  need for a single-value source.
-- `src/dbus/warp.rs` — minimal single-channel D-Bus client (`WarpStatus`),
-  polling on a timer plus reacting to a StatusNotifierItem signal. **Copy this**
-  as the template for a new poll-or-signal source.
-- `src/dbus/kdeconnect/` (a module directory: `mod.rs` + `proxy.rs`) — one
-  channel, many event variants (`KDEConnectEvent`), one task per D-Bus signal
-  stream per device.
-- `src/dbus/notification.rs` — implements a D-Bus *service* (not just a
-  client): `org.freedesktop.Notifications`.
-
-The pattern has three moving parts:
-
-1. An event enum (`Clone` — the main loop fans it out to every screen).
-2. A client with `init(sender)` that owns a background thread. Sync sources
-   (mpris, niri) just block in the thread; async/D-Bus sources (warp,
-   kdeconnect) build a `tokio::runtime::Builder::new_current_thread()` inside
-   that thread and `block_on` an async `run`.
-3. The wiring in `main()`, plus fan-out in `UserInterface` and the `Component`
-   trait.
-
-## Step-by-step (battery example)
-
-### 1. Define the event type
-
-New file `src/sys/battery.rs`:
+AntiWebUI has reactive providers behind `shell-*` cargo features: `shell-audio`
+(PipeWire), `shell-session` (logind, brightness), `shell-battery` (UPower), `shell-network`
+(NetworkManager), `shell-bluetooth` (BlueZ), `shell-power-profiles`, `shell-media` (MPRIS),
+`shell-niri`, `shell-system` (CPU, memory, temperatures), and more; see its
+`anti-webui/Cargo.toml`. Each is an object of signals updated from events. The volume and
+brightness come from there (`anti_webui::shell::audio()` / `session()` in `State::start`).
+If one covers your data, enable its feature on `anti-webui` in the root `Cargo.toml` and
+copy its value into `State` with an `effect`, writing inside `untrack` so the write doesn't
+subscribe the effect to what it writes:
 
 ```rust
-use std::thread;
-use std::time::Duration;
-use calloop::channel::Sender;
-
-#[derive(Clone)]
-pub enum BatteryEvent {
-    Percentage(u8),        // 0..100
-    Status(BatteryStatus), // charging / discharging / full
-}
-
-#[derive(Clone)]
-pub enum BatteryStatus {
-    Charging,
-    Discharging,
-    Full,
-    Unknown,
-}
+let session = anti_webui::shell::session();
+effect(move || {
+    let brightness = session.brightness().map(|b| b as f32);
+    untrack(|| system.update(|s| s.brightness = brightness));
+});
 ```
 
-`Clone` is required: the main loop sends the same event to every screen's
-`UserInterface`.
+## Otherwise, a provider thread
 
-### 2. Write the client
+References in the tree:
 
-Battery state is not pushed by the kernel, so poll `/sys/class/power_supply/`:
+- `src/dbus/warp.rs` — a small D-Bus client: polls on a timer and reacts to a signal, with a
+  command channel. **Copy this** for a poll-or-signal source.
+- `src/dbus/mpris.rs` — an event stream, one thread per player.
+- `src/dbus/kdeconnect/` — one channel, many event variants, a task per device signal.
+- `src/dbus/notification.rs` — a D-Bus *service* (`org.freedesktop.Notifications`).
+- `src/system.rs` — a plain polling thread for several values at once.
 
-```rust
-pub struct BatteryClient;
-
-impl BatteryClient {
-    pub fn init(sender: Sender<BatteryEvent>) {
-        thread::spawn(move || {
-            let base = "/sys/class/power_supply/BAT0";
-            loop {
-                if let Ok(s) = std::fs::read_to_string(format!("{base}/capacity")) {
-                    if let Ok(pct) = s.trim().parse::<u8>() {
-                        let _ = sender.send(BatteryEvent::Percentage(pct));
-                    }
-                }
-                if let Ok(s) = std::fs::read_to_string(format!("{base}/status")) {
-                    let status = match s.trim() {
-                        "Charging" => BatteryStatus::Charging,
-                        "Discharging" => BatteryStatus::Discharging,
-                        "Full" => BatteryStatus::Full,
-                        _ => BatteryStatus::Unknown,
-                    };
-                    let _ = sender.send(BatteryEvent::Status(status));
-                }
-                thread::sleep(Duration::from_secs(5));
-            }
-        });
-    }
-}
-```
-
-For push-based sources (D-Bus signals), block on the stream instead of
-polling — see `src/dbus/warp.rs` for the `tokio::select!`-over-{command,
-signal, timer} shape, or `src/dbus/kdeconnect/mod.rs`'s `add_device` for one
-task per signal stream.
-
-### 3. Wire the channel in `main()`
-
-Insert this next to the other five `insert_source` blocks in `main()`. Each
-existing block follows the same shape: fan the event to every screen, collect
-which screens' `Component`s reported non-`Redraw::None`, and call
-`shell.request_redraw` only for those — mirror it exactly:
+The provider owns a thread and takes a `UiSender<T>` (`anti_webui::prelude::UiSender`).
+Async sources build a `tokio` current-thread runtime inside that thread.
 
 ```rust
-let (battery_tx, battery_channel) = channel::channel::<BatteryEvent>();
-BatteryClient::init(battery_tx);
-loop_handle
-    .insert_source(battery_channel, |event, _, shell| {
-        if let calloop::channel::Event::Msg(ev) = event {
-            let mut dirty = Vec::new();
-            for (i, screen) in shell.screen.iter_mut().enumerate() {
-                if screen.ui.on_battery(&ev) != Redraw::None {
-                    dirty.push(i);
-                }
-            }
-            for i in dirty {
-                shell.request_redraw(i);
-            }
+pub fn start(sender: UiSender<BatteryLevel>) {
+    std::thread::spawn(move || loop {
+        if let Some(level) = read_level() {
+            let _ = sender.send(level);
         }
-    })
-    .unwrap();
-```
-
-### 4. Add `on_battery` to `UserInterface`
-
-`src/ui.rs` — fan out to every component and fold their `Redraw` results. Mirror
-`UserInterface::on_warp` exactly:
-
-```rust
-pub fn on_battery(&mut self, event: &BatteryEvent) -> Redraw {
-    self.fan_out(|c| c.on_battery(event))
+        std::thread::sleep(Duration::from_secs(5));
+    });
 }
 ```
 
-### 5. Add `on_battery` to the `Component` trait
+### Wiring it into `State`
 
-`src/ui.rs` — give it a default `Redraw::None` body so existing components
-still compile:
+In `State::start` (`src/state.rs`), make a signal, start the provider with a `ui_channel`
+whose closure runs on the UI thread and updates the signal, and add the signal to `State`:
 
 ```rust
-fn on_battery(&mut self, _event: &BatteryEvent) -> Redraw {
-    Redraw::None
-}
+let battery = signal(None);
+my_provider::start(ui_channel(move |level: BatteryLevel| battery.set(Some(level))));
+// … then `battery` in `Self { .. }`
 ```
 
-Only `draw` is required; every other trait method has a default `Redraw::None`
-body. The full trait today: `draw`, `on_cursor`, `on_ipc`, `on_mpris`,
-`on_kde_connect_event`, `on_warp`, `on_notification`, `on_easing_updated`, the
-`on_drag_*`/`on_drop` handlers, and the island methods `island`, `draw_island`,
-`on_island_cursor`.
-**Never leave `todo!()` in a default body** — these are called unconditionally
-as events arrive and will crash the process.
+Components read `state.battery` and follow it. Nothing else is needed for a repaint.
 
-### 6. Surface state via `UIState` (optional)
-
-If a component needs the latest battery value inside `draw`, store it in
-`UIState` and read `state.battery` there. Add the field in `src/ui.rs` and update
-it in the channel closure in `main()`, before `shell.dispatch` (the WARP closure
-shows the shape). The `Redraw` returned from `on_battery` (step 4) is what actually triggers the
-repaint — `on_warp` folds and returns its components' `Redraw` the same way,
-so simply caching a value in `UIState` without a component reacting to it in
-`on_warp`/`on_battery` produces no visible update until the next unrelated
-redraw. See [docs/components.md](components.md#7-reading-shared-state) for the full `UIState` reference.
+- Avoid waking readers for nothing: `update_untracked` plus `notify()` only when something
+  changed, as the MPRIS position channel does.
+- Keep decoding and disk work on the provider's thread. Images become an
+  `anti_webui::style::ImageSource` there (`player_art::pixels`).
+- If the provider takes commands, add its sender to `Commands`. Dropping a sender closes the
+  provider's command channel, so keep it even before anything sends.
 
 ## Provider status
 
-| Provider | Module | Status | Notes |
-|----------|--------|--------|-------|
-| MPRIS | `src/dbus/mpris.rs` | implemented | Event stream, one thread per player |
-| Cloudflare WARP | `src/dbus/warp.rs` | implemented | Single-channel D-Bus client, hybrid SNI-signal + CLI-poll |
-| KDE Connect | `src/dbus/kdeconnect/` | implemented | D-Bus `org.kde.kdeconnect`, one task per device signal |
-| Notifications | `src/dbus/notification.rs` | implemented | Implements `org.freedesktop.Notifications` as a service |
-| Audio / volume | `src/dbus/audio.rs` | planned | PipeWire / PulseAudio via D-Bus or pipewire-rs |
-| Battery | `src/sys/battery.rs` | planned | Poll `/sys/class/power_supply/` |
-| Backlight / light level | `src/sys/backlight.rs` | planned | Poll `/sys/class/backlight/<name>/brightness`; ambient-light sensors live under `/sys/bus/iio/devices/.../in_illuminance_raw` |
-| Network | `src/dbus/network.rs` | planned | NetworkManager D-Bus API |
-| Monitor mirroring | `src/ipc/niri.rs` | planned | Extend niri IPC backend |
+| Provider | Module | Notes |
+|----------|--------|-------|
+| MPRIS | `src/dbus/mpris.rs` | Event stream, one thread per player; positions polled |
+| Cover art | `src/dbus/player_art.rs` | Polls `mpris:artUrl`; decodes with `image`, remote art via `curl` |
+| Notifications | `src/dbus/notification.rs` | Implements `org.freedesktop.Notifications` |
+| Cloudflare WARP | `src/dbus/warp.rs` | SNI signal + CLI poll |
+| KDE Connect | `src/dbus/kdeconnect/` | Connect/disconnect; not shown anywhere yet |
+| Volume | AntiWebUI `shell-audio` | PipeWire events |
+| Brightness | AntiWebUI `shell-session` | inotify on the backlight |
+| Network, Bluetooth, battery, power profile | `src/system.rs` | 5s poll |
+| Compositor | `src/ipc/` | niri implemented, Hyprland a stub |

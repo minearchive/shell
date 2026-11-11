@@ -109,7 +109,7 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
 - [x] flake：skia-binaries と GTK、clang / cmake / ninja を外した。リンクに要るのは dbus、fontconfig、wayland、libxkbcommon、libxcb（AntiWebUI の X11 バックエンドが常に入るため）
   - パッケージの `wrapProgram` に、devShell と同じ `LD_LIBRARY_PATH`（vulkan-loader、mesa、libGL、wayland、libxkbcommon、pipewire）を足した。`nix build` が通ることを確認済み
   - AntiWebUI の git 依存の `outputHashes` を足した。rev を上げたら更新する
-- [ ] CLAUDE.md、docs/widgets.md、docs/components.md を書き直す
+- [x] CLAUDE.md と docs を AntiWebUI の構成に書き直した。docs/widgets.md は部品のクレートと一緒に消した
 
 ## Rendering
 - [ ] Optimized rendering

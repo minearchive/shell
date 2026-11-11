@@ -8,77 +8,56 @@ This file is the starting point for agents working in this repo.
 Follow [Conventional Commits](https://www.conventionalcommits.org/):
 `<type>(<scope>): <description>` — lowercase, no trailing period.
 Common types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`.
-Scopes mirror the module path: `feat(ipc): …`, `fix(ui): …`, `refactor(font): …`.
+Scopes mirror the module path: `feat(ipc): …`, `fix(ui): …`, `feat(toolbox): …`.
 
 ## Key files
 
-The bar binary (`my_shell`, `src/`):
-
 | Path | Purpose |
 |------|---------|
-| `src/main.rs` | Event loop wiring (`main`); `Shell`; `Shell::draw`/`request_redraw` |
-| `src/output.rs`, `src/seat.rs`, `src/dnd.rs` | SCTK handlers: outputs and layer surfaces; seat and pointer; drag-and-drop |
-| `src/catcher.rs` | Transparent full-screen surface that detects presses outside the bar |
-| `src/ui.rs` | `Component` trait; `Redraw` enum; `UserInterface`; `UIState`; `UiEvent` |
-| `src/ipc/mod.rs` | `listen`: picks the backend from `$XDG_CURRENT_DESKTOP` |
-| `src/ipc/events.rs` | `IPCEvent` enum |
-| `src/ipc/niri.rs` | Niri backend (implemented) |
-| `src/ipc/hyprland.rs` | Hyprland backend (stub — empty handlers) |
-| `src/dbus/mpris.rs` | `start_listener` background thread; `PlayerState` |
-| `src/dbus/warp.rs`, `src/dbus/kdeconnect/`, `src/dbus/notification.rs` | Other D-Bus providers |
-| `src/components/clock.rs` | Reference `Component` implementation |
-| `src/components/notifications.rs` | Reference island implementation |
-| `src/components/toolbox/` | Status icons and their detail panel (left click); unseen notifications (right click, `notifications.rs`); add entries in `items.rs` |
-| `src/system.rs` | `SystemStatus`: polls network, Bluetooth, audio, backlight, battery |
-| `src/config/mod.rs`, `theme.rs`, `animation.rs`, `watchable.rs` | `config_path`, `Theme`, `AnimationConfig` + hot-reload |
-
-The workspace widget crates (not yet used by the bar — see
-[docs/widgets.md](widgets.md)):
-
-| Path | Purpose |
-|------|---------|
-| `ui_core/src/font/mod.rs` | `FontBook`; `sized(key, px)` (panics on unknown key) |
-| `ui_core/src/geometry.rs` | `LayoutRect`, `Size` |
-| `ui_widget/src/widget.rs` | The `Widget` trait — distinct from `Component` above |
-| `m3_widget/src/` | Material 3 widget implementations |
-| `m3_test/src/main.rs` | `cargo run -p m3_test` — the widget dev/demo gallery |
+| `src/main.rs` | `Shell::run`; per output: the bar, the outside-press catcher, the banner |
+| `src/state.rs` | `State`: the providers' signals and `Commands` |
+| `src/ui.rs` | `Part`, `IslandPart`, `IslandRequest`, `bar()`; helpers `eased`, `measure`, `palette`, `md3e_scheme` |
+| `src/components/clock.rs` | The smallest `Part` |
+| `src/components/media.rs` | An island with an overlay that travels between the bar and the card |
+| `src/components/notifications.rs` | The top banner (its own surface, not an island) |
+| `src/components/toolbox/` | Status icons; controls (left press) and notifications (right press) panels; entries in `items.rs` |
+| `src/system.rs` | `SystemStatus`: network, Bluetooth, battery, power profile (5s poll) |
+| `src/dbus/` | MPRIS, cover art, notifications (a D-Bus service), WARP, KDE Connect |
+| `src/ipc/` | Compositor IPC: niri, and a Hyprland stub |
+| `src/config/` | `config_path`, `Theme`, `AnimationConfig`, hot reload |
+| `ui_core/` | Geometry, color scheme, easing and `Animation`, `IslandMorph`, `elide`/`wrap_text` |
+| `scripts/measure.sh`, `scripts/shmem.sh` | CPU / memory / GPU measurement of a running bar |
 
 ## Detailed how-to guides
 
 | Topic | Guide |
 |-------|-------|
-| Adding a bar Component | [docs/components.md](components.md) |
-| The ui_core/ui_widget/m3_widget stack, `Widget` trait | [docs/widgets.md](widgets.md) |
+| Adding a component, an island, a toolbox entry | [docs/components.md](components.md) |
 | Extending IPC events | [docs/ipc.md](ipc.md) |
-| Adding a data source (audio, battery…) | [docs/data-sources.md](data-sources.md) |
-| Config files (`theme.toml`, `animation.toml`), `WatchableConfig` | [docs/config.md](config.md) |
-| `UIState`, `FontBook` | [docs/components.md](components.md) |
+| Adding a data source | [docs/data-sources.md](data-sources.md) |
+| Config files (`theme.toml`, `animation.toml`) | [docs/config.md](config.md) |
 
 ## Known sharp edges
 
-- **`Component` (bar) vs `Widget` (m3 stack) are different traits** — a new
-  agent's most common mistake in this repo. `Component::draw` takes
-  `(canvas, &UIState, &FontBook, &ColorTheme)` and returns `Redraw`; `Widget::draw`
-  takes `(canvas, &ColorTheme, &FontBook)` and returns `bool`. They are not
-  related by any supertrait and nothing currently bridges them — the bar does
-  not construct any `m3_widget` type. See [docs/widgets.md](widgets.md).
-- **No `shoud_redraw` / `UIState` redraw flag** — redraws are driven by
-  `Screen.needs_redraw`/`frame_pending` plus each handler's `Redraw` return
-  value (`None`/`Now`/`Animating`), folded with `Redraw::max`. `Animating`
-  keeps that screen's `needs_redraw` set across `Shell::draw`. See
-  CLAUDE.md's "Rendering is event-driven" section.
-- **Hyprland IPC is a parked stub** — `HyprlandIpc::new` registers empty handlers
-  and `start_listener` blocks its caller, so it must move to a thread before use.
-- **`on_*` methods must not `todo!()`** — every `Component::on_*` handler is
-  called unconditionally as events arrive; an unimplemented body must return
-  the default `Redraw::None`, not panic.
-- **Theme/animation paths** — `config_path` uses `$XDG_CONFIG_HOME/my_shell/<name>`
-  (`~/.config` if unset) when that file exists, otherwise the checkout's
-  `example/<name>`. The choice is made once at startup.
-- **Fonts must be pre-registered** — `FontBook::sized` (`ui_core/src/font/mod.rs`)
-  panics on an unknown key; there is no silent fallback. Register in `main.rs`
-  before the first draw that uses the key.
-- **Build inside the Nix devShell** — `skia-bindings` needs env vars from
-  `flake.nix` (`LIBCLANG_PATH`, `LD_LIBRARY_PATH`, EGL). Use `nix develop`,
-  or `direnv allow` for automatic activation via `.envrc`. CI uses
-  `nix develop --command cargo build --locked`.
+- **Every surface costs a GPU device.** AntiWebUI creates a wgpu instance and device per
+  window or layer. Open surfaces once per output and reshape them; opening one on demand
+  lags visibly.
+- **Layer shrinking order.** A stretched size needs both opposite edges anchored, and each
+  change may be committed on its own: anchor before stretching, shrink before dropping
+  anchors. The other order kills the bar with a protocol error.
+- **No element positions.** AntiWebUI can't tell you where an element landed. `ui::bar`
+  computes each part's x from the widths reported by `on_resized`; overlays rely on it.
+- **Press, not click.** `on_click` fires on release. Things that open or close use
+  `on_pointer_down`, which also lets a press on the bar close the other islands first.
+- **Reading a signal in an effect subscribes to it.** Wrap writes that also read in
+  `untrack`, as `State::start` does for the volume and brightness.
+- **`set_timeout` needs a window.** Use it inside a surface's view, not at the `Shell::run`
+  root; the notification expiry tick is a thread for that reason.
+- **Hyprland IPC is a parked stub** — `HyprlandIpc::new` registers empty handlers and
+  `start_listener` blocks its caller.
+- **Config paths** — `config_path` uses `--config-directory` if given, else
+  `$XDG_CONFIG_HOME/my_shell/<name>` (`~/.config` if unset) when that file exists, else the
+  checkout's `example/<name>`. `example/theme.toml` is gitignored, so a fresh worktree has
+  none and the default theme is fully transparent.
+- **Build inside the Nix devShell** — it provides the native libraries and the run-time
+  `LD_LIBRARY_PATH` (Vulkan, PipeWire). CI uses `nix develop --command cargo build --locked`.

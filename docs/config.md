@@ -12,7 +12,8 @@ they are set in code.
 
 ## Where the files go
 
-Put your files in `$XDG_CONFIG_HOME/my_shell/` (`~/.config/my_shell/` when
+Put your files in `$XDG_CONFIG_HOME/my_shell/`, or any directory given with
+`--config-directory` (`-c`), (`~/.config/my_shell/` when
 `XDG_CONFIG_HOME` is unset):
 
 ```sh
@@ -30,6 +31,8 @@ override one file and keep the other's defaults.
 - The `example/` fallback points at the directory the binary was **compiled**
   from. It works for `cargo run`, but a binary built elsewhere (e.g. `nix build`)
   has no such directory, so give it your own copies of both files.
+- `example/theme.toml` is gitignored: a fresh checkout has only `template.toml`, so generate
+  or copy a theme first.
 
 ## Reloading and errors
 
@@ -68,7 +71,8 @@ primary = "#296a48"
   `false`. Both tables can be present; switching modes is a one-line edit.
 - Each table holds Material 3 color roles. Values are `"#RRGGBB"` or
   `"#RRGGBBAA"`.
-- The bar's background is `surface_container`. Write every role:
+- The bar's background is `surface_container`. The roles are also mapped onto the Material 3
+  Expressive widgets' scheme (the toolbox's sliders, switches and buttons). Write every role:
   [`example/theme.toml`](../example/theme.toml) has the full list of 49 roles,
   from `primary` to `scrim`.
 
@@ -130,9 +134,7 @@ The bar reads these names:
 | Name | Animates | Default if unset |
 |------|----------|------------------|
 | `island` | Islands growing, shrinking and morphing | ease-out cubic |
-| `media_play_pause` | The media card's play button shape and the seek bar's wave height | ease-out cubic |
-| `slider_handle` | A slider's handle narrowing while pressed (toolbox and seek bar) | M3 standard |
-| `slider_indicator` | A slider's value indicator fading in and out | M3 standard |
+| `media_play_pause` | The media card's play button shape | ease-out cubic |
 | `notification_banner` | The notification card dropping in from the top of the screen and leaving | ease-out cubic |
 
 Any other name is free for your own definitions to reuse. Separate words with `_`,
@@ -144,61 +146,47 @@ a warning, and the default applies.
 ## For developers
 
 Each file is a struct in `src/config/` that implements `WatchableConfig`
-(`src/config/watchable.rs`). `main()` loads each one with
-`load_and_watch(&config_path("<name>"), ui_tx.clone())`, which returns an
-`Arc<RwLock<_>>` that components share.
+(`src/config/watchable.rs`):
 
 ```rust
-pub trait WatchableConfig: Default + Sized + Send + Sync + 'static {
+pub trait WatchableConfig: Clone + Default + Sized + Send + 'static {
     fn try_load(path: &Path) -> Option<Self>;
     fn is_changed(&self, new: &Self) -> bool;
-    fn reload_event(&self) -> UiEvent;
 
-    fn load(path: &Path) -> Self { .. }                          // provided
-    fn load_and_watch(path: &Path, ui_tx: Sender<UiEvent>) -> Arc<RwLock<Self>> { .. } // provided
+    fn load(path: &Path) -> Self { .. }                                              // provided
+    fn load_and_watch(path: &Path, on_reload: impl Fn(Self) + Send + 'static) -> Self { .. } // provided
 }
 ```
 
-`load_and_watch` spawns a thread that watches the file's **parent directory**
-with `notify`, so a rename-save that replaces the file's inode does not end the
-watch. On a create or modify event for the file it calls `try_load`, and, only
-if `is_changed` says so, swaps the new value in and sends `reload_event()` on the
-`UiEvent` channel.
+`load_and_watch` loads the file, then watches its **parent directory** with `notify` on a
+thread, so a rename-save that replaces the file's inode does not end the watch. Each version
+that `is_changed` says differs goes to `on_reload`. `State::start` passes a `ui_channel`
+sender there, whose closure sets the `theme` / `animation` signal on the UI thread.
 
-| Struct | File | `reload_event()` | `is_changed` compares |
-|--------|------|------------------|-----------------------|
-| `Theme` (`theme.rs`) | `theme.toml` | `RequestRedrawAll` | the whole struct |
-| `AnimationConfig` (`animation.rs`) | `animation.toml` | `AnimationUpdated(easings)` | the raw strings only |
+| Struct | File | Signal | `is_changed` compares |
+|--------|------|--------|-----------------------|
+| `Theme` (`theme.rs`) | `theme.toml` | `state.theme` | the whole struct |
+| `AnimationConfig` (`animation.rs`) | `animation.toml` | `state.animation` | the raw strings only |
 
-- `Theme::theme()` returns the active `&ColorTheme` (`ui_core::scheme::theme`).
-  `UserInterface::draw` passes it to every `Component::draw`. `Color`
-  (`ui_core::scheme::color`) parses hex via `TryFrom<String>` and converts into
-  `skia_safe::Color4f`.
-- `AnimationConfig` keeps both the raw strings and the `Easing`s parsed by
-  `ui_core::animation::parser::css_to_easing`, after `resolve` has followed any
-  `conf::` references. Every name gets its own `Easing`, so a component never
-  needs to know whether its name was an alias. On `AnimationUpdated`, `main()`
-  calls `UserInterface::on_easing_updated(id, easing)` for each pair, which
-  fans out to `Component::on_easing_updated`, so an in-flight `Animation` can
-  swap its curve without a restart. `UserInterface` itself handles `"island"`
-  (`ISLAND_EASING_ID` in `src/ui.rs`).
+- `Theme::theme()` returns the active `&ColorTheme` (`ui_core::scheme`). Views read colors
+  with `ui::palette(state, |t| t.role)`; `main.rs` maps the theme onto md3e's scheme with
+  `ui::md3e_scheme` in an effect, so a reload recolors both.
+- `AnimationConfig::easings()` holds every name's `Easing`, parsed by
+  `ui_core::animation::parser::css_to_easing` after `conf::` references are followed, so a
+  reader never needs to know whether its name was an alias.
 
 ### Adding a config file
 
-1. Add a struct in `src/config/` and implement the three required methods.
-   `read_toml` in `watchable.rs` implements `try_load` for any `Deserialize` type.
-   Give it `#[serde(default)]` so a partial file still loads.
-2. Load it in `main()` next to the others:
-   `YourConfig::load_and_watch(&config_path("your.toml"), ui_tx.clone())`.
+1. Add a struct in `src/config/` and implement the two required methods. `read_toml` in
+   `watchable.rs` implements `try_load` for any `Deserialize` type. Give it
+   `#[serde(default)]` so a partial file still loads.
+2. Load it in `State::start` the way `theme` is, into a new signal.
 3. Add `example/your.toml` so a fresh checkout runs without a user copy.
 4. Document it in the user-facing part of this file.
 
 ### Adding an easing name
 
-Start the animation with a built-in curve and swap it in
-`Component::on_easing_updated` when `id` matches your name. `UserInterface::new`
-replays every easing from the file through `on_easing_updated` once the
-components exist, so the same handler covers startup and reloads; there is no
-separate lookup. A `ToolboxItem` gets the same call from `Toolbox`, and
-`components::update_slider_easing` handles the slider names for any `Slider`.
-Add the name to the table in [`animation.toml`](#animationtoml) above.
+Use `ui::eased(state, "your_name", duration, target)`: it follows `state.animation` in an
+effect and swaps the curve in, even mid-motion. An
+`IslandMorph` takes its easing with `set_easing`, as `ui::bar` and the banner do in an
+effect. Add the name to the table in [`animation.toml`](#animationtoml) above.

@@ -4,11 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A Wayland desktop bar/shell (`wlr-layer-shell`) rendered with Skia. Despite the
-crate name (`gtk_learn`), the directory name (`gtk_shell`), and GTK packages in
-the Nix files, the running code uses **no GTK** — it talks raw Wayland through
-`smithay-client-toolkit` and draws with `skia-safe` into SHM buffers. Treat the
-GTK dependencies in `flake.nix` as stale scaffolding, not the architecture.
+A Wayland desktop bar/shell (`wlr-layer-shell`) built on
+[AntiWebUI](https://github.com/bea4dev/AntiWebUI): a reactive Rust UI library that renders
+with wgpu and opens layer-shell surfaces itself. Despite the crate name in old docs
+(`gtk_learn`) and the directory name (`gtk_shell`), there is no GTK, and no Skia any more.
+
+AntiWebUI and its Material 3 Expressive widgets (`anti-webui-md3e`) are git dependencies
+pinned to one rev in the root `Cargo.toml`. The library changes daily, so upgrading the rev
+is a deliberate step: update both entries and the `outputHashes` entry in `flake.nix`.
 
 ## Build & run
 
@@ -16,12 +19,12 @@ The development environment is `devShells.default` in **flake.nix**, pinned by
 `flake.lock`. Enable Nix's `nix-command` and `flakes` experimental features, then
 enter it with `nix develop`. With direnv installed and hooked into your shell,
 run `direnv allow` once; `.envrc` uses `use flake` to load the same environment.
-No devenv installation is needed.
 
-The shell provides Rust/Cargo, Clippy, rustfmt, rust-analyzer and native build
-dependencies, plus `LIBCLANG_PATH`, `LD_LIBRARY_PATH` and the EGL vendor path
-needed by Skia and GL/Wayland. The EGL vendor path assumes NixOS's
-`/run/opengl-driver`; running the graphical binaries requires a Wayland session.
+The shell provides Rust/Cargo, Clippy, rustfmt, rust-analyzer, the native libraries the
+build links (dbus, fontconfig, wayland, libxkbcommon, libxcb), and an `LD_LIBRARY_PATH`
+with what is loaded at run time: vulkan-loader (wgpu), mesa/libGL (wgpu's GL fallback) and
+pipewire (AntiWebUI's audio, for the volume). Running the bar requires a Wayland session
+with layer-shell.
 
 ```sh
 nix develop
@@ -29,7 +32,7 @@ cargo build
 RUST_LOG=debug cargo run      # env_logger reads RUST_LOG; use info/debug
 cargo run -- -c ./example      # --config-directory: read theme.toml etc. from there
 cargo run -- action launcher   # send an action to the running bar
-cargo test
+cargo test --workspace
 cargo test test_run -- --ignored --nocapture   # mpris event stream (needs a live MPRIS player, runs until it quits)
 ```
 
@@ -39,132 +42,94 @@ For a non-interactive build (also used by CI):
 nix develop --command cargo build --locked
 ```
 
-`flake.nix` also exposes a `default` package via `rustPlatform.buildRustPackage`;
-day-to-day development uses the devShell and Cargo, not `nix build`.
+`nix build` builds the `default` package and wraps the binary with the same run-time
+library path. Day-to-day development uses the devShell and Cargo.
+
+At startup the Vulkan loader may log ERRORs about the system's Mesa radeon/lvp ICDs needing
+a newer glibc than the devShell's. They are harmless while another ICD (Intel here) loads.
 
 ## Architecture
 
-This is a **Cargo workspace** of five crates plus the bar binary. The binary
-(`my_shell`, root `Cargo.toml`, `src/`) is the only thing that talks Wayland;
-the others are a layered, presentation-only widget toolkit:
+A Cargo workspace of the bar binary (`my_shell`, `src/`) and `ui_core`, what is left of the
+old Skia widget toolkit: `LayoutRect`, the theme's `ColorTheme`/`Color`, CSS easing parsing
+and `Animation`, `IslandMorph`, and `elide`/`wrap_text`. It has no rendering of its own.
 
-```
-ui_core   → no internal deps (skia-safe, serde)      geometry, pointer/keyboard
-            events, animation, color scheme, FontBook
-ui_widget → ui_core                                   Widget trait, Row/Column,
-                                                        ScrollableWidget
-m3_widget → ui_core, ui_widget                         Material 3 widgets
-m3_test   → ui_core, m3_widget (dev harness, winit)    `cargo run -p m3_test`
-macros    → nothing                                    boxed!(a, b, c) -> Vec<Box<..>>
-my_shell  → ui_core, m3_widget, macros (+ calloop, wayland, zbus, tokio, …)  the bar
-```
+### Reactivity, not a render loop
 
-The bar's own UI is built from `Component`s. It uses `m3_widget` for icons and the
-toolbox's sliders. The M3 widget stack is developed and demoed standalone via
-`cargo run -p m3_test` (a winit+softbuffer gallery), not inside the bar. See
-[docs/widgets.md](docs/widgets.md) for the full crate/trait reference.
+`main()` runs `Shell::new().namespace("my_shell").run(..)`. Inside it, `State::start`
+(`src/state.rs`) starts every provider and returns `State`: a bundle of AntiWebUI
+`Signal`s (`players`, `player_art`, `notifications`, `system`, `warp`, `theme`,
+`animation`, `action`, …) plus `commands`, the senders to the providers.
 
-**Two different, easily-confused traits exist:**
-- `Component` (`src/ui.rs`, bar-only) — what the bar's UI is built from today.
-- `Widget` (`ui_widget::Widget`) — what `m3_widget` implements. The bar uses one
-  directly only for the toolbox's sliders.
-They are not related and do not share a supertrait. See
-[docs/widgets.md](docs/widgets.md) for the distinction in detail.
+Providers keep their own threads (D-Bus, niri IPC, polling) and send to the UI thread
+through `ui_channel`s, whose closures update the signals. Views read signals in
+`dyn_style`/`dyn_view`/`text(|| ..)` closures and `effect`s, and AntiWebUI repaints what
+depends on what changed. There is no redraw flag. Running animations step with
+`request_frame` or AntiWebUI's `animated`.
 
-The bar itself is one event loop (`calloop`) driving N `Screen`s (one per
-Wayland output). `Shell` (in `src/main.rs`) owns all Wayland/SCTK state; its SCTK
-handlers live in `src/output.rs` (compositor, output, layer), `src/seat.rs` (seat,
-pointer) and `src/dnd.rs` (data device). Per output it creates a `Top`-layer surface anchored to the
-bottom/left/right edges with a `BAR_HEIGHT` (48px) exclusive zone. The surface is taller than that:
-the headroom above the bar is transparent and click-through, and islands grow into it.
-A second, `Overlay`-layer surface per output along the top edge (`src/banner.rs`) shows the
-notification on display as a card that drops in from the top; it is not an island.
+The volume and brightness come from AntiWebUI's `shell-audio` (PipeWire events) and
+`shell-session` (inotify on the backlight) features, not polling. The rest of
+`SystemStatus` (`src/system.rs`) is polled every 5s.
 
-### Rendering is event-driven, not a render loop
-There is no redraw flag on `UIState`. Each `Screen` tracks `needs_redraw` and
-`frame_pending`; `Shell::request_redraw(idx)` sets `needs_redraw = true` and
-draws immediately unless a `wl_surface.frame` callback is still outstanding
-(`frame_pending`), in which case the frame callback (`CompositorHandler::frame`)
-redraws once it fires. `Shell::draw` sets `frame_pending = true`, wraps the SHM
-buffer's pixels directly with Skia (`surfaces::wrap_pixels` — no GPU surface),
-calls `screen.ui.draw(canvas, &state, &font, width)`, sets `needs_redraw` to whether that
-returned `Animating`, requests a new frame callback, and commits.
+### Surfaces
 
-Component handlers report whether a redraw is needed via `Redraw { None, Now,
-Animating }` (`src/ui.rs`); `UserInterface` folds every component's result with
-`Redraw::max`. `Now` just means "something changed"; `Animating` returned from
-`draw` makes that screen's next frame callback repaint it — this is how a running
-`Animation` keeps repainting itself every frame without any handler having to
-reschedule it explicitly. A `CLOCK_TICK` calloop timer in `main()` also repaints
-every screen once a second and expires notifications.
+`for_each_output` opens, per output:
 
-### Islands (Dynamic Island-style UI)
-`UserInterface::draw` paints the bar and every visible island as a single silhouette
-(`ui_core::island`). Each component has its own `IslandMorph` and its content scales along with it. A component bids by
-returning an `IslandRequest` from `Component::island`; the highest `priority` wins the one main island, and the
-others collapse in place meanwhile, so two can show at once while one opens as another closes.
-The owner draws its content in `draw_island` and receives pointer events in
-`on_island_cursor`. `Shell::update_input_region` limits input to the bar and island.
-See [docs/components.md](docs/components.md).
+- the bar: a `Layer::Top` surface anchored bottom/left/right, `BAR_HEIGHT` (48px) plus
+  `ISLAND_MAX_HEIGHT` of transparent headroom tall, with a `BAR_HEIGHT` exclusive zone. Its
+  input region follows the bar and the open island.
+- the outside-press catcher: a `Layer::Top` surface kept at 1×1 with no input while no
+  island is open, and stretched over the whole output, minus the bar's input region, while
+  one is. A press on it closes every island (`catch_outside_presses` in `main.rs`).
+- the notification banner: a `Layer::Overlay` surface along the top edge
+  (`components::notifications::banner`). It is not an island.
 
-### The six async input channels (wired in `main()`)
-Background threads/providers feed the calloop event loop through
-`calloop::channel`s. `main()` registers each channel with `on_msg`; each closure
-calls `shell.dispatch`, which fans the message out to every `Screen` and calls
-`shell.request_redraw(idx)` for those that returned non-`Redraw::None`:
+**AntiWebUI builds a wgpu instance and device per surface**, so opening one costs a visible
+lag. Open surfaces once and reshape them (`set_size`, `set_anchor`, `set_input_region`);
+never open one per use. When shrinking, set the size before dropping anchors: a stretched
+size without both opposite anchors is a protocol error.
 
-| Channel payload | Handler |
-|---|---|
-| `NotificationEvent` | `screen.ui.on_notification` |
-| `(PlayerState, mpris::Event)` | `screen.ui.on_mpris` |
-| `IPCEvent` | `screen.ui.on_ipc` |
-| `KDEConnectEvent` | `screen.ui.on_kde_connect_event` |
-| `WarpStatus` | `screen.ui.on_warp` |
-| `cli::Action` | `screen.ui.on_action` |
+### Parts and islands (`src/ui.rs`)
+
+Each component is a function returning a `Part`: what it puts in the bar (`BarSlot` +
+`View`), an optional `IslandPart` (a reactive `IslandRequest` bid, the content view, a
+`close`, and a `frame` signal the bar writes), and an optional `overlay` drawn over the bar
+and islands from the part's place in the bar. `ui::bar` lays the parts out with flex,
+computes each part's x itself (AntiWebUI has no API to ask an element's position), draws
+the bar and every visible island as one `svg::path` silhouette (`island_path`, kurbo), and
+morphs each island with its own `IslandMorph`. The highest `priority` wins the main island;
+the others collapse where they are, so one can open while another closes.
+
+Opening happens on press (`on_pointer_down`), not click. A press on a part closes every
+other part's island first. See [docs/components.md](docs/components.md).
+
+### Async inputs
+
+| Provider | Module | Feeds |
+|---|---|---|
+| Notification server | `src/dbus/notification.rs` | `notifications` |
+| MPRIS players + polled positions | `src/dbus/mpris.rs` | `players`, `last_playing` |
+| Cover art (polled) | `src/dbus/player_art.rs` | `player_art` |
+| Compositor IPC | `src/ipc/` | `focused_title`, `focused_workspace` |
+| KDE Connect | `src/dbus/kdeconnect/` | logged only |
+| Cloudflare WARP | `src/dbus/warp.rs` | `warp` |
+| System status (5s poll) | `src/system.rs` | `system` |
+| CLI actions | `src/cli.rs` | `action` |
+| Config files | `src/config/` | `theme`, `animation` |
 
 `src/cli.rs` holds the clap CLI. `my_shell action <name>` connects to
-`$XDG_RUNTIME_DIR/my_shell.sock`, writes the `Action` as one JSON line and waits for
-`ok`; the bar binds that socket at startup (refusing to start if another instance
-answers on it). To add an action, add a variant to `cli::Action` and match it in
-the component's `on_action`.
+`$XDG_RUNTIME_DIR/my_shell.sock`, writes the `Action` as one JSON line and waits for `ok`;
+the bar binds that socket at startup and refuses to start if another instance answers on
+it. `action` carries a counter, so the same action twice still reruns its readers.
 
-`SystemStatus` (`src/system.rs`) has its own channel too: its closure updates
-`UIState.system` and repaints every screen, since the toolbox always shows it. So does
-player art (`src/dbus/player_art.rs`), which updates `UIState.player_art`, and players'
-polled positions, which correct `UIState.players` when they have drifted.
+A tick thread expires notifications every second.
 
-A seventh channel, `UiEvent` (`RequestRedrawAll`/`AnimationUpdated`/`DismissNotification`/`ClearNotifications`), drives `Shell` directly rather than going through a
-`Component` method.
+### Window-manager IPC (`src/ipc/`)
 
-`UserInterface` (`src/ui.rs`) holds `Vec<Box<dyn Component>>`; every `on_*` handler
-fans out to every `Component`. `Shell` holds the one `UIState` shared by all screens
-(currently `players: HashMap<String, PlayerState>`, `warp: Option<WarpStatus>` and
-`notifications: NotificationStore`),
-updated in the channel closures in `main()` before dispatching. **All drawing lives in components** — `UserInterface::draw`
-only paints the bar and island background and calls each
-`Component::draw`/`draw_island`; there is no inline text drawing left in `main.rs`/`ui.rs`.
+`ipc::listen` picks a backend from `$XDG_CURRENT_DESKTOP`. niri (`niri.rs`) translates the
+event stream into `IPCEvent`. Hyprland (`hyprland.rs`) is a parked stub.
 
-### Window-manager IPC abstraction (`src/ipc/`)
-`ipc::listen` selects a backend at runtime from `$XDG_CURRENT_DESKTOP` (`niri` or
-`hyprland`). Each backend spawns a listener thread translating compositor-native events into the small internal
-`IPCEvent` enum (`src/ipc/events.rs`) sent over the channel.
-- **niri** (`niri.rs`): connects a `niri-ipc` socket for the `EventStream`. Maintains a `HashMap<id, Window>` to
-  resolve titles on focus changes. This is the fleshed-out backend.
-- **hyprland** (`hyprland.rs`): all handlers are registered but empty, and
-  `start_listener` blocks its caller. Parked stub.
+## Status
 
-### Fonts (`ui_core/src/font/`)
-`FontBook` (moved out of the bar into `ui_core`) wraps a Skia `FontMgr` plus a
-`HashMap<String, Typeface>`. `register(key, family, style)` resolves a system
-font by name via `legacy_make_typeface` ("Roboto", "Noto Sans CJK JP") and
-panics if the family can't be resolved. `sized(key, px)` produces a `Font` —
-**it panics if `key` was never registered** (`unwrap_or_else(|| panic!(..))`),
-there is no silent fallback. Register every key you use before the first draw.
-
-## Status / where work is happening
-
-`TODO.md` tracks intended providers (audio, battery, network, monitor) and IPC
-event-mapping work. Current live state: niri IPC handles workspace + window-focus
-changes; MPRIS events arrive and update `UIState.players`. Hyprland IPC is a parked
-stub. The M3 widget stack (`ui_widget`/`m3_widget`) is under active
-development against the `m3_test` gallery.
+`TODO.md` tracks the AntiWebUI migration phase by phase, including what still needs to be
+checked on screen.
