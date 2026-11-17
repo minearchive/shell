@@ -108,6 +108,8 @@ fn main() {
                     let parts = vec![
                         components::clock::clock(&state),
                         components::media::media(&state, width),
+                        // Left of the toolbox, which stays at the screen's edge.
+                        components::tray::tray_part(&state),
                         components::toolbox::toolbox(&state),
                         components::osd::osd(&state),
                     ];

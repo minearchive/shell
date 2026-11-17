@@ -224,6 +224,7 @@ dependencies = [
  "anti-webui-app",
  "anti-webui-core",
  "anti-webui-wayland",
+ "anti-webui-widgets",
  "async-executor",
  "async-lock",
  "bitflags 2.13.0",

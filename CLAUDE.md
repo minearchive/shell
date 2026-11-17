@@ -108,7 +108,7 @@ computes each part's x itself (AntiWebUI has no API to ask an element's position
 the bar and every visible island as one `svg::path` silhouette (`island_path`, kurbo), and
 morphs each island with its own `IslandMorph`. The highest `priority` wins the main island;
 the others collapse where they are, so one can open while another closes. Priorities:
-toolbox 150, media 50, OSD 20.
+toolbox 150, tray 140, media 50, OSD 20.
 
 Opening happens on press (`on_pointer_down`), not click. A press on a part closes every
 other part's island first. See [docs/components.md](docs/components.md).
@@ -116,6 +116,11 @@ other part's island first. See [docs/components.md](docs/components.md).
 The OSD (`components/osd.rs`) is a `passive` island with no place in the bar: it shows the
 volume or brightness for 1.5s after either changes, below media and the toolbox so it does
 not appear while one of those is open.
+
+The system tray (`components/tray.rs`) sits left of the toolbox: the icons of programs that
+register a StatusNotifierItem, each opening its dbusmenu as the part's island. It reads
+AntiWebUI's `shell-tray` provider directly instead of copying it into `State`, and hides its
+row while there are no items.
 
 ### Async inputs
 
@@ -128,6 +133,7 @@ not appear while one of those is open.
 | KDE Connect | `src/dbus/kdeconnect/` | logged only |
 | Cloudflare WARP | `src/dbus/warp.rs` | `warp` |
 | System status (5s poll) | `src/system.rs` | `system` |
+| System tray | AntiWebUI `shell-tray` | read directly by `src/components/tray.rs`, not in `State` |
 | Toolbox toggles | `src/toggles.rs` | holds the inhibitor and the night light; remembers do not disturb |
 | Low battery warning | `src/state.rs` | `notifications`, derived from `system` |
 | CLI actions | `src/cli.rs` | `action` |

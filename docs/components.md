@@ -52,8 +52,8 @@ let island = IslandPart {
 - Return a request for as long as you want the island, and `None` to collapse it. Changing
   the size morphs it. `height` is clamped to `ISLAND_MAX_HEIGHT` (480).
 - The highest `priority` wins the main island, which takes the pointer; on a tie, the later
-  part does. The priorities in use: toolbox 150, media 50, OSD 20. A losing island collapses
-  where it is and opens again when it next wins.
+  part does. The priorities in use: toolbox 150, tray 140, media 50, OSD 20. A losing island
+  collapses where it is and opens again when it next wins.
 - The content is laid out at the request's full size, and scaled and faded while the island
   morphs, so text never reflows mid-animation. It stays shown while collapsing, after the
   request is gone, so keep what you were showing.
@@ -174,7 +174,31 @@ The notifications panel (`toolbox/notifications.rs`) stacks each app's notificat
 one row. A row goes by a sideways mouse drag past 40% of its width, or its ✕. Touchpad
 sideways scrolling deliberately does not dismiss: it misfired too often.
 
-## 4. Shared state
+## 4. The system tray
+
+`src/components/tray.rs` draws the icons of programs that register a StatusNotifierItem,
+in the bar left of the toolbox, and opens the clicked one's menu as its island.
+
+- The row is `for_each(move || tray().items(), |item| item.key(), ..)`: the key is the
+  item's bus name and path, so a view stays with its item as the list changes. The row
+  hides itself (and takes no room) while there are no items.
+- An icon is `bitmap_view(move || Some(item.icon.best(size)))`; an item with no picture
+  falls back to the first letter of its title.
+- Clicks follow the item: primary `activate` (or open the menu when `item_is_menu`),
+  secondary `context_menu` when it has a dbusmenu, middle `secondary_activate`, and the
+  wheel goes to `scroll`. Items without a dbusmenu get their own menu from the program.
+- The menu is flattened with `flatten` (`TrayMenuItem` → `Row`): hidden entries dropped,
+  submenus indented in place, `Check`/`Radio` that are on shown with a ✓, separators kept.
+  An island cannot open a second menu, so submenus are not nested popups.
+- The island's height is the row count, capped at `MENU_MAX_ROWS`: the island does not
+  scroll, so a longer menu is cut off.
+- Priority 140: below the toolbox's panel (the user opened that on purpose) and above the
+  OSD.
+
+The tray is read straight from AntiWebUI's provider rather than copied into `State`; see
+[docs/data-sources.md](data-sources.md#providers-read-directly).
+
+## 5. Shared state
 
 `State` (`src/state.rs`) is `Clone`; every part gets the same signals. Write to them only
 through `State`'s methods (`dismiss_notification`, `clear_notifications`) or a provider's

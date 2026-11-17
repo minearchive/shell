@@ -174,6 +174,11 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
 - [ ] ネットワークの統計とイベント（今は 5 秒のポーリング。AntiWebUI の `shell-network` が候補）
 
 ## シェル
+- [x] システムトレイ（AntiWebUI の `shell-tray`）：`components::tray`、toolbox の左にアイコン、押すとその項目のメニューがアイランドで開く
+  - 左クリックは `activate`（`item_is_menu` ならメニュー）、右クリックは dbusmenu があればそれを、なければ `context_menu`、中クリックは `secondary_activate`、ホイールは `scroll`
+  - メニューは 1 枚のアイランドに平坦化する（サブメニューは字下げ、`Check`/`Radio` は ✓、区切り線は残す）。アイランドはスクロールしないので `MENU_MAX_ROWS` で切る
+  - 項目が無い間は行ごと隠れる（場所を取らない）
+  - [ ] 実機で確認：アイコンが出る、左クリックで開く、右クリックでメニュー、メニューの項目が効く、項目が消えたら行も消える
 - [ ] キーボード入力（バーで要るようになったら）
 - [ ] デザインを決める
 

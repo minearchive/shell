@@ -21,6 +21,7 @@ Scopes mirror the module path: `feat(ipc): …`, `fix(ui): …`, `feat(toolbox):
 | `src/components/media.rs` | An island with an overlay that travels between the bar and the card |
 | `src/components/notifications.rs` | The top banner (its own surface, not an island) |
 | `src/components/osd.rs` | The volume/brightness OSD: a timed, `passive` island with no place in the bar |
+| `src/components/tray.rs` | The system tray: StatusNotifierItem icons left of the toolbox, and their menus |
 | `src/components/toolbox/` | Status icons; controls (left press) and notifications (right press) panels; entries in `items.rs` |
 | `src/toggles.rs` | What the toolbox's toggles hold: logind's idle inhibitor, `gammastep`, and the `$XDG_STATE_HOME` files |
 | `src/system.rs` | `SystemStatus`: network, Bluetooth, battery, power profile (5s poll); `LOW_BATTERY` |
@@ -62,6 +63,10 @@ Scopes mirror the module path: `feat(ipc): …`, `fix(ui): …`, `feat(toolbox):
 - **Toggles hold real resources.** `src/toggles.rs` keeps logind's inhibitor fd and the
   `gammastep` child; effects in `State::start` start and stop them from the signals. Do not
   start them from a view, or they outlive the island that drew it.
+- **The tray is read, not copied.** `tray().items()` subscribes to AntiWebUI's provider, so
+  read it inside `for_each`/`dyn_view`. A `get()` outside one reads once and never updates.
+- **A tray menu is one island.** Submenus are flattened in place: an island cannot open a
+  second menu, and it does not scroll.
 - **Hyprland IPC is a parked stub** — `HyprlandIpc::new` registers empty handlers and
   `start_listener` blocks its caller.
 - **Config paths** — `config_path` uses `--config-directory` if given, else

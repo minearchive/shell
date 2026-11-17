@@ -8,12 +8,12 @@ services, sysfs, compositor IPC.
 AntiWebUI has reactive providers behind `shell-*` cargo features: `shell-audio`
 (PipeWire), `shell-session` (logind, brightness), `shell-battery` (UPower), `shell-network`
 (NetworkManager), `shell-bluetooth` (BlueZ), `shell-power-profiles`, `shell-media` (MPRIS),
-`shell-niri`, `shell-system` (CPU, memory, temperatures), and more; see its
-`anti-webui/Cargo.toml`. Each is an object of signals updated from events. The volume and
-brightness come from there (`anti_webui::shell::audio()` / `session()` in `State::start`).
-If one covers your data, enable its feature on `anti-webui` in the root `Cargo.toml` and
-copy its value into `State` with an `effect`, writing inside `untrack` so the write doesn't
-subscribe the effect to what it writes:
+`shell-tray` (StatusNotifierItems), `shell-niri`, `shell-system` (CPU, memory, temperatures),
+and more; see its `anti-webui/Cargo.toml`. Each is an object of signals updated from events.
+The volume and brightness come from there (`anti_webui::shell::audio()` / `session()` in
+`State::start`). If one covers your data, enable its feature on `anti-webui` in the root
+`Cargo.toml` and copy its value into `State` with an `effect`, writing inside `untrack` so
+the write doesn't subscribe the effect to what it writes:
 
 ```rust
 let session = anti_webui::shell::session();
@@ -68,6 +68,25 @@ Components read `state.battery` and follow it. Nothing else is needed for a repa
 - If the provider takes commands, add its sender to `Commands`. Dropping a sender closes the
   provider's command channel, so keep it even before anything sends.
 
+## Providers read directly
+
+Not every provider needs copying into `State`. When a component is the only reader, and the
+provider's own object is cheap to copy and tracks reads, read it in the view: the tray
+(`src/components/tray.rs`) calls `tray().items()` inside `for_each`/`dyn_view`, and the mic
+toggle reads `audio().default_source()`.
+
+```rust
+// `for_each` re-runs when `items()` changes; `key` keeps each view with its item.
+for_each(move || tray().items(), |item| item.key(), |item| tray_icon(item))
+```
+
+- Only do this for state nothing else in the bar needs. A signal in `State` is what lets
+  two components agree on a value.
+- The provider must track reads (AntiWebUI's `SharedSignal` does) or the view will not
+  follow it.
+- With no items, draw nothing rather than an empty row: the tray hides its row so a session
+  without a tray looks as it did.
+
 ## Sources that are not signals
 
 Some state is not a value the bar reads but something it holds: an inhibitor, a child
@@ -107,6 +126,7 @@ pure function of signals already in `State`.
 | Volume | AntiWebUI `shell-audio` | PipeWire events |
 | Brightness | AntiWebUI `shell-session` | inotify on the backlight |
 | Mic mute | AntiWebUI `shell-audio` | the default source, read straight from the provider (not in `State`) |
+| System tray | AntiWebUI `shell-tray` | StatusNotifierItems, read straight from the provider (not in `State`) |
 | Idle inhibitor | `src/toggles.rs` | logind `Inhibit`, held as an fd while keep awake is on |
 | Night light | `src/toggles.rs` | a `gammastep` child process while night light is on |
 | Network, Bluetooth, battery, power profile | `src/system.rs` | 5s poll |

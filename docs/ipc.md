@@ -35,7 +35,7 @@ let _ = sender.send(IPCEvent::MonitorAdded(name));
 ### 3. Put it in `State`
 
 Add a signal to `State` (`src/state.rs`) and set it in the `ipc::listen` closure's `match`.
-Components read the signal; see [docs/components.md](components.md#4-shared-state).
+Components read the signal; see [docs/components.md](components.md#5-shared-state).
 
 ## Backend status
 
