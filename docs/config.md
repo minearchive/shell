@@ -129,6 +129,10 @@ A reference can point at another reference. A reference to an undefined name,
 or a cycle (`a = "conf::b"`, `b = "conf::a"`), is skipped with a warning like a
 parse error.
 
+[`example/animation.toml`](../example/animation.toml) ships every name the bar reads,
+pointing at one shared `ease_out_cubic` curve (except `island`, which has its own
+`linear()`). Copy it and change the curves you care about.
+
 The bar reads these names:
 
 | Name | Animates | Default if unset |
@@ -137,10 +141,30 @@ The bar reads these names:
 | `media_play_pause` | The media card's play button shape | ease-out cubic |
 | `notification_banner` | The notification card dropping in from the top of the screen and leaving | ease-out cubic |
 | `notification_row` | A row in the toolbox's notification list sliding away or back | ease-out cubic |
+| `slider_level` | The toolbox's volume and brightness sliders, and the OSD's bar, gliding to a value that changed elsewhere (keys, another app). A drag and the first value jump instead. | ease-out cubic |
 
 Any other name is free for your own definitions to reuse. Separate words with `_`,
 not `.`: a bare `a.b = …` is a nested TOML table and the file fails to parse. An easing that fails to parse is skipped with
 a warning, and the default applies.
+
+The durations are in code, not in this file: `slider_level` glides over 250ms, and the
+island's morph has its own length. Only the curve is configurable.
+
+## Remembered state
+
+The bar keeps a little state of its own outside the config files, in
+`$XDG_STATE_HOME/my_shell/` (`~/.local/state/my_shell/` when `XDG_STATE_HOME` is unset):
+
+| File | Written by | Means |
+|------|------------|-------|
+| `quiet` | the toolbox's do-not-disturb toggle (`src/toggles.rs`) | Exists while do not disturb is on; created when it turns on, removed when it turns off. |
+
+It is a file that exists or not, not a value: touch it to turn do not disturb on before the
+bar starts, or delete it to start with it off. The other toggles (keep awake, night light,
+mic) are not remembered, since each holds something that ends with the bar anyway.
+
+The bar writes the file from an effect in `State::start`, so it is saved the moment the
+toggle changes, not only on a clean exit. A crash leaves the last state in place.
 
 ---
 

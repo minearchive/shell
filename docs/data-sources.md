@@ -68,6 +68,33 @@ Components read `state.battery` and follow it. Nothing else is needed for a repa
 - If the provider takes commands, add its sender to `Commands`. Dropping a sender closes the
   provider's command channel, so keep it even before anything sends.
 
+## Sources that are not signals
+
+Some state is not a value the bar reads but something it holds: an inhibitor, a child
+process, a file. `src/toggles.rs` has the pattern:
+
+- **A held resource** — logind's idle inhibitor is an `OwnedFd`. `State::start` keeps it in a
+  `RefCell` inside an effect and replaces it with `None` when the signal goes off, which
+  drops (releases) the descriptor. The resource's lifetime is the signal's.
+- **A child process** — the night light spawns `gammastep` with `PR_SET_PDEATHSIG` so it dies
+  with the bar, and `toggles::stop` sends `SIGTERM` (which makes gammastep restore the
+  screen's colours) and reaps it on a thread, never blocking the UI thread.
+- **A remembered flag** — a file that exists while a toggle is on, under
+  `$XDG_STATE_HOME/my_shell/`. See
+  [docs/config.md](config.md#remembered-state).
+
+Start and stop these from effects in `State::start`, not from the views that draw the
+toggles: a view is rebuilt as an island opens and closes, so it must not own a resource.
+
+## Derived state
+
+Not everything needs a provider. `State::warn_on_low_battery` (`src/state.rs`) turns
+`system` into a notification with an effect: it watches `Battery::low()` and posts into the
+same `NotificationStore` the D-Bus server fills, keyed by a fixed id (`LOW_BATTERY_ID`) so it
+can take the notification back when the battery charges. Prefer this for anything that is a
+pure function of signals already in `State`.
+
+
 ## Provider status
 
 | Provider | Module | Notes |
@@ -79,5 +106,9 @@ Components read `state.battery` and follow it. Nothing else is needed for a repa
 | KDE Connect | `src/dbus/kdeconnect/` | Connect/disconnect; not shown anywhere yet |
 | Volume | AntiWebUI `shell-audio` | PipeWire events |
 | Brightness | AntiWebUI `shell-session` | inotify on the backlight |
+| Mic mute | AntiWebUI `shell-audio` | the default source, read straight from the provider (not in `State`) |
+| Idle inhibitor | `src/toggles.rs` | logind `Inhibit`, held as an fd while keep awake is on |
+| Night light | `src/toggles.rs` | a `gammastep` child process while night light is on |
 | Network, Bluetooth, battery, power profile | `src/system.rs` | 5s poll |
+| Low battery warning | `src/state.rs` | derived from `system` into `notifications` |
 | Compositor | `src/ipc/` | niri implemented, Hyprland a stub |

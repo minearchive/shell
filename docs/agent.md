@@ -20,8 +20,10 @@ Scopes mirror the module path: `feat(ipc): …`, `fix(ui): …`, `feat(toolbox):
 | `src/components/clock.rs` | The smallest `Part` |
 | `src/components/media.rs` | An island with an overlay that travels between the bar and the card |
 | `src/components/notifications.rs` | The top banner (its own surface, not an island) |
+| `src/components/osd.rs` | The volume/brightness OSD: a timed, `passive` island with no place in the bar |
 | `src/components/toolbox/` | Status icons; controls (left press) and notifications (right press) panels; entries in `items.rs` |
-| `src/system.rs` | `SystemStatus`: network, Bluetooth, battery, power profile (5s poll) |
+| `src/toggles.rs` | What the toolbox's toggles hold: logind's idle inhibitor, `gammastep`, and the `$XDG_STATE_HOME` files |
+| `src/system.rs` | `SystemStatus`: network, Bluetooth, battery, power profile (5s poll); `LOW_BATTERY` |
 | `src/dbus/` | MPRIS, cover art, notifications (a D-Bus service), WARP, KDE Connect |
 | `src/ipc/` | Compositor IPC: niri, and a Hyprland stub |
 | `src/config/` | `config_path`, `Theme`, `AnimationConfig`, hot reload |
@@ -32,10 +34,10 @@ Scopes mirror the module path: `feat(ipc): …`, `fix(ui): …`, `feat(toolbox):
 
 | Topic | Guide |
 |-------|-------|
-| Adding a component, an island, a toolbox entry | [docs/components.md](components.md) |
+| Adding a component, an island, a toolbox entry, a toggle | [docs/components.md](components.md) |
 | Extending IPC events | [docs/ipc.md](ipc.md) |
 | Adding a data source | [docs/data-sources.md](data-sources.md) |
-| Config files (`theme.toml`, `animation.toml`) | [docs/config.md](config.md) |
+| Config files (`theme.toml`, `animation.toml`), remembered state | [docs/config.md](config.md) |
 
 ## Known sharp edges
 
@@ -49,15 +51,25 @@ Scopes mirror the module path: `feat(ipc): …`, `fix(ui): …`, `feat(toolbox):
   computes each part's x from the widths reported by `on_resized`; overlays rely on it.
 - **Press, not click.** `on_click` fires on release. Things that open or close use
   `on_pointer_down`, which also lets a press on the bar close the other islands first.
+- **`IslandRequest::passive`.** An island that only shows something (the OSD) sets it: it
+  takes no input, the outside-press catcher does not grow for it, and `Bar::open` stays
+  `false`. Forgetting it makes the OSD swallow the screen's clicks while it shows.
 - **Reading a signal in an effect subscribes to it.** Wrap writes that also read in
   `untrack`, as `State::start` does for the volume and brightness.
 - **`set_timeout` needs a window.** Use it inside a surface's view, not at the `Shell::run`
-  root; the notification expiry tick is a thread for that reason.
+  root; the notification expiry tick is a thread for that reason. Inside an effect it
+  restarts whenever the effect reruns, which is how the OSD's 1.5s countdown resets.
+- **Toggles hold real resources.** `src/toggles.rs` keeps logind's inhibitor fd and the
+  `gammastep` child; effects in `State::start` start and stop them from the signals. Do not
+  start them from a view, or they outlive the island that drew it.
 - **Hyprland IPC is a parked stub** — `HyprlandIpc::new` registers empty handlers and
   `start_listener` blocks its caller.
 - **Config paths** — `config_path` uses `--config-directory` if given, else
   `$XDG_CONFIG_HOME/my_shell/<name>` (`~/.config` if unset) when that file exists, else the
   checkout's `example/<name>`. `example/theme.toml` is gitignored, so a fresh worktree has
   none and the default theme is fully transparent.
+- **State paths** — do not disturb is remembered as the existence of
+  `$XDG_STATE_HOME/my_shell/quiet` (`~/.local/state` if unset). A test or a stray run can
+  leave it on; delete it to reset.
 - **Build inside the Nix devShell** — it provides the native libraries and the run-time
   `LD_LIBRARY_PATH` (Vulkan, PipeWire). CI uses `nix develop --command cargo build --locked`.

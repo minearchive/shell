@@ -71,16 +71,25 @@ The volume and brightness come from AntiWebUI's `shell-audio` (PipeWire events) 
 `shell-session` (inotify on the backlight) features, not polling. The rest of
 `SystemStatus` (`src/system.rs`) is polled every 5s.
 
+Some effects in `State::start` do more than copy a value: they hold what a toolbox toggle
+needs while it is on (`src/toggles.rs`) — logind's idle inhibitor as an fd, a `gammastep`
+child process for the night light — and release it when the signal goes off. Do not disturb
+is remembered across restarts as the existence of `$XDG_STATE_HOME/my_shell/quiet`. A
+low-battery effect turns `system` into a notification (`warn_on_low_battery`), critical at
+the last mark so it shows through do not disturb.
+
 ### Surfaces
 
 `for_each_output` opens, per output:
 
 - the bar: a `Layer::Top` surface anchored bottom/left/right, `BAR_HEIGHT` (48px) plus
-  `ISLAND_MAX_HEIGHT` of transparent headroom tall, with a `BAR_HEIGHT` exclusive zone. Its
-  input region follows the bar and the open island.
+  `ISLAND_MAX_HEIGHT` (480px) of transparent headroom tall, with a `BAR_HEIGHT` exclusive
+  zone. Its input region follows the bar and the open island.
 - the outside-press catcher: a `Layer::Top` surface kept at 1×1 with no input while no
   island is open, and stretched over the whole output, minus the bar's input region, while
-  one is. A press on it closes every island (`catch_outside_presses` in `main.rs`).
+  one is. A press on it closes every island (`catch_outside_presses` in `main.rs`). An island
+  with `IslandRequest::passive` (the OSD) does not count as open and does not grow it: it
+  takes no pointer input, so presses reach what is under it.
 - the notification banner: a `Layer::Overlay` surface along the top edge
   (`components::notifications::banner`). It is not an island.
 
@@ -98,10 +107,15 @@ and islands from the part's place in the bar. `ui::bar` lays the parts out with 
 computes each part's x itself (AntiWebUI has no API to ask an element's position), draws
 the bar and every visible island as one `svg::path` silhouette (`island_path`, kurbo), and
 morphs each island with its own `IslandMorph`. The highest `priority` wins the main island;
-the others collapse where they are, so one can open while another closes.
+the others collapse where they are, so one can open while another closes. Priorities:
+toolbox 150, media 50, OSD 20.
 
 Opening happens on press (`on_pointer_down`), not click. A press on a part closes every
 other part's island first. See [docs/components.md](docs/components.md).
+
+The OSD (`components/osd.rs`) is a `passive` island with no place in the bar: it shows the
+volume or brightness for 1.5s after either changes, below media and the toolbox so it does
+not appear while one of those is open.
 
 ### Async inputs
 
@@ -114,6 +128,8 @@ other part's island first. See [docs/components.md](docs/components.md).
 | KDE Connect | `src/dbus/kdeconnect/` | logged only |
 | Cloudflare WARP | `src/dbus/warp.rs` | `warp` |
 | System status (5s poll) | `src/system.rs` | `system` |
+| Toolbox toggles | `src/toggles.rs` | holds the inhibitor and the night light; remembers do not disturb |
+| Low battery warning | `src/state.rs` | `notifications`, derived from `system` |
 | CLI actions | `src/cli.rs` | `action` |
 | Config files | `src/config/` | `theme`, `animation` |
 
