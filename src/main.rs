@@ -109,6 +109,7 @@ fn main() {
                         components::clock::clock(&state),
                         components::media::media(&state, width),
                         components::toolbox::toolbox(&state),
+                        components::osd::osd(&state),
                     ];
                     let bar = ui::bar(&state, width, parts, input);
                     catch_outside_presses(&bar, input, catcher_output, height);

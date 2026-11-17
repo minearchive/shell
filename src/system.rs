@@ -45,6 +45,19 @@ pub struct Battery {
 }
 
 /// `Discharging` also covers a battery held at a charge limit, as `Not charging`.
+/// The charges the bar warns at, highest first.
+pub const LOW_BATTERY: [u8; 2] = [20, 5];
+
+impl Battery {
+    /// How many of [`LOW_BATTERY`] it is at or below, counting only while it drains.
+    pub fn low(&self) -> usize {
+        if self.state != BatteryState::Discharging {
+            return 0;
+        }
+        LOW_BATTERY.iter().filter(|&&at| self.percent <= at).count()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BatteryState {
     Discharging,
@@ -338,6 +351,15 @@ fn read_trimmed(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn low_counts_the_marks_passed_while_draining() {
+        let at = |percent, state| Battery { percent, state }.low();
+        assert_eq!(at(21, BatteryState::Discharging), 0);
+        assert_eq!(at(20, BatteryState::Discharging), 1);
+        assert_eq!(at(5, BatteryState::Discharging), 2);
+        assert_eq!(at(3, BatteryState::Charging), 0);
+    }
 
     #[test]
     fn parses_power_profiles() {

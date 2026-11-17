@@ -21,7 +21,9 @@ use crate::{
         self,
         kdeconnect::{KDEConnectClient, KDEConnectCommand, KDEConnectEvent},
         mpris::{PlayerCommand, PlayerState},
-        notification::{CloseReason, NotificationEvent, NotificationHandle, NotificationStore},
+        notification::{
+            CloseReason, NotificationEvent, NotificationHandle, NotificationSnapshot, NotificationStore, Urgency,
+        },
         player_art::Art,
         warp::{WarpClient, WarpCommand, WarpStatus},
     },
@@ -29,6 +31,12 @@ use crate::{
     system::{self, SystemCommand, SystemStatus, Volume},
     toggles,
 };
+
+/// The file do not disturb is remembered in.
+const QUIET: &str = "quiet";
+/// The notification the low battery warning goes out as. The server counts up from 1, so
+/// it never hands this one out.
+const LOW_BATTERY_ID: u32 = u32::MAX;
 
 /// How often notifications are checked for expiry.
 const CLOCK_TICK: Duration = Duration::from_secs(1);
@@ -174,7 +182,8 @@ impl State {
             untrack(|| system.update(|s| s.brightness = brightness));
         });
 
-        let (quiet, awake, night_light) = (signal(false), signal(false), signal(false));
+        let (quiet, awake, night_light) = (signal(toggles::recall(QUIET)), signal(false), signal(false));
+        effect(move || toggles::remember(QUIET, quiet.get()));
         let inhibitor = RefCell::new(None);
         effect(move || {
             *inhibitor.borrow_mut() = awake.get().then(toggles::inhibit_idle).and_then(|r| {
@@ -223,6 +232,8 @@ impl State {
             }),
         };
 
+        state.warn_on_low_battery();
+
         let ticking = state.clone();
         let tick = ui_channel(move |()| ticking.expire_notifications());
         std::thread::spawn(move || loop {
@@ -247,6 +258,37 @@ impl State {
         for id in self.notifications.update(|n| n.clear()) {
             self.notify_closed(id, CloseReason::Dismissed);
         }
+    }
+
+    /// Posts a notification each time the battery drains past a [`system::LOW_BATTERY`] mark,
+    /// and takes it back once it charges.
+    fn warn_on_low_battery(&self) {
+        let (system, notifications) = (self.system, self.notifications);
+        let low = memo(move || system.with(|s| s.battery.map(|b| (b.low(), b.percent))));
+        let warned = std::cell::Cell::new(0);
+        effect(move || {
+            let (level, percent) = low.get().unwrap_or((0, 0));
+            let before = warned.replace(level);
+            let event = if level > before {
+                NotificationEvent::Posted {
+                    id: LOW_BATTERY_ID,
+                    data: NotificationSnapshot {
+                        app_name: "my_shell".into(),
+                        summary: "バッテリー残量が少なくなっています".into(),
+                        body: format!("残り {percent}%。充電してください"),
+                        // The last mark is the one that can't wait, even through do not disturb.
+                        urgency: if level == system::LOW_BATTERY.len() { Urgency::Critical } else { Urgency::Normal },
+                        expire_timeout: -1,
+                        ..Default::default()
+                    },
+                }
+            } else if level == 0 && before > 0 {
+                NotificationEvent::Closed { id: LOW_BATTERY_ID }
+            } else {
+                return;
+            };
+            untrack(|| notifications.update(|n| n.apply(&event, Instant::now())));
+        });
     }
 
     fn expire_notifications(&self) {

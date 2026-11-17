@@ -352,6 +352,7 @@ pub fn media(state: &State, bar_width: f32) -> Part {
             height,
             placement: IslandPlacement::OverBar,
             priority: ISLAND_PRIORITY,
+            passive: false,
         })
     });
 

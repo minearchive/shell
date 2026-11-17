@@ -126,7 +126,8 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
   - ナイトライト：`gammastep -O 4000` を子プロセスで。バーが落ちたら `PR_SET_PDEATHSIG` で止まる。gammastep は flake に足した
   - マイク：PipeWire の既定の入力のミュート
 - [ ] 実機で確認：4 つとも
-- [ ] おやすみ中はバーにアイコンを出す。オン・オフを再起動後も覚える
+- [x] おやすみ中はバーにアイコンを出す（toolbox の列の右端、開くとタイルへフェード）。オン・オフは `$XDG_STATE_HOME/my_shell/quiet` で覚える
+  - [ ] 実機で確認：再起動後もオンのまま、アイコンが出る
 
 ## フォント
 - [ ] フォールバック：Roboto を主にし、CJK の字は Noto Sans CJK JP で出す（今はバーの root で Noto Sans CJK JP だけを指定している）。AntiWebUI のフォント指定でフォールバックが組めるか調べる
@@ -136,11 +137,16 @@ AntiWebUI（bea4dev/AntiWebUI）は rev 固定の git 依存。描画の差し�
 - [x] 状態（AntiWebUI の `shell-audio`）
 - [ ] アプリごとの音量
 - [ ] EQ
-- [ ] OSD（音量・明るさを変えたとき）
+- [x] OSD（音量・明るさを変えたとき）：`components::osd`、バーの中央から上がる小さいアイランドを 1.5 秒
+  - `IslandRequest::passive`：入力を取らず、外クリックのレイヤーも広げない（出ている間も画面を押せる）
+  - priority は media・toolbox より下。どちらかが開いている間は出ない
+  - [ ] 実機で確認：音量キー・明るさキー・ミュートで出る、起動直後に出ない
+- [x] 音量・明るさのスライダー（toolbox と OSD）：外から変わった値へ `animation.toml` の `slider_level` で 250ms かけて動く。ドラッグ中はそのまま追従、最初の値と OSD の音量⇄明るさの切り替えは跳ぶ
 
 ## 電池
 - [x] 状態
-- [ ] 残量が少ないときの警告
+- [x] 残量が少ないときの警告：放電中に 20% と 5% を切ると通知（5% は critical でおやすみ中も出る）、充電を始めたら取り下げる
+  - [ ] 実機で確認
 
 ## モニター
 - [ ] 状態

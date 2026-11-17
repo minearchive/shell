@@ -10,7 +10,7 @@ use anti_webui::prelude::*;
 use anti_webui_md3e::{components::sized_icon, icons};
 use ui_core::geometry::LayoutRect;
 
-use self::items::{items, DetailWidth, ICON_SIZE};
+use self::items::{items, BarIcon, DetailWidth, ICON_SIZE};
 use crate::{
     state::State,
     system::SystemStatus,
@@ -141,6 +141,7 @@ pub fn toolbox(state: &State) -> Part {
             height,
             placement: IslandPlacement::Corner { from_width: bar_icons.with(|i| row_width(i.len())) },
             priority: PANEL_PRIORITY,
+            passive: false,
         })
     });
 
@@ -160,7 +161,7 @@ pub fn toolbox(state: &State) -> Part {
     }
 }
 
-type Entry = (DetailWidth, fn(&SystemStatus) -> f32, fn(&SystemStatus) -> Option<&'static icons::Symbol>, fn(LayoutRect) -> (f32, f32), bool);
+type Entry = (DetailWidth, fn(&SystemStatus) -> f32, BarIcon, fn(LayoutRect) -> (f32, f32), bool);
 
 /// The bar's icons, which fly to their entries as the controls open, or fade out in place as
 /// the notifications do. Over everything, from the row's top-left.

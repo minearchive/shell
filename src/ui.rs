@@ -64,6 +64,9 @@ pub struct IslandRequest {
     pub placement: IslandPlacement,
     /// The highest priority wins. On a tie, the later part does.
     pub priority: u8,
+    /// Only shows something, like the OSD: it takes no pointer input and doesn't count as open,
+    /// so a press outside it reaches what is under it instead of closing islands.
+    pub passive: bool,
 }
 
 /// Which end of the bar a part sits at.
@@ -524,7 +527,8 @@ pub fn bar(state: &State, width: f32, parts: Vec<Part>, input: Signal<Vec<RectI>
                 .or_else(|| islands.iter().position(|i| i.visible().is_some()))
                 .and_then(|i| islands[i].visible());
             let mut rects = vec![RectI::new(0, BAR_TOP as i32, width as i32, BAR_HEIGHT as i32)];
-            if let Some((_, r)) = taking {
+            let passive = main.get().is_some_and(|i| islands[i].request.with(|r| r.is_some_and(|r| r.passive)));
+            if let (Some((_, r)), false) = (taking, passive) {
                 rects.push(RectI::new(
                     r.x.floor() as i32,
                     r.y.floor() as i32,
@@ -667,7 +671,8 @@ pub fn bar(state: &State, width: f32, parts: Vec<Part>, input: Signal<Vec<RectI>
         }));
     Bar {
         view,
-        open: memo(move || main.get().is_some()),
+        // Any island that isn't passive, whether it won or waits behind a passive one.
+        open: memo(move || islands.iter().any(|i| i.request.with(|r| r.is_some_and(|r| !r.passive)))),
         close: Rc::new(move || close_all_but(None)),
     }
 }
@@ -800,6 +805,7 @@ mod tests {
             height: 200.0,
             placement: IslandPlacement::Corner { from_width: 150.0 },
             priority: 0,
+            passive: false,
         };
         let (target, rest) = island_rects(&request, 1000.0);
 
@@ -815,6 +821,7 @@ mod tests {
             height: 200.0,
             placement: IslandPlacement::OverBar,
             priority: 0,
+            passive: false,
         };
         let (target, rest) = island_rects(&request, 1000.0);
         assert_eq!(target, LayoutRect::new(350.0, bottom - 200.0, 300.0, 200.0));

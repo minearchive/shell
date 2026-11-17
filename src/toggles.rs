@@ -49,3 +49,28 @@ pub fn stop(mut child: Child) {
     unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
     std::thread::spawn(move || child.wait());
 }
+
+/// Where a toggle remembers being on across restarts: a file that exists while it is.
+fn remembered(name: &str) -> Option<std::path::PathBuf> {
+    let dir = std::env::var_os("XDG_STATE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| std::path::Path::new(&home).join(".local/state")))?;
+    Some(dir.join("my_shell").join(name))
+}
+
+/// Whether the toggle `name` was on when the bar last stopped.
+pub fn recall(name: &str) -> bool {
+    remembered(name).is_some_and(|path| path.exists())
+}
+
+pub fn remember(name: &str, on: bool) {
+    let Some(path) = remembered(name) else { return };
+    let result = if on {
+        path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(&path, ""))
+    } else {
+        std::fs::remove_file(&path).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) })
+    };
+    if let Err(e) = result {
+        log::warn!("Cannot remember {name}: {e}");
+    }
+}

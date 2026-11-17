@@ -21,7 +21,7 @@ use crate::{
     dbus::warp::WarpCommand,
     state::State,
     system::{BatteryState, Network, PowerProfile, SystemCommand, SystemStatus},
-    ui::{measure, palette},
+    ui::{measure, palette, Eased},
 };
 
 pub const ICON_SIZE: f32 = 24.0;
@@ -45,6 +45,9 @@ const SLIDER_LEAD: Duration = Duration::from_millis(600);
 /// How long a click's choice shows before the status confirms it, after which the real state
 /// shows again: a change that failed snaps back.
 const CONFIRM: Duration = Duration::from_secs(3);
+/// How a slider moves to a change made elsewhere.
+const SLIDER_EASING: &str = "slider_level";
+const SLIDER_GLIDE: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DetailWidth {
@@ -56,13 +59,15 @@ pub enum DetailWidth {
     Full,
 }
 
+pub type BarIcon = Rc<dyn Fn(&SystemStatus) -> Option<&'static Symbol>>;
+
 pub struct Item {
     pub width: DetailWidth,
     /// Zero leaves the entry out of the panel, gap included.
     pub height: fn(&SystemStatus) -> f32,
     /// The icon for the row in the bar. `None` keeps this entry to the panel. The bar's icon
     /// travels to [`Self::icon_at`] as the panel opens, so the entry leaves its own out.
-    pub bar_icon: fn(&SystemStatus) -> Option<&'static Symbol>,
+    pub bar_icon: BarIcon,
     /// Where the entry's icon sits when the entry is at the rect.
     pub icon_at: fn(LayoutRect) -> (f32, f32),
     /// Whether the bar's icon fades out on its way, for an entry with no icon of its own.
@@ -97,8 +102,8 @@ fn info_height(_: &SystemStatus) -> f32 {
     INFO_HEIGHT
 }
 
-fn no_bar_icon(_: &SystemStatus) -> Option<&'static Symbol> {
-    None
+fn no_bar_icon() -> BarIcon {
+    Rc::new(|_| None)
 }
 
 fn tile_icon_at(r: LayoutRect) -> (f32, f32) {
@@ -188,17 +193,20 @@ fn slider_row(
     own_icon: bool,
 ) -> View {
     let system = state.system;
-    let value = signal(min);
+    // Glides to a change made elsewhere (keys, another app); follows a drag at once.
+    let value = Eased::new(state, SLIDER_EASING, SLIDER_GLIDE, min);
     // ponytail: the polled value is ignored for a moment after a move rather than for exactly
     // as long as the handle is held; the slider doesn't say when a drag ends.
     let moved = Rc::new(Cell::new(None::<Instant>));
     {
         let moved = moved.clone();
+        let first = Cell::new(true);
         effect(move || {
             let polled = system.with(read);
             let leading = moved.get().is_some_and(|at| at.elapsed() < SLIDER_LEAD);
             if let (Some(polled), false) = (polled, leading) {
-                untrack(|| value.set(polled.max(min)));
+                // The first value isn't a change: it doesn't glide up from nothing.
+                untrack(|| if first.replace(false) { value.set(polled.max(min)) } else { value.to(polled.max(min)) });
             }
         });
     }
@@ -412,7 +420,7 @@ pub fn items(state: &State) -> Vec<Item> {
         Item {
             width: DetailWidth::Half,
             height: info_height,
-            bar_icon: |s| Some(network(s).0),
+            bar_icon: Rc::new(|s| Some(network(s).0)),
             icon_at: tile_icon_at,
             icon_fades: false,
             view: tile(state, "Wi-Fi", network, None, false),
@@ -420,7 +428,7 @@ pub fn items(state: &State) -> Vec<Item> {
         Item {
             width: DetailWidth::Full,
             height: info_height,
-            bar_icon: no_bar_icon,
+            bar_icon: no_bar_icon(),
             icon_at: tile_icon_at,
             icon_fades: false,
             view: warp_tile,
@@ -428,7 +436,7 @@ pub fn items(state: &State) -> Vec<Item> {
         Item {
             width: DetailWidth::Full,
             height: |_| SLIDER_HEIGHT,
-            bar_icon: |s| Some(volume(s)),
+            bar_icon: Rc::new(|s| Some(volume(s))),
             icon_at: row_icon_at,
             icon_fades: false,
             view: slider_row(state, 0.0, volume, |s| s.volume.map(|v| v.level.min(1.0)), SystemCommand::Volume, false),
@@ -436,7 +444,7 @@ pub fn items(state: &State) -> Vec<Item> {
         Item {
             width: DetailWidth::Half,
             height: info_height,
-            bar_icon: |s| Some(bluetooth(s).0),
+            bar_icon: Rc::new(|s| Some(bluetooth(s).0)),
             icon_at: tile_icon_at,
             icon_fades: false,
             view: tile(state, "Bluetooth", bluetooth, None, false),
@@ -444,7 +452,7 @@ pub fn items(state: &State) -> Vec<Item> {
         Item {
             width: DetailWidth::Full,
             height: |_| SLIDER_HEIGHT,
-            bar_icon: no_bar_icon,
+            bar_icon: no_bar_icon(),
             icon_at: row_icon_at,
             icon_fades: false,
             view: slider_row(state, MIN_BRIGHTNESS, |_| icons::LIGHT_MODE, |s| s.brightness, SystemCommand::Brightness, true),
@@ -452,7 +460,7 @@ pub fn items(state: &State) -> Vec<Item> {
         Item {
             width: DetailWidth::Caption,
             height: |s| if s.battery.is_some() { CAPTION_HEIGHT } else { 0.0 },
-            bar_icon: |s| Some(battery(s)),
+            bar_icon: Rc::new(|s| Some(battery(s))),
             icon_at: end_icon_at,
             icon_fades: true,
             view: div()
@@ -470,20 +478,26 @@ pub fn items(state: &State) -> Vec<Item> {
         Item {
             width: DetailWidth::Full,
             height: |_| CHOICE_TOP_MARGIN + CHOICE_HEIGHT,
-            bar_icon: no_bar_icon,
+            bar_icon: no_bar_icon(),
             icon_at: row_icon_at,
             icon_fades: false,
             view: div().size_full().pt(CHOICE_TOP_MARGIN).flex().child(profiles.flex_1()).into_view(),
         },
     ];
-    // After Wi-Fi and Bluetooth, two to a row.
-    items.extend(toggles.map(|view| Item {
-        width: DetailWidth::Half,
-        height: info_height,
-        bar_icon: no_bar_icon,
-        icon_at: tile_icon_at,
-        icon_fades: false,
-        view: view.into_view(),
+    // After Wi-Fi and Bluetooth, two to a row. Do not disturb shows in the bar while it is on,
+    // fading onto the tile's own icon.
+    let quiet_icon: BarIcon = Rc::new(move |_| quiet.get().then_some(icons::NOTIFICATIONS_OFF));
+    let mut bar_icons = [Some(quiet_icon), None, None, None].into_iter();
+    items.extend(toggles.map(|view| {
+        let bar_icon = bar_icons.next().flatten();
+        Item {
+            width: DetailWidth::Half,
+            height: info_height,
+            icon_fades: bar_icon.is_some(),
+            bar_icon: bar_icon.unwrap_or_else(no_bar_icon),
+            icon_at: tile_icon_at,
+            view: view.into_view(),
+        }
     }));
     items
 }
